@@ -740,7 +740,7 @@ export async function POST(request: NextRequest) {
         function: {
           name: 'save_lead_info',
           description:
-            'Guarda lead: nombre y apellido (o full_name), qué necesita el cliente (motivo), y notas. Teléfono y organization_id son opcionales si el backend puede tomarlos del Caller ID y la org configurada; si el cliente dictó teléfono, pasalo en phone. Tras cotización sin precio confirmado, llamá esta tool y luego create_follow_up si prometiste envío de presupuesto o contacto.',
+            'Guarda lead comercial: nombre (full_name o name), need/motivo, teléfono si lo dictó (si no, Caller ID). Incluí clasificación: category (wrap, business_cards, flyers, banners, signage, design, delivery, order_status, billing, general_quote, support), intent (ej. quote_request), priority (low, normal, high), estimated_value_level, summary, next_action, source=vapi_call, callback_required si aplica. Wrap vehicular: category=wrap, priority=high, estimated_value_level=high, callback_required=true. Tras cotización sin precio confirmado, llamá esta tool y luego create_follow_up si prometiste presupuesto o contacto.',
           parameters: {
             type: 'object',
             properties: {
@@ -762,6 +762,18 @@ export async function POST(request: NextRequest) {
               notes: { type: 'string', description: 'Notas adicionales' },
               email: { type: 'string', description: 'Email del cliente' },
               company: { type: 'string', description: 'Empresa del cliente' },
+              category: {
+                type: 'string',
+                description:
+                  'Categoría comercial: wrap, business_cards, flyers, banners, signage, design, delivery, order_status, billing, general_quote, support',
+              },
+              intent: { type: 'string', description: 'Ej. quote_request, order_status_inquiry' },
+              priority: { type: 'string', description: 'low | normal | high | urgent' },
+              estimated_value_level: { type: 'string', description: 'low_medium | high | etc.' },
+              summary: { type: 'string', description: 'Resumen de una línea para el equipo' },
+              next_action: { type: 'string', description: 'Qué debe hacer el equipo a continuación' },
+              source: { type: 'string', description: 'Usá vapi_call' },
+              callback_required: { type: 'boolean' },
             },
             required: [] as string[],
           },
@@ -829,17 +841,20 @@ export async function POST(request: NextRequest) {
         type: 'function',
         function: {
           name: 'create_follow_up',
-          description: 'Crea seguimiento/callback para el equipo',
+          description:
+            'Crea tarea de seguimiento visible en /dashboard/follow-ups. Para wrap usá siempre title claro (ej. Llamar por cotización de wrap), category=wrap, priority=high, callback_required=true, due_at ISO mañana si no hay fecha, notes con nombre/teléfono/vehículo/resumen.',
           parameters: {
             type: 'object',
             properties: {
               title: { type: 'string' },
               notes: { type: 'string' },
+              category: { type: 'string', description: 'Alineada al lead (wrap, business_cards, …)' },
               owner: { type: 'string' },
-              due_at: { type: 'string' },
-              priority: { type: 'string' },
+              due_at: { type: 'string', description: 'ISO-8601; para wrap usar hoy o mañana si el cliente no dio fecha' },
+              priority: { type: 'string', description: 'low | normal | high | urgent' },
               callback_required: { type: 'boolean' },
               phone: { type: 'string' },
+              call_log_id: { type: 'string', description: 'Opcional; el backend puede resolverlo desde la llamada' },
             },
             required: ['title'],
           },

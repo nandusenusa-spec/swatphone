@@ -15,11 +15,21 @@ import {
 } from '@/lib/vapi/persistence'
 import { runPrepareWarmTransfer } from '@/lib/vapi/operator-handoff'
 import { normalizePhone } from '@/lib/phone'
+import { prepareCommercialFollowUpFromArgs } from '@/lib/vapi/commercial-follow-up'
+import {
+  buildCommercialMetaBlock,
+  classificationSourceText,
+  detectWrapIntent,
+  parseModelLeadClassification,
+  prependCommercialBlockToNotes,
+} from '@/lib/vapi/lead-classification'
 
 type ToolContext = {
   organizationId: string
   phone: string
   vapiCallId: string
+  /** Id de tool call de Vapi (logging). */
+  toolCallId?: string | null
 }
 
 export async function executeToolHandler(
@@ -147,13 +157,58 @@ export async function executeToolHandler(
       ].filter(Boolean)
       const mergedNotes = noteParts.join('\n').trim() || undefined
 
+      let commercial = parseModelLeadClassification(args)
+      const sniff = classificationSourceText(noteParts)
+      if (detectWrapIntent(sniff)) {
+        commercial = {
+          category: 'wrap',
+          intent: commercial.intent || 'quote_request',
+          priority: 'high',
+          estimated_value_level: 'high',
+          summary:
+            commercial.summary ||
+            'Cliente solicita cotización para wrap vehicular.',
+          next_action:
+            commercial.next_action ||
+            'Llamar cuanto antes para pedir detalles del vehículo y alcance del wrap.',
+          source: commercial.source || 'vapi_call',
+          callback_required: true,
+        }
+      } else if (!commercial.category && sniff) {
+        commercial = {
+          ...commercial,
+          category: commercial.category || 'general_quote',
+          intent: commercial.intent || 'inquiry',
+          priority: commercial.priority || 'normal',
+          estimated_value_level: commercial.estimated_value_level || 'low_medium',
+          source: commercial.source || 'vapi_call',
+        }
+      }
+
+      const metaBlock = buildCommercialMetaBlock(commercial)
+      const notesWithMeta = prependCommercialBlockToNotes(metaBlock, mergedNotes)
+
+      console.info('[vapi/lead-classification]', {
+        toolCallId: context.toolCallId || null,
+        input: {
+          has_need: Boolean(typeof args.need === 'string' && args.need.trim()),
+          has_motivo: Boolean(typeof args.motivo === 'string' && args.motivo.trim()),
+        },
+        category: commercial.category ?? null,
+        intent: commercial.intent ?? null,
+        priority: commercial.priority ?? null,
+        estimated_value_level: commercial.estimated_value_level ?? null,
+        next_action: commercial.next_action ? String(commercial.next_action).slice(0, 160) : null,
+        wrap_sniff: detectWrapIntent(sniff),
+      })
+
       return runSaveLeadInfo({
         organizationId: context.organizationId,
         phone,
         name: mergedName,
         email: typeof args.email === 'string' ? args.email : undefined,
         company: typeof args.company === 'string' ? args.company : undefined,
-        notes: mergedNotes,
+        notes: notesWithMeta || mergedNotes,
       })
     }
     case 'prepare_warm_transfer': {
@@ -258,7 +313,7 @@ export async function executeToolHandler(
         reason: typeof args.reason === 'string' ? args.reason : undefined,
         spamScore: typeof args.spam_score === 'number' ? args.spam_score : undefined,
       })
-    case 'create_follow_up':
+    case 'create_follow_up': {
       console.info('[vapi/tool-call] create_follow_up', {
         organization_id: context.organizationId,
         vapi_call_id: context.vapiCallId || null,
@@ -266,24 +321,66 @@ export async function executeToolHandler(
         callback_required: Boolean(args.callback_required),
       })
       if (!args.title) return missing(['title'])
-      return persistFollowUp({
-        organizationId: context.organizationId,
-        callLogId: typeof args.call_log_id === 'string' ? args.call_log_id : undefined,
-        phone: typeof args.phone === 'string' ? args.phone : context.phone,
-        customerId: typeof args.customer_id === 'string' ? args.customer_id : undefined,
-        title: String(args.title || 'Follow-up'),
-        notes: typeof args.notes === 'string' ? args.notes : undefined,
-        owner: typeof args.owner === 'string' ? args.owner : undefined,
-        dueAt: typeof args.due_at === 'string' ? args.due_at : undefined,
-        priority:
-          args.priority === 'low' ||
-          args.priority === 'normal' ||
-          args.priority === 'high' ||
-          args.priority === 'urgent'
-            ? args.priority
-            : undefined,
-        callbackRequired: Boolean(args.callback_required),
-      })
+      const prep = prepareCommercialFollowUpFromArgs(args)
+
+      let callLogId: string | undefined =
+        typeof args.call_log_id === 'string' && args.call_log_id.trim()
+          ? args.call_log_id.trim()
+          : undefined
+      if (!callLogId && context.vapiCallId) {
+        callLogId =
+          (await getCallLogIdByVapiCallId(context.organizationId, context.vapiCallId)) || undefined
+      }
+
+      try {
+        const out = await persistFollowUp({
+          organizationId: context.organizationId,
+          callLogId,
+          phone: typeof args.phone === 'string' ? args.phone : context.phone,
+          customerId: typeof args.customer_id === 'string' ? args.customer_id : undefined,
+          title: prep.title,
+          notes: prep.notesMerged,
+          owner: typeof args.owner === 'string' ? args.owner : undefined,
+          dueAt: prep.dueAt,
+          priority: prep.priority,
+          callbackRequired: prep.callbackRequired,
+        })
+        const fu = out && typeof out === 'object' && 'follow_up' in out ? (out as { follow_up?: { id?: string } }).follow_up : null
+        console.info('[vapi/follow-up]', {
+          toolCallId: context.toolCallId || null,
+          organization_id: context.organizationId,
+          title: prep.title.slice(0, 120),
+          category: prep.category,
+          priority: prep.priority ?? null,
+          due_at: prep.dueAt ?? null,
+          callback_required: prep.callbackRequired,
+          created: true,
+          followUpId: fu?.id ?? null,
+          error: null,
+        })
+        return out
+      } catch (e) {
+        const msg = e instanceof Error ? e.message : String(e)
+        console.error('[vapi/follow-up]', {
+          toolCallId: context.toolCallId || null,
+          organization_id: context.organizationId,
+          title: prep.title.slice(0, 120),
+          category: prep.category,
+          priority: prep.priority ?? null,
+          due_at: prep.dueAt ?? null,
+          callback_required: prep.callbackRequired,
+          created: false,
+          followUpId: null,
+          error: msg.slice(0, 400),
+        })
+        return {
+          ok: false as const,
+          error: 'follow_up_failed' as const,
+          primary_message_for_caller:
+            'No pude registrar el seguimiento en el sistema. Podemos intentar de nuevo en un momento.',
+        }
+      }
+    }
     default:
       console.warn('[vapi/tool-call] unknown_tool_no_handler', { toolName })
       return {

@@ -1,5 +1,5 @@
 import { createServiceRoleClient } from '@/lib/supabase/service-role'
-import { buildSystemPrompt } from '@/lib/vapi/prompts'
+import { buildSystemPrompt, sanitizeFaqTextForSync } from '@/lib/vapi/prompts'
 import { parseTransferDestinations, type TransferDestination } from '@/lib/vapi/transfer-destinations'
 
 /** Catálogo: 007 usa `is_active`; 008+ añade `active`. No filtrar por columna inexistente en PostgREST. */
@@ -93,7 +93,7 @@ export async function getOrganizationRuntimeConfig(
     !!routingRow?.urgent_transfer_number
 
   const hasProductCatalog = (productsHead.count || 0) > 0
-  const prompt = buildSystemPrompt({
+  let prompt = buildSystemPrompt({
     basePrompt:
       (aiRow?.system_prompt as string | null) ||
       'Eres un asistente de atencion telefonica empresarial.',
@@ -105,6 +105,21 @@ export async function getOrganizationRuntimeConfig(
     transferDestinations,
     organizationId,
   })
+
+  const { data: faqs, error: faqErr } = await supabase
+    .from('faqs')
+    .select('question, answer')
+    .eq('organization_id', organizationId)
+    .eq('is_active', true)
+    .limit(10)
+  if (!faqErr && faqs && faqs.length > 0) {
+    prompt += '\n\nPreguntas frecuentes:\n'
+    for (const f of faqs) {
+      const q = sanitizeFaqTextForSync(String(f.question || ''))
+      const a = sanitizeFaqTextForSync(String(f.answer || ''))
+      prompt += `- ${q}: ${a}\n`
+    }
+  }
 
   const displayName =
     (orgRow.data?.name as string | undefined)?.trim() || 'nosotros'

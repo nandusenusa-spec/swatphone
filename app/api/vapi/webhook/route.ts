@@ -30,6 +30,8 @@ import { resolveOrganizationIdForVapiTools } from '@/lib/vapi/vapi-org-resolutio
 import { resolvePhoneForVapiTool } from '@/lib/vapi/vapi-caller-phone'
 import { executeToolHandler } from '@/lib/vapi/tool-handlers'
 import { logVapiToolCallReceived } from '@/lib/vapi/tool-call-logging'
+import { prepareCommercialFollowUpFromArgs } from '@/lib/vapi/commercial-follow-up'
+import { getCallLogIdByVapiCallId } from '@/lib/voice-platform/repository'
 
 type JsonRecord = Record<string, unknown>
 
@@ -450,6 +452,7 @@ async function handleToolCalls(request: NextRequest, flat: JsonRecord, rawBody: 
             organizationId: orgId,
             phone: phoneRaw,
             vapiCallId: getCallIdFromPayload(flat) || '',
+            toolCallId: toolCallId || null,
           })
           if (out && typeof out === 'object' && 'ok' in out && out.ok === true) {
             console.log('[vapi:webhook] save_lead_info persisted', {
@@ -488,27 +491,44 @@ async function handleToolCalls(request: NextRequest, flat: JsonRecord, rawBody: 
           title_preview: title.slice(0, 120),
           callback_required: Boolean(args.callback_required),
         })
-        const out = title
-          ? await runCreateFollowUp({
-              organizationId: orgId,
-              phone: phoneRaw || (typeof args.phone === 'string' ? args.phone : undefined),
-              customerId: typeof args.customer_id === 'string' ? args.customer_id : undefined,
-              callLogId: typeof args.call_log_id === 'string' ? args.call_log_id : undefined,
-              title,
-              notes: typeof args.notes === 'string' ? args.notes : undefined,
-              owner: typeof args.owner === 'string' ? args.owner : undefined,
-              dueAt: typeof args.due_at === 'string' ? args.due_at : undefined,
-              priority:
-                args.priority === 'low' ||
-                args.priority === 'normal' ||
-                args.priority === 'high' ||
-                args.priority === 'urgent'
-                  ? args.priority
-                  : undefined,
-              callbackRequired: Boolean(args.callback_required),
-            })
-          : { error: 'missing_required_fields', fields: ['title'] }
-        result = JSON.stringify(out)
+        if (!title) {
+          result = JSON.stringify({ error: 'missing_required_fields', fields: ['title'] })
+        } else {
+          const prep = prepareCommercialFollowUpFromArgs(args)
+          let callLogId =
+            typeof args.call_log_id === 'string' && args.call_log_id.trim()
+              ? args.call_log_id.trim()
+              : undefined
+          const vapiCid = getCallIdFromPayload(flat) || ''
+          if (!callLogId && vapiCid) {
+            callLogId = (await getCallLogIdByVapiCallId(orgId, vapiCid)) || undefined
+          }
+          const out = await runCreateFollowUp({
+            organizationId: orgId,
+            phone: phoneRaw || (typeof args.phone === 'string' ? args.phone : undefined),
+            customerId: typeof args.customer_id === 'string' ? args.customer_id : undefined,
+            callLogId,
+            title: prep.title,
+            notes: prep.notesMerged,
+            owner: typeof args.owner === 'string' ? args.owner : undefined,
+            dueAt: prep.dueAt,
+            priority: prep.priority,
+            callbackRequired: prep.callbackRequired,
+          })
+          console.info('[vapi/follow-up]', {
+            toolCallId: toolCallId || null,
+            organization_id: orgId,
+            title: prep.title.slice(0, 120),
+            category: prep.category,
+            priority: prep.priority ?? null,
+            due_at: prep.dueAt ?? null,
+            callback_required: prep.callbackRequired,
+            created: true,
+            followUpId: (out as { follow_up?: { id?: string } }).follow_up?.id ?? null,
+            error: null,
+          })
+          result = JSON.stringify(out)
+        }
       }
 
       if (

@@ -18,7 +18,7 @@ export default async function FollowUpsPage() {
     ? (
         await service
           .from('follow_ups')
-          .select('id, title, notes, owner, status, due_at')
+          .select('id, title, notes, owner, status, due_at, priority, callback_required, customers(name, phone)')
           .eq('organization_id', orgId)
           .order('created_at', { ascending: false })
           .limit(100)

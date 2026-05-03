@@ -415,6 +415,7 @@ export async function dispatchVapiEvent(input: {
             organizationId: input.organizationId,
             phone: phoneForToolContext,
             vapiCallId,
+            toolCallId: toolCallId || null,
           })
           const failed =
             out &&
