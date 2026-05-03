@@ -18,6 +18,7 @@ import {
   upsertCustomerLeadInfo,
   upsertCallLog,
 } from '@/lib/voice-platform/repository'
+import { expandPriceLookupTerms } from '@/lib/voice-platform/price-lookup-terms'
 import { workOrderStatusForVoice } from '@/lib/voice-platform/work-order-voice'
 
 export async function runFindCustomer(input: {
@@ -138,10 +139,18 @@ export async function runGetPriceQuote(input: {
   organizationId: string
   serviceName: string
 }) {
-  const rows = await getPriceQuote({
-    organizationId: input.organizationId,
-    serviceName: input.serviceName,
-  })
+  const terms = expandPriceLookupTerms(input.serviceName)
+  let rows: Awaited<ReturnType<typeof getPriceQuote>> = []
+  for (const term of terms) {
+    const chunk = await getPriceQuote({
+      organizationId: input.organizationId,
+      serviceName: term,
+    })
+    if (chunk.length) {
+      rows = chunk
+      break
+    }
+  }
   const quotes = rows.map((r: Record<string, unknown>) => ({
     service_name: r.service_name,
     unit_price: r.unit_price,
@@ -151,13 +160,18 @@ export async function runGetPriceQuote(input: {
   }))
 
   if (rows.length === 0) {
+    const triedNote =
+      terms.length > 1
+        ? ' Se probaron términos relacionados (p. ej. abreviaturas como BC → tarjetas / business cards).'
+        : ''
     return {
       found: false,
       match_count: 0,
       quotes,
       must_confirm_price_with_team: true,
+      lookup_terms_tried: terms,
       assistant_instruction:
-        'No hay precio publicado en el catálogo para esa búsqueda. Decí que un miembro del equipo confirmará el precio. No inventes montos.',
+        `No hay precio publicado en el catálogo para esa búsqueda.${triedNote} Decí al cliente, en una frase breve: "No tengo un precio confirmado para eso. Te tomo los datos y el equipo te envía una cotización." Luego save_lead_info (nombre y apellido, teléfono si el cliente lo dio, qué necesita) y, si prometés cotización o contacto, create_follow_up antes de despedirte. No inventes montos.`,
     }
   }
 
@@ -481,6 +495,27 @@ export async function runCreateFollowUp(input: {
   }
 }
 
+export type SaveLeadInfoSuccess = {
+  ok: true
+  saved: true
+  lead_saved: boolean
+  customer: {
+    id: string
+    name: string | null
+    phone: string | null
+    email: string | null
+    company: string | null
+  }
+}
+
+export type SaveLeadInfoFailure = {
+  ok: false
+  error: 'save_lead_failed'
+  primary_message_for_caller: string
+  /** Código PostgREST / Supabase cuando existe (sin detalle sensible). */
+  db_code?: string
+}
+
 export async function runSaveLeadInfo(input: {
   organizationId: string
   phone: string
@@ -488,35 +523,53 @@ export async function runSaveLeadInfo(input: {
   email?: string
   company?: string
   notes?: string
-}) {
-  const customer = await upsertCustomerLeadInfo({
-    organizationId: input.organizationId,
-    phone: input.phone,
-    name: input.name,
-    email: input.email,
-    company: input.company,
-    notes: input.notes,
-  })
-  const lead = await upsertLeadByPhone({
-    organizationId: input.organizationId,
-    phone: input.phone,
-    name: input.name,
-    email: input.email,
-    company: input.company,
-    notes: input.notes,
-  })
+}): Promise<SaveLeadInfoSuccess | SaveLeadInfoFailure> {
+  try {
+    const customer = await upsertCustomerLeadInfo({
+      organizationId: input.organizationId,
+      phone: input.phone,
+      name: input.name,
+      email: input.email,
+      company: input.company,
+      notes: input.notes,
+    })
+    const lead = await upsertLeadByPhone({
+      organizationId: input.organizationId,
+      phone: input.phone,
+      name: input.name,
+      email: input.email,
+      company: input.company,
+      notes: input.notes,
+    })
 
-  return {
-    ok: true,
-    saved: true,
-    lead_saved: Boolean(lead),
-    customer: {
-      id: customer.id,
-      name: customer.name ?? null,
-      phone: customer.phone ?? null,
-      email: (customer as { email?: string | null }).email ?? null,
-      company: (customer as { company?: string | null }).company ?? null,
-    },
+    return {
+      ok: true,
+      saved: true,
+      lead_saved: Boolean(lead),
+      customer: {
+        id: customer.id,
+        name: customer.name ?? null,
+        phone: customer.phone ?? null,
+        email: (customer as { email?: string | null }).email ?? null,
+        company: (customer as { company?: string | null }).company ?? null,
+      },
+    }
+  } catch (e) {
+    const err = e as { code?: string; message?: string }
+    const code = typeof err?.code === 'string' ? err.code : undefined
+    console.error('[voice-platform/runSaveLeadInfo] save_lead_failed', {
+      organization_id: input.organizationId,
+      phone_suffix: input.phone.length >= 4 ? input.phone.replace(/\D/g, '').slice(-4) : null,
+      db_code: code ?? null,
+      message: err?.message ?? (e instanceof Error ? e.message : String(e)),
+    })
+    return {
+      ok: false,
+      error: 'save_lead_failed',
+      primary_message_for_caller:
+        'No pude registrar tus datos en este momento. Puedo transferirte o intentar de nuevo.',
+      ...(code ? { db_code: code } : {}),
+    }
   }
 }
 

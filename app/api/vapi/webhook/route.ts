@@ -25,8 +25,10 @@ import {
   runCreateFollowUp,
   runGetPriceQuote,
   runGetJobStatus,
-  runSaveLeadInfo,
 } from '@/lib/voice-platform/service'
+import { resolveOrganizationIdForVapiTools } from '@/lib/vapi/vapi-org-resolution'
+import { resolvePhoneForVapiTool } from '@/lib/vapi/vapi-caller-phone'
+import { executeToolHandler } from '@/lib/vapi/tool-handlers'
 
 type JsonRecord = Record<string, unknown>
 
@@ -47,26 +49,6 @@ function toIsoOrNull(value: unknown): string | null {
 
 function asRecord(value: unknown): JsonRecord | null {
   return value && typeof value === 'object' ? (value as JsonRecord) : null
-}
-
-async function resolveOrganizationId(
-  request: NextRequest,
-  supabase: ReturnType<typeof createServiceRoleClient>,
-  flat: JsonRecord,
-): Promise<string | null> {
-  const fromQuery = request.nextUrl.searchParams.get('org')
-  if (fromQuery) return fromQuery
-
-  const assistantId = getAssistantIdFromPayload(flat)
-  if (!assistantId) return null
-
-  const { data } = await supabase
-    .from('organizations')
-    .select('id')
-    .eq('vapi_assistant_id', assistantId)
-    .maybeSingle()
-
-  return data?.id ?? null
 }
 
 async function handleCallEnded(flat: JsonRecord) {
@@ -214,10 +196,27 @@ function defaultTransientAssistant(firstMessage: string) {
   }
 }
 
-async function handleAssistantRequest(request: NextRequest, flat: JsonRecord) {
+async function handleAssistantRequest(request: NextRequest, flat: JsonRecord, rawBody: JsonRecord) {
   const supabase = createServiceRoleClient()
-  const orgId = await resolveOrganizationId(request, supabase, flat)
-  const phoneRaw = getCallerPhoneFromPayload(flat)
+  const orgRes = await resolveOrganizationIdForVapiTools({
+    args: {},
+    flat,
+    rawBody,
+    request,
+    toolCallId: 'assistant-request',
+    logPrefix: '[vapi:webhook]',
+  })
+  const orgId = orgRes.organizationId
+  const phoneRes = resolvePhoneForVapiTool({
+    args: {},
+    flat,
+    rawBody,
+    toolCallId: 'assistant-request',
+    tool: 'assistant_request',
+    allowDemoFallback: false,
+    logPrefix: '[vapi:webhook]',
+  })
+  const phoneRaw = phoneRes.phone || getCallerPhoneFromPayload(flat)
 
   if (!phoneRaw?.trim()) {
     console.warn('[vapi:webhook] assistant-request: missing caller phone')
@@ -304,7 +303,7 @@ async function handleAssistantRequest(request: NextRequest, flat: JsonRecord) {
   })
 }
 
-async function handleToolCalls(request: NextRequest, flat: JsonRecord) {
+async function handleToolCalls(request: NextRequest, flat: JsonRecord, rawBody: JsonRecord) {
   const list = Array.isArray(flat.toolCallList)
     ? flat.toolCallList
     : Array.isArray(flat.toolCalls)
@@ -315,8 +314,6 @@ async function handleToolCalls(request: NextRequest, flat: JsonRecord) {
   }
 
   const supabase = createServiceRoleClient()
-  const orgId = await resolveOrganizationId(request, supabase, flat)
-  const phoneRaw = getCallerPhoneFromPayload(flat)
 
   const results = await Promise.all(
     list.map(async (tc) => {
@@ -345,8 +342,28 @@ async function handleToolCalls(request: NextRequest, flat: JsonRecord) {
       }
       const args = parseArgs()
 
+      const orgRes = await resolveOrganizationIdForVapiTools({
+        args,
+        flat,
+        rawBody,
+        request,
+        toolCallId,
+        logPrefix: '[vapi:webhook]',
+      })
+      const orgId = orgRes.organizationId
+      const phoneRes = resolvePhoneForVapiTool({
+        args,
+        flat,
+        rawBody,
+        toolCallId,
+        tool: name || 'tool',
+        allowDemoFallback: false,
+        logPrefix: '[vapi:webhook]',
+      })
+      const phoneRaw = phoneRes.phone
+
       let result = '{}'
-      if (name === 'get_client_status' && phoneRaw) {
+      if (name === 'get_client_status' && phoneRaw && orgId) {
         const payload = await getClientStatusPayload(supabase, phoneRaw, orgId)
         result = JSON.stringify(payload)
       } else if (name === 'get_job_status' && phoneRaw && orgId) {
@@ -375,24 +392,61 @@ async function handleToolCalls(request: NextRequest, flat: JsonRecord) {
             })
           : { error: 'missing_required_fields', fields: ['product_name'] }
         result = JSON.stringify(out)
-      } else if (name === 'save_lead_info' && phoneRaw && orgId) {
-        const out = await runSaveLeadInfo({
-          organizationId: orgId,
-          phone: phoneRaw,
-          name: typeof args.name === 'string' ? args.name : undefined,
-          email: typeof args.email === 'string' ? args.email : undefined,
-          company: typeof args.company === 'string' ? args.company : undefined,
-          notes: typeof args.notes === 'string' ? args.notes : undefined,
-        })
-        console.log('[vapi:webhook] save_lead_info persisted', {
-          organizationId: orgId,
-          phone_suffix: normalizePhone(phoneRaw).slice(-4),
-          saved: out.saved,
-          has_name: Boolean(out.customer?.name),
-          has_email: Boolean(out.customer?.email),
-          has_company: Boolean(out.customer?.company),
-        })
-        result = JSON.stringify(out)
+      } else if (name === 'save_lead_info') {
+        const logBase = {
+          endpoint: '/api/vapi/webhook',
+          toolCallId,
+          organization_id_final: orgId,
+          org_source: orgRes.orgSource,
+          phone_source: phoneRes.phoneSource,
+          args_keys: Object.keys(args).slice(0, 32),
+          assistant_id_detected: orgRes.assistantIdDetected,
+        }
+        if (!orgId) {
+          const missingFields = ['organization_id']
+          console.warn('[vapi:webhook] save_lead_info_blocked', {
+            ...logBase,
+            missing_fields: missingFields,
+          })
+          result = JSON.stringify({
+            ok: false,
+            error: 'missing_required_fields',
+            missing_fields: missingFields,
+            primary_message_for_caller: 'Me falta un dato para registrar tu solicitud.',
+          })
+        } else if (!phoneRaw) {
+          const missingFields = ['phone']
+          console.warn('[vapi:webhook] save_lead_info_blocked', {
+            ...logBase,
+            missing_fields: missingFields,
+          })
+          result = JSON.stringify({
+            ok: false,
+            error: 'missing_required_fields',
+            missing_fields,
+            primary_message_for_caller: 'Me falta un dato para registrar tu solicitud.',
+          })
+        } else {
+          const out = await executeToolHandler('save_lead_info', args, {
+            organizationId: orgId,
+            phone: phoneRaw,
+            vapiCallId: getCallIdFromPayload(flat) || '',
+          })
+          if (out && typeof out === 'object' && 'ok' in out && out.ok === true) {
+            console.log('[vapi:webhook] save_lead_info persisted', {
+              organizationId: orgId,
+              phone_suffix: normalizePhone(phoneRaw).slice(-4),
+              saved: (out as { saved?: boolean }).saved,
+              has_name: Boolean((out as { customer?: { name?: string | null } }).customer?.name),
+            })
+          } else {
+            console.warn('[vapi:webhook] save_lead_info_result', {
+              ...logBase,
+              outcome: out,
+            })
+          }
+          result = JSON.stringify(out)
+        }
       } else if (name === 'create_appointment' && orgId) {
         const appointmentAt =
           typeof args.appointment_at === 'string' ? args.appointment_at.trim() : ''
@@ -432,6 +486,31 @@ async function handleToolCalls(request: NextRequest, flat: JsonRecord) {
         result = JSON.stringify(out)
       }
 
+      if (
+        result === '{}' &&
+        (name === 'get_job_status' || name === 'get_client_status')
+      ) {
+        const missing_fields = [
+          ...(!orgId ? (['organization_id'] as const) : []),
+          ...(!phoneRaw ? (['phone'] as const) : []),
+        ]
+        if (missing_fields.length) {
+          console.warn('[vapi:webhook] tool_missing_context', {
+            name,
+            toolCallId,
+            missing_fields,
+            org_source: orgRes.orgSource,
+            phone_source: phoneRes.phoneSource,
+          })
+          result = JSON.stringify({
+            ok: false,
+            error: 'missing_required_fields',
+            missing_fields,
+            primary_message_for_caller: 'Me falta un dato para registrar tu solicitud.',
+          })
+        }
+      }
+
       // Vapi ToolCallResult requires both toolCallId and name
       return { toolCallId, name: name || 'unknown', result }
     }),
@@ -460,11 +539,11 @@ export async function POST(request: NextRequest) {
     const eventType = typeof flat.type === 'string' ? flat.type : null
 
     if (eventType === 'assistant-request') {
-      return handleAssistantRequest(request, flat)
+      return handleAssistantRequest(request, flat, body)
     }
 
     if (eventType === 'tool-calls') {
-      return handleToolCalls(request, flat)
+      return handleToolCalls(request, flat, body)
     }
 
     if (eventType === 'call-ended' || eventType === 'end-of-call-report') {

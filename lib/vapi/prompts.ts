@@ -185,7 +185,7 @@ export function buildSystemPrompt(input: PromptInput): string {
     'Si no existe dato en base, dilo claro y ofrecé seguimiento con herramientas (lead y/o follow-up), no inventes.',
     'Si el caller falla validacion dos veces, corta escalado y marca spam_or_invalid.',
     input.hasCatalog
-      ? 'Cotizaciones: solo precios que devuelvan get_price_quote o get_product_price; no redondees ni completes con suposiciones. Si la tool dice que no hay precio, must_confirm_price_with_team, o no hay match: no inventes cifra; guardá lead con save_lead_info y creá create_follow_up para que el equipo cotice o confirme.'
+      ? 'Cotizaciones: solo precios que devuelvan get_price_quote o get_product_price; no redondees ni completes con suposiciones. Si la tool dice found false, must_confirm_price_with_team, o no hay match: decí textualmente: "No tengo un precio confirmado para eso. Te tomo los datos y el equipo te envía una cotización." Luego save_lead_info (nombre y apellido, teléfono si el cliente lo dio, qué necesita) y, si prometés cotización o contacto, create_follow_up antes de despedirte. No inventes cifra.'
       : 'No hay catalogo cargado; no intentes cotizar con cifras; ofrecé que un humano lo contacte y usá save_lead_info + create_follow_up si aplica.',
     orgId
       ? `get_job_status: sin find_customer antes solo por estado. parameters.required debe tratarse como vacío: no pidas phone ni organization_id al cliente. Backend usa org configurada y Caller ID. No inventes UUID. Opcional: job_number u order_number. Varias órdenes: primary_message_for_caller del primero o aclaración.`

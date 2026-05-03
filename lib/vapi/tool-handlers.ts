@@ -14,6 +14,7 @@ import {
   persistTransfer,
 } from '@/lib/vapi/persistence'
 import { runPrepareWarmTransfer } from '@/lib/vapi/operator-handoff'
+import { normalizePhone } from '@/lib/phone'
 
 type ToolContext = {
   organizationId: string
@@ -26,7 +27,13 @@ export async function executeToolHandler(
   args: Record<string, unknown>,
   context: ToolContext,
 ) {
-  const missing = (fields: string[]) => ({ error: 'missing_required_fields', fields })
+  const missing = (fields: string[], primary = 'Me falta un dato para continuar.') => ({
+    ok: false as const,
+    error: 'missing_required_fields' as const,
+    missing_fields: fields,
+    fields,
+    primary_message_for_caller: primary,
+  })
 
   switch (toolName) {
     case 'find_customer':
@@ -96,16 +103,38 @@ export async function executeToolHandler(
         serviceName: name,
       })
     }
-    case 'save_lead_info':
-      if (!args.phone && !context.phone) return missing(['phone'])
+    case 'save_lead_info': {
+      const argPhone = typeof args.phone === 'string' ? normalizePhone(args.phone) : ''
+      const ctxPhone = context.phone ? normalizePhone(context.phone) : ''
+      const phone = argPhone || ctxPhone || ''
+      if (!phone) {
+        return missing(['phone'], 'Me falta un dato para registrar tu solicitud.')
+      }
+
+      const first = typeof args.first_name === 'string' ? args.first_name.trim() : ''
+      const last = typeof args.last_name === 'string' ? args.last_name.trim() : ''
+      const full = typeof args.full_name === 'string' ? args.full_name.trim() : ''
+      const nameOnly = typeof args.name === 'string' ? args.name.trim() : ''
+      const mergedName =
+        [first, last].filter(Boolean).join(' ').trim() || full || nameOnly || undefined
+
+      const noteParts = [
+        typeof args.notes === 'string' ? args.notes.trim() : '',
+        typeof args.need === 'string' ? args.need.trim() : '',
+        typeof args.motivo === 'string' ? args.motivo.trim() : '',
+        typeof args.reason === 'string' ? args.reason.trim() : '',
+      ].filter(Boolean)
+      const mergedNotes = noteParts.join('\n').trim() || undefined
+
       return runSaveLeadInfo({
         organizationId: context.organizationId,
-        phone: String(args.phone || context.phone || ''),
-        name: typeof args.name === 'string' ? args.name : undefined,
+        phone,
+        name: mergedName,
         email: typeof args.email === 'string' ? args.email : undefined,
         company: typeof args.company === 'string' ? args.company : undefined,
-        notes: typeof args.notes === 'string' ? args.notes : undefined,
+        notes: mergedNotes,
       })
+    }
     case 'prepare_warm_transfer': {
       const rawArgsPhone = typeof args.phone === 'string' ? args.phone : ''
       const ctxPhone = context.phone || ''

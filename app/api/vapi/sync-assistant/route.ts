@@ -599,15 +599,31 @@ export async function POST(request: NextRequest) {
         type: 'function',
         function: {
           name: 'save_lead_info',
-          description: 'Guarda informacion del cliente (nombre, email, empresa)',
+          description:
+            'Guarda lead: nombre y apellido (o full_name), qué necesita el cliente (motivo), y notas. Teléfono y organization_id son opcionales si el backend puede tomarlos del Caller ID y la org configurada; si el cliente dictó teléfono, pasalo en phone. Tras cotización sin precio confirmado, llamá esta tool y luego create_follow_up si prometiste envío de presupuesto o contacto.',
           parameters: {
             type: 'object',
             properties: {
-              name: { type: 'string', description: 'Nombre del cliente' },
+              first_name: { type: 'string', description: 'Nombre de pila' },
+              last_name: { type: 'string', description: 'Apellido' },
+              full_name: { type: 'string', description: 'Nombre completo si no separás nombre y apellido' },
+              name: { type: 'string', description: 'Nombre completo (alternativa a first_name/last_name)' },
+              phone: {
+                type: 'string',
+                description:
+                  'Opcional. E.164 si el cliente lo dictó; si omitís, el backend usa el número de la llamada cuando esté disponible.',
+              },
+              organization_id: {
+                type: 'string',
+                description: 'Opcional. UUID de la org; el backend usa la org del assistant si omitís.',
+              },
+              need: { type: 'string', description: 'Qué necesita o consulta el cliente' },
+              motivo: { type: 'string', description: 'Motivo de la llamada (alternativa a need)' },
+              notes: { type: 'string', description: 'Notas adicionales' },
               email: { type: 'string', description: 'Email del cliente' },
               company: { type: 'string', description: 'Empresa del cliente' },
-              notes: { type: 'string', description: 'Notas adicionales' },
             },
+            required: [] as string[],
           },
         },
       },

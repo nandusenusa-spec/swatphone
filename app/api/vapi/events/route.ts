@@ -2,8 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { ZodError } from 'zod'
 import { VapiEventInputSchema } from '@/lib/schemas/vapi'
 import { dispatchVapiEvent } from '@/lib/vapi/dispatcher'
-import { createServiceRoleClient } from '@/lib/supabase/service-role'
-import { getAssistantIdFromPayload } from '@/lib/vapi/payload'
+import { resolveOrganizationIdForVapiTools } from '@/lib/vapi/vapi-org-resolution'
 
 function flattenVapiEnvelope(body: Record<string, unknown>): Record<string, unknown> {
   const msg = body.message
@@ -26,15 +25,21 @@ export async function POST(request: NextRequest) {
       ''
 
     if (!organizationId) {
-      const assistantId = getAssistantIdFromPayload(parsed)
-      if (assistantId) {
-        const supabase = createServiceRoleClient()
-        const { data } = await supabase
-          .from('organizations')
-          .select('id')
-          .eq('vapi_assistant_id', assistantId)
-          .maybeSingle()
-        organizationId = data?.id || ''
+      const orgRes = await resolveOrganizationIdForVapiTools({
+        args: {},
+        flat: body as Record<string, unknown>,
+        rawBody: raw,
+        request,
+        toolCallId: 'vapi-events',
+        logPrefix: '[vapi/events]',
+      })
+      organizationId = orgRes.organizationId || ''
+      if (!organizationId) {
+        console.warn('[vapi/events] organization unresolved after full_chain', {
+          message_type: messageType,
+          assistantIdDetected: orgRes.assistantIdDetected,
+          orgSource: orgRes.orgSource,
+        })
       }
     }
 

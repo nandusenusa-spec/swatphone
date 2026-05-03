@@ -23,6 +23,7 @@ import {
 import { resolveTrustedCallerFirstName } from '@/lib/voice-platform/caller-identity'
 import { screenInboundAssistantRequest } from '@/lib/vapi/phone-screening'
 import { textSuggestsPromisedCallback } from '@/lib/voice-platform/callback-heuristic'
+import { normalizePhone } from '@/lib/phone'
 
 type JsonRecord = Record<string, unknown>
 
@@ -388,10 +389,16 @@ export async function dispatchVapiEvent(input: {
           }
         }
         const args = parseToolArgs(tc)
+        const argPhoneNorm =
+          typeof args.phone === 'string' && args.phone.trim()
+            ? normalizePhone(args.phone)
+            : ''
+        const webhookPhoneNorm = resolvedPhone.trim() ? normalizePhone(resolvedPhone) || resolvedPhone.trim() : ''
+        const phoneForToolContext = (webhookPhoneNorm || argPhoneNorm || '').trim() || resolvedPhone
         try {
           const out = await executeToolHandler(name, args, {
             organizationId: input.organizationId,
-            phone: resolvedPhone,
+            phone: phoneForToolContext,
             vapiCallId,
           })
           const failed =
@@ -433,6 +440,24 @@ export async function dispatchVapiEvent(input: {
               },
               prepare_args: redactedArgs,
               prepare_failure: failed ? (out as Record<string, unknown>) : undefined,
+            })
+          } else if (name === 'save_lead_info') {
+            const phoneSource = webhookPhoneNorm
+              ? 'payload'
+              : argPhoneNorm
+                ? 'args'
+                : 'missing'
+            console.log('[vapi/dispatcher] tool-calls result', {
+              ...baseLog,
+              endpoint: '/api/voice/events',
+              organization_id: input.organizationId,
+              phone_source: phoneSource,
+              args_keys: Object.keys(args).slice(0, 24),
+              missing_fields:
+                failed && out && typeof out === 'object' && 'missing_fields' in out
+                  ? (out as { missing_fields?: unknown }).missing_fields
+                  : undefined,
+              ...(failed ? { failure: out as Record<string, unknown> } : {}),
             })
           } else {
             console.log('[vapi/dispatcher] tool-calls result', {
