@@ -1,6 +1,8 @@
 import { randomUUID } from 'crypto'
+import type { PostgrestError } from '@supabase/supabase-js'
 import { createServiceRoleClient } from '@/lib/supabase/service-role'
 import type { PriceLookupSearchMeta } from '@/lib/voice-platform/price-lookup-log'
+import { fieldsFromPostgrestError, logProductsPriceLookupError } from '@/lib/voice-platform/products-query-log'
 import { normalizePhone } from '@/lib/phone'
 import type { CallClassification, StructuredExtraction, ValidationStatus } from '@/lib/voice-platform/types'
 
@@ -368,6 +370,19 @@ function mapProductRowToQuote(r: Record<string, unknown>): QuoteRow {
   }
 }
 
+/** Columnas alineadas con admin `products` (sin category ni otras si no existen en todas las DB). */
+const PRODUCTS_SELECT_ADMIN =
+  'id, organization_id, name, description, price, currency, is_active' as const
+
+function isValidOrganizationUuid(id: string): boolean {
+  return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
+}
+
+/** Escapa % y _ en lo que el usuario dijo para usarlo dentro de ilike %…%. */
+function escapeIlikeUserPatternForContains(term: string): string {
+  return term.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_')
+}
+
 /** Cantidad en nombre tipo "Business Cards - 500" (catálogo admin). */
 export function parseBusinessCardsCatalogQty(name: string): number | null {
   const m = String(name).match(/business\s+cards\s*-\s*(\d+)/i)
@@ -390,18 +405,101 @@ export function allQuoteRowsLookLikeBusinessCardsCatalog(rows: QuoteRow[]): bool
   return rows.every((r) => /business\s+cards/i.test(r.service_name))
 }
 
+function shouldTryBusinessCardsCatalogQuery(term: string): boolean {
+  const t = term.trim()
+  if (!t) return false
+  if (/\bbusiness\s+cards\b/i.test(t)) return true
+  if (t.toLowerCase().includes('business cards')) return true
+  return false
+}
+
+/**
+ * Tras una query segura `name ilike '%Business Cards%'`, acota por cantidad / nombre exacto en memoria.
+ */
+function applyBusinessCardsMemoryFilter(rows: QuoteRow[], term: string): QuoteRow[] {
+  if (!rows.length) return rows
+  const t = term.trim()
+  const sorted = sortQuoteRowsByBusinessCardsCatalogQty([...rows])
+
+  const exact = sorted.filter((r) => r.service_name.trim().toLowerCase() === t.toLowerCase())
+  if (exact.length === 1) return exact
+
+  const dash = t.match(/business\s+cards\s*-\s*(\d+)/i)
+  if (dash) {
+    const needle = dash[0].replace(/\s+/g, ' ').toLowerCase()
+    const by = sorted.filter((r) => r.service_name.replace(/\s+/g, ' ').toLowerCase().includes(needle))
+    if (by.length === 1) return by
+  }
+
+  const qty = t.match(/\b(\d{2,5})\b/)
+  if (qty && sorted.every((r) => /business\s+cards/i.test(r.service_name))) {
+    const q = qty[1]
+    const narrowed = sorted.filter((r) => new RegExp(`-\\s*${q}\\s*$`, 'i').test(r.service_name.trim()))
+    if (narrowed.length === 1) return narrowed
+    if (narrowed.length > 0) return narrowed
+  }
+
+  const lasLos = t.match(/\b(?:las|los)\s+(\d{2,5})\b/i)
+  if (lasLos && sorted.every((r) => /business\s+cards/i.test(r.service_name))) {
+    const q = lasLos[1]
+    const narrowed = sorted.filter((r) => new RegExp(`-\\s*${q}\\s*$`, 'i').test(r.service_name.trim()))
+    if (narrowed.length === 1) return narrowed
+    if (narrowed.length > 0) return narrowed
+  }
+
+  return sorted
+}
+
+function logProductQueryFailure(
+  stage: string,
+  err: PostgrestError | null,
+  organizationId: string,
+  filtersUsed: Record<string, unknown>,
+  logCtx?: { inputName?: string; normalizedName?: string },
+  searchTerm?: string,
+) {
+  if (!err) return
+  logProductsPriceLookupError({
+    stage,
+    ...fieldsFromPostgrestError(err),
+    filtersUsed,
+    organization_id: organizationId,
+    inputName: logCtx?.inputName ?? searchTerm ?? null,
+    normalizedName: logCtx?.normalizedName ?? null,
+  })
+}
+
 /**
  * Productos `products` cuyo nombre contiene "Business Cards" (misma fuente que admin), ordenados por cantidad en el nombre.
  */
 export async function listBusinessCardsProductVariants(organizationId: string): Promise<QuoteRow[]> {
+  if (!isValidOrganizationUuid(organizationId)) {
+    logProductsPriceLookupError({
+      stage: 'listBusinessCardsProductVariants_invalid_org',
+      filtersUsed: { organization_id: organizationId },
+      organization_id: organizationId,
+      message: 'invalid organization_id UUID',
+    })
+    return []
+  }
   const supabase = createServiceRoleClient()
+  const filtersUsed = {
+    table: 'products',
+    select: PRODUCTS_SELECT_ADMIN,
+    organization_id: organizationId,
+    name_ilike: '%Business Cards%',
+    limit: 40,
+  }
   const { data, error } = await supabase
     .from('products')
-    .select('id, name, price, currency, description, is_active, category')
+    .select(PRODUCTS_SELECT_ADMIN)
     .eq('organization_id', organizationId)
     .ilike('name', '%Business Cards%')
     .limit(40)
-  if (error && error.code !== 'PGRST205') throw error
+  if (error) {
+    logProductQueryFailure('listBusinessCardsProductVariants', error, organizationId, filtersUsed, undefined, undefined)
+    return []
+  }
   const raw = data || []
   const rows = raw
     .filter((r) => /business\s+cards/i.test(String((r as Record<string, unknown>).name || '')))
@@ -430,18 +528,14 @@ function narrowBusinessCardRowsByQuantity(rows: QuoteRow[], searchTerm: string):
 }
 
 /**
- * Misma fuente que dashboard Productos y admin: tabla `products` (`select('*')` en UI, `organization_id` en admin).
- * Sin `is_active` / `deleted_at` en schema base (no filtramos deleted_at).
- * Orden: name exacto (eq) → name ILIKE literal → name/description/category parcial (ilike %).
+ * Misma tabla/columnas que admin Productos: `products` + `organization_id`, sin columnas dudosas ni `.or()` raros.
  */
 async function searchProductsForPriceQuote(
   supabase: ReturnType<typeof createServiceRoleClient>,
   organizationId: string,
   term: string,
+  logCtx?: { inputName?: string; normalizedName?: string },
 ): Promise<{ rows: QuoteRow[]; meta: PriceLookupSearchMeta }> {
-  const baseSelect =
-    'id, name, price, currency, description, is_active, category' as const
-
   const metaFor = (
     matchMode: string,
     queryFilters: Record<string, unknown>,
@@ -457,13 +551,71 @@ async function searchProductsForPriceQuote(
     matchMode,
   })
 
-  // 1) Case-sensitive exact (copiar/pegar desde admin)
+  if (!isValidOrganizationUuid(organizationId)) {
+    logProductsPriceLookupError({
+      stage: 'searchProducts_invalid_org',
+      filtersUsed: { organization_id: organizationId, term },
+      organization_id: organizationId,
+      inputName: logCtx?.inputName ?? term,
+      normalizedName: logCtx?.normalizedName ?? null,
+      message: 'invalid organization_id UUID',
+    })
+    return {
+      rows: [],
+      meta: metaFor('invalid_org', { term, reason: 'invalid_organization_id' }, 0),
+    }
+  }
+
+  // Ruta segura Business Cards: un solo filtro name ilike, sin category; refinamiento en memoria.
+  if (shouldTryBusinessCardsCatalogQuery(term)) {
+    const filtersUsed = {
+      select: PRODUCTS_SELECT_ADMIN,
+      organization_id: organizationId,
+      name_ilike: '%Business Cards%',
+      limit: 50,
+    }
+    const bcRes = await supabase
+      .from('products')
+      .select(PRODUCTS_SELECT_ADMIN)
+      .eq('organization_id', organizationId)
+      .ilike('name', '%Business Cards%')
+      .limit(50)
+    if (bcRes.error) {
+      logProductQueryFailure(
+        'products_business_cards_safe_ilike',
+        bcRes.error,
+        organizationId,
+        filtersUsed,
+        logCtx,
+        term,
+      )
+    }
+    if (!bcRes.error && bcRes.data?.length) {
+      const mapped = (bcRes.data || []).map((r) => mapProductRowToQuote(r as Record<string, unknown>))
+      const filtered = mapped.filter((r) => /business\s+cards/i.test(r.service_name))
+      const rows = applyBusinessCardsMemoryFilter(filtered, term)
+      if (rows.length) {
+        return {
+          rows,
+          meta: metaFor(
+            'business_cards_safe_query',
+            { ...filtersUsed, memory_filter: true, search_term: term },
+            rows.length,
+          ),
+        }
+      }
+    }
+  }
+
+  // 1) Case-sensitive exact
+  const filtersEq = { select: PRODUCTS_SELECT_ADMIN, organization_id: organizationId, name_eq: term, limit: 8 }
   const eqRes = await supabase
     .from('products')
-    .select(baseSelect)
+    .select(PRODUCTS_SELECT_ADMIN)
     .eq('organization_id', organizationId)
     .eq('name', term)
     .limit(8)
+  if (eqRes.error) logProductQueryFailure('products_name_eq', eqRes.error, organizationId, filtersEq, logCtx, term)
   if (eqRes.error && eqRes.error.code !== 'PGRST205') throw eqRes.error
   const eqRows = (eqRes.data || []).map((r) => mapProductRowToQuote(r as Record<string, unknown>))
   if (eqRows.length) {
@@ -473,14 +625,30 @@ async function searchProductsForPriceQuote(
     }
   }
 
-  // 2) Case-insensitive exact en `name` (misma columna que la tabla Productos)
+  // 2) Case-insensitive exact en name
   const exactPattern = escapeIlikeLiteral(term)
+  const filtersIlikeExact = {
+    select: PRODUCTS_SELECT_ADMIN,
+    organization_id: organizationId,
+    name_ilike_exact: exactPattern,
+    limit: 8,
+  }
   const ilikeExactRes = await supabase
     .from('products')
-    .select(baseSelect)
+    .select(PRODUCTS_SELECT_ADMIN)
     .eq('organization_id', organizationId)
     .ilike('name', exactPattern)
     .limit(8)
+  if (ilikeExactRes.error) {
+    logProductQueryFailure(
+      'products_name_ilike_exact',
+      ilikeExactRes.error,
+      organizationId,
+      filtersIlikeExact,
+      logCtx,
+      term,
+    )
+  }
   if (ilikeExactRes.error && ilikeExactRes.error.code !== 'PGRST205') throw ilikeExactRes.error
   const exactRows = (ilikeExactRes.data || []).map((r) =>
     mapProductRowToQuote(r as Record<string, unknown>),
@@ -492,32 +660,65 @@ async function searchProductsForPriceQuote(
     }
   }
 
-  const cols: Array<{ col: 'name' | 'description' | 'category'; matchMode: string }> = [
-    { col: 'name', matchMode: 'name_ilike' },
-    { col: 'description', matchMode: 'description_ilike' },
-    { col: 'category', matchMode: 'category_ilike' },
-  ]
-  for (const { col, matchMode } of cols) {
-    const { data, error } = await supabase
-      .from('products')
-      .select(baseSelect)
-      .eq('organization_id', organizationId)
-      .ilike(col, `%${term}%`)
-      .limit(8)
+  const escapedContains = escapeIlikeUserPatternForContains(term)
+  const partialPattern = `%${escapedContains}%`
 
-    if (error && error.code !== 'PGRST205') throw error
-    const raw = data || []
-    let rows = raw.map((r) => mapProductRowToQuote(r as Record<string, unknown>))
-    if (col === 'name') {
-      rows = narrowBusinessCardRowsByQuantity(rows, term)
-    }
-    if (rows.length) {
-      return {
-        rows,
-        meta: metaFor(matchMode, { column: col, ilike: `%${term}%` }, rows.length),
-      }
+  const filtersNamePartial = {
+    select: PRODUCTS_SELECT_ADMIN,
+    organization_id: organizationId,
+    name_ilike: partialPattern,
+    limit: 8,
+  }
+  const namePartial = await supabase
+    .from('products')
+    .select(PRODUCTS_SELECT_ADMIN)
+    .eq('organization_id', organizationId)
+    .ilike('name', partialPattern)
+    .limit(8)
+  if (namePartial.error) {
+    logProductQueryFailure('products_name_ilike_partial', namePartial.error, organizationId, filtersNamePartial, logCtx, term)
+  }
+  if (namePartial.error && namePartial.error.code !== 'PGRST205') throw namePartial.error
+  let nameRows = (namePartial.data || []).map((r) => mapProductRowToQuote(r as Record<string, unknown>))
+  nameRows = narrowBusinessCardRowsByQuantity(nameRows, term)
+  if (nameRows.length) {
+    return {
+      rows: nameRows,
+      meta: metaFor('name_ilike', { column: 'name', ilike: partialPattern }, nameRows.length),
     }
   }
+
+  const filtersDescPartial = {
+    select: PRODUCTS_SELECT_ADMIN,
+    organization_id: organizationId,
+    description_ilike: partialPattern,
+    limit: 8,
+  }
+  const descRes = await supabase
+    .from('products')
+    .select(PRODUCTS_SELECT_ADMIN)
+    .eq('organization_id', organizationId)
+    .ilike('description', partialPattern)
+    .limit(8)
+  if (descRes.error) {
+    logProductQueryFailure(
+      'products_description_ilike_partial',
+      descRes.error,
+      organizationId,
+      filtersDescPartial,
+      logCtx,
+      term,
+    )
+  }
+  if (descRes.error && descRes.error.code !== 'PGRST205') throw descRes.error
+  const descRows = (descRes.data || []).map((r) => mapProductRowToQuote(r as Record<string, unknown>))
+  if (descRows.length) {
+    return {
+      rows: descRows,
+      meta: metaFor('description_ilike', { column: 'description', ilike: partialPattern }, descRows.length),
+    }
+  }
+
   return {
     rows: [],
     meta: {
@@ -525,7 +726,7 @@ async function searchProductsForPriceQuote(
       queryFilters: {
         organization_id: organizationId,
         term,
-        tried: 'name_eq,name_ilike_exact,name_ilike,description_ilike,category_ilike',
+        tried: 'business_cards_safe,name_eq,name_ilike_exact,name_ilike,description_ilike',
         is_active_filter: 'none (aligned with dashboard/admin products)',
       },
       resultCount: 0,
@@ -536,6 +737,7 @@ async function searchProductsForPriceQuote(
 export async function getPriceQuote(input: {
   organizationId: string
   serviceName: string
+  logContext?: { inputName?: string; normalizedName?: string }
 }): Promise<{ rows: QuoteRow[]; searchMeta: PriceLookupSearchMeta }> {
   const supabase = createServiceRoleClient()
   const term = input.serviceName.trim()
@@ -554,6 +756,7 @@ export async function getPriceQuote(input: {
     supabase,
     input.organizationId,
     term,
+    input.logContext,
   )
   if (productRows.length) {
     return { rows: productRows, searchMeta: productMeta }

@@ -198,6 +198,7 @@ export async function runGetPriceQuote(input: {
     const { rows: chunk, searchMeta } = await getPriceQuote({
       organizationId: input.organizationId,
       serviceName: term,
+      logContext: { inputName, normalizedName },
     })
     lastSearchMeta = searchMeta
     if (chunk.length) {
