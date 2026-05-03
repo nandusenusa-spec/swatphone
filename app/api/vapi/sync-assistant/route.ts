@@ -6,8 +6,10 @@ import {
   auditSystemPromptForSync,
   buildSystemPrompt,
   extractRawSystemPromptFromVapiAssistant,
+  extractReglasOperativasFragment,
   JOB_STATUS_SYNC_VERIFICATION_PHRASE,
   sanitizeAssistantBasePromptForSync,
+  sanitizeFaqTextForSync,
 } from '@/lib/vapi/prompts'
 import { openAiVoiceIdForLlmPipeline } from '@/lib/vapi/openai-voice-for-pipeline'
 import {
@@ -144,6 +146,18 @@ function conciseFirstMessage(raw: unknown): string {
 function clipText(text: string, max: number): string {
   if (text.length <= max) return text
   return `${text.slice(0, max)}…`
+}
+
+function logLongString(tag: string, text: string, chunkSize = 7000) {
+  const len = text.length
+  if (len <= chunkSize) {
+    console.log(tag, { length: len, body: text })
+    return
+  }
+  for (let i = 0, part = 0; i < len; i += chunkSize, part += 1) {
+    console.log(`${tag}_part_${part}`, text.slice(i, i + chunkSize))
+  }
+  console.log(`${tag}_meta`, { total_length: len, chunk_size: chunkSize })
 }
 
 type ToolDigest = {
@@ -418,6 +432,11 @@ export async function POST(request: NextRequest) {
 
     const appBase = process.env.NEXT_PUBLIC_APP_URL.replace(/\/$/, '')
 
+    console.log('[vapi/sync-assistant] sync_start', {
+      organization_id: organizationId,
+      assistant_id: assistantId,
+    })
+
     // Get FAQs for context
     const { data: faqs } = await serviceRole
       .from('faqs')
@@ -446,9 +465,13 @@ export async function POST(request: NextRequest) {
     if (faqs && faqs.length > 0) {
       systemPrompt += '\n\nPreguntas frecuentes:\n'
       faqs.forEach((f) => {
-        systemPrompt += `- ${f.question}: ${f.answer}\n`
+        const q = sanitizeFaqTextForSync(String(f.question || ''))
+        const a = sanitizeFaqTextForSync(String(f.answer || ''))
+        systemPrompt += `- ${q}: ${a}\n`
       })
     }
+
+    logLongString('[vapi/sync-assistant] system_prompt_final_full', systemPrompt)
 
     const promptAuditPatchPayload = auditSystemPromptForSync(systemPrompt)
     console.log('[vapi/sync-assistant] system_prompt_final_sent_to_vapi_audit', {
@@ -534,7 +557,7 @@ export async function POST(request: NextRequest) {
               job_number: { type: 'string' },
               order_number: { type: 'string' },
             },
-            required: [],
+            required: [] as string[],
           },
         },
         server: {
@@ -663,7 +686,7 @@ export async function POST(request: NextRequest) {
           },
         },
       },
-    ] as const
+    ]
 
     const modelTools = [...persistentTransferTools, ...staticFunctionTools]
     // Anthropic model: OpenAI "coral" is realtime-only on Vapi; use assistant_configs.voice_id or alloy.
@@ -707,12 +730,18 @@ export async function POST(request: NextRequest) {
 
     const prePatchGjs = digestToolFromList(assistantConfig.model.tools as unknown[], 'get_job_status')
     const prePatchFind = digestToolFromList(assistantConfig.model.tools as unknown[], 'find_customer')
+    const prePatchGjsToolJson = (assistantConfig.model.tools as unknown[]).find((t) => {
+      const r = t as Record<string, unknown>
+      const fn = r.function as Record<string, unknown> | undefined
+      return fn?.name === 'get_job_status'
+    })
     console.log('[vapi/sync-assistant] pre_patch_get_job_status_payload', {
       'function.name': prePatchGjs?.functionName ?? null,
       'function.description': prePatchGjs?.description
         ? clipText(prePatchGjs.description, 320)
         : null,
       'function.parameters.required': prePatchGjs?.parametersRequired ?? null,
+      'function.parameters.required_json': JSON.stringify(prePatchGjs?.parametersRequired ?? null),
       'properties.phone.description': prePatchGjs?.phoneDescription
         ? clipText(prePatchGjs.phoneDescription, 200)
         : null,
@@ -721,6 +750,10 @@ export async function POST(request: NextRequest) {
         : null,
       serverUrl: prePatchGjs?.serverUrl ?? null,
     })
+    console.log(
+      '[vapi/sync-assistant] pre_patch_get_job_status_full_json',
+      JSON.stringify(prePatchGjsToolJson),
+    )
     console.log('[vapi/sync-assistant] pre_patch_find_customer_payload', {
       'function.description': prePatchFind?.description
         ? clipText(prePatchFind.description, 280)
@@ -820,9 +853,14 @@ export async function POST(request: NextRequest) {
         postPatchFetched = { parseError: true, rawPreview: clipText(getText, 200) }
       }
       const summary = summarizeAssistantFromVapi(postPatchFetched)
+      const postGjs = summary && typeof summary === 'object' && 'get_job_status' in summary ? summary.get_job_status : null
       console.log('[vapi/sync-assistant] post_patch_get_assistant', {
         httpStatus: postPatchGetStatus,
         ...summary,
+      })
+      console.log('[vapi/sync-assistant] post_patch_get_job_status_required_explicit', {
+        parametersRequired: postGjs?.parametersRequired ?? null,
+        parametersRequiredJSON: JSON.stringify(postGjs?.parametersRequired ?? null),
       })
     } else {
       console.warn('[vapi/sync-assistant] post_patch_get_skipped_no_assistant_id')
@@ -855,6 +893,12 @@ export async function POST(request: NextRequest) {
         has_verification_phrase: promptAuditAfterGet.hasVerificationPhrase,
         forbidden_hits: promptAuditAfterGet.forbiddenHits,
         reglas_fragment: clipText(promptAuditAfterGet.reglasFragment, 1200),
+      })
+    }
+    if (vapiGetSystemPrompt) {
+      console.log('[vapi/sync-assistant] post_patch_vapi_system_prompt_reglas_fragment', {
+        length: vapiGetSystemPrompt.length,
+        fragment: extractReglasOperativasFragment(vapiGetSystemPrompt),
       })
     }
 
@@ -941,6 +985,7 @@ export async function POST(request: NextRequest) {
           'En Vapi, get_job_status debe tener parameters.required = [] y puede llevar server.url al endpoint get-job-status (ya publicado en sync).',
         vapiDashboardNotes: [
           'Si el dashboard muestra un borrador o el botón Publish sigue activo tras el sync: el PATCH por API actualiza el recurso del assistant, pero la UI de Vapi puede exigir “Publicar” para que la vista y las pruebas reflejen exactamente lo guardado.',
+          'Si tool-calls devuelve 404: en Vercel filtrá logs por path del POST; comprobá GET https://TU_DOMINIO/api/vapi/tool-calls (debe devolver JSON ok) y que Server URL use el mismo dominio que este deploy.',
         ],
       },
       vapiVerification: {

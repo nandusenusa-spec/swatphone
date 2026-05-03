@@ -39,6 +39,8 @@ export async function POST(request: NextRequest) {
     }
 
     console.log('[vapi/events] request received', {
+      url: request.url,
+      path: request.nextUrl.pathname,
       organization_id: organizationId || null,
       message_type: messageType,
     })

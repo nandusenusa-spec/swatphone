@@ -3,7 +3,7 @@ import { transferDestinationsSummary } from '@/lib/vapi/transfer-destinations'
 
 /** Frase única para comprobar en logs/GET de Vapi que el prompt sincronizado es el nuevo. */
 export const JOB_STATUS_SYNC_VERIFICATION_PHRASE =
-  'omite phone si no lo ves; el backend intentará extraerlo del payload de Vapi'
+  'Omite phone si no lo ves; el backend extrae phone del payload de Vapi.'
 
 type PromptInput = {
   basePrompt: string
@@ -36,14 +36,35 @@ export function sanitizeAssistantBasePromptForSync(base: string): {
         ),
     },
     {
+      label: 'organization_id_uuid_phrase_inline',
+      replace: (s) =>
+        s.replace(/organization_id\s*=\s*UUID\s+de\s+esta\s+organizaci[oó]n/gi, ''),
+    },
+    {
       label: 'uuid_de_esta_organizacion',
       replace: (s) => s.replace(/UUID\s+de\s+esta\s+organizaci[oó]n/gi, ''),
+    },
+    {
+      label: 'organization_id_con_organizationid_uuid_phone',
+      replace: (s) =>
+        s.replace(
+          /^\s*[^\n]*OrganizationID[^\n]*UUID[^\n]*(phone|tel[eé]fono|E\.?164)?[^\n]*\n?/gim,
+          '',
+        ),
+    },
+    {
+      label: 'legacy_get_job_status_org_phone_line',
+      replace: (s) =>
+        s.replace(
+          /^\s*[^\n]*\b(get_job_status|Get Job Status|estado\s+(del\s+)?pedido)[^\n]*(organization_id|OrganizationID|UUID)[^\n]*(phone|tel[eé]fono|E\.?164)[^\n]*\n?/gim,
+          '',
+        ),
     },
     {
       label: 'get_job_status_obliga_phone_e164_line',
       replace: (s) =>
         s.replace(
-          /^\s*[^\n]*(get_job_status|estado\s+(del\s+)?pedido)[^\n]*(phone|tel[eé]fono)[^\n]*(E\.?164|obligatorio|siempre|debes)[^\n]*\n?/gim,
+          /^\s*[^\n]*(get_job_status|estado\s+(del\s+)?pedido)[^\n]*(phone|tel[eé]fono)[^\n]*(E\.?164|obligatorio|siempre|debes|requerido)[^\n]*\n?/gim,
           '',
         ),
     },
@@ -75,12 +96,28 @@ export function auditSystemPromptForSync(full: string): {
   const forbidden: Array<{ id: string; test: (s: string) => boolean }> = [
     { id: 'uuid_esta_organizacion', test: (s) => /UUID\s+de\s+esta\s+organizaci/i.test(s) },
     { id: 'organization_id_equals_uuid', test: (s) => /organization_id\s*=\s*UUID/i.test(s) },
+    {
+      id: 'organizationid_uuid_phone_e164',
+      test: (s) =>
+        /OrganizationID/i.test(s) &&
+        /UUID/i.test(s) &&
+        /(phone|tel[eé]fono|E\.?164)/i.test(s),
+    },
   ]
   return {
     hasVerificationPhrase: full.includes(JOB_STATUS_SYNC_VERIFICATION_PHRASE),
     forbiddenHits: forbidden.filter((f) => f.test(full)).map((f) => f.id),
     reglasFragment: extractReglasOperativasFragment(full),
   }
+}
+
+/** Limpia FAQs que repiten instrucciones viejas de get_job_status (solo patrones muy concretos). */
+export function sanitizeFaqTextForSync(text: string): string {
+  let t = text
+  t = t.replace(/organization_id\s*=\s*UUID\s+de\s+esta\s+organizaci[oó]n/gi, '')
+  t = t.replace(/UUID\s+de\s+esta\s+organizaci[oó]n/gi, '')
+  t = t.replace(/\bOrganizationID\b[^.]*UUID[^.]*(phone|E\.?164)[^.]*\./gi, '')
+  return t.replace(/\s{2,}/g, ' ').trim()
 }
 
 export function extractRawSystemPromptFromVapiAssistant(payload: unknown): string | null {
@@ -131,9 +168,7 @@ export function buildSystemPrompt(input: PromptInput): string {
       : ''
 
   const orgId = input.organizationId?.trim()
-  const jobStatusOrgLine = orgId
-    ? `(1) Estado de pedido u orden: llamá de inmediato a get_job_status. Nunca llames find_customer antes para ese caso. No pidas nombre, teléfono ni ningún dato antes. No inventes organization_id. Omití phone en la tool si no lo tenés; ${JOB_STATUS_SYNC_VERIFICATION_PHRASE}. El backend resuelve organization_id desde configuración (no lo escribas ni lo pidas al cliente). Podés pasar solo job_number u order_number si el cliente los dijo. Respondé al cliente solo con primary_message_for_caller.`
-    : `(1) Estado de pedido u orden: llamá de inmediato a get_job_status. Nunca find_customer antes para ese caso. No pidas nombre, teléfono ni ningún dato antes. No inventes organization_id. Omití phone si no lo tenés; ${JOB_STATUS_SYNC_VERIFICATION_PHRASE}. El backend resuelve organization_id desde configuración. Respondé solo con primary_message_for_caller.`
+  const jobStatusOrgLine = `(1) Si preguntan por estado de pedido u orden, llamá inmediatamente get_job_status. No llames find_customer antes. No pidas nombre, teléfono ni datos antes. No inventes organization_id. ${JOB_STATUS_SYNC_VERIFICATION_PHRASE} El backend resuelve organization_id desde configuración. Opcional en la tool: job_number u order_number si el cliente los dijo. Respondé al cliente solo con primary_message_for_caller.`
 
   const policy = [
     'Nunca inventes precios, fechas ni estados.',
