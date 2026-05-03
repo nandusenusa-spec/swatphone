@@ -1755,9 +1755,14 @@ export default function AdminClientDetailPage() {
         <TabsContent value="prompts" className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle>System Prompt del asistente</CardTitle>
+              <CardTitle>System prompt (base editable)</CardTitle>
               <CardDescription>
-                El prompt que define como se comporta el bot. Usa el boton para generar uno automatico basado en los datos del cliente.
+                Este campo es el <strong>prefijo base</strong> guardado en <code className="text-xs">assistant_configs.system_prompt</code>
+                (y se replica en <code className="text-xs">organization_ai_config</code> al guardar). No muestra el prompt completo que
+                recibe Vapi: al sincronizar, el backend concatena después las <strong>reglas operativas</strong> desde{' '}
+                <code className="text-xs">lib/vapi/prompts.ts</code>, datos de runtime (catálogo, transferencias, etc.) y, en sync, las
+                FAQs. Si lo dejás vacío, se usa un texto base por defecto en servidor antes de esas reglas. Usá el botón para generar
+                solo esta parte automáticamente.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
@@ -1767,8 +1772,14 @@ export default function AdminClientDetailPage() {
               </Button>
 
               <div className="space-y-2">
-                <Label>System Prompt</Label>
+                <Label htmlFor="admin-system-prompt-base">Prompt base (personalizado)</Label>
+                <p id="admin-system-prompt-base-hint" className="text-xs text-muted-foreground">
+                  No es el prompt efectivo enviado a Vapi: siempre se combina con reglas del código al hacer sync. Vacío = texto base
+                  por defecto en el servidor + esas reglas.
+                </p>
                 <Textarea
+                  id="admin-system-prompt-base"
+                  aria-describedby="admin-system-prompt-base-hint"
                   value={systemPrompt}
                   onChange={(e) => setSystemPrompt(e.target.value)}
                   placeholder="Escribe el prompt del sistema aqui..."
