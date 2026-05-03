@@ -1,59 +1,86 @@
 /**
- * Mensajes para el bot según estado persistido en work_orders (TEXT + timestamps).
- * Convención mínima (sin migración obligatoria):
- * pending_approval, approved, in_production, pickup_ready, completed, delivered, cancelled
- * Legacy admitidos: received, in_progress, production, ready_for_pickup
+ * Mensajes de voz derivados solo de work_orders.status (fuente única).
  */
+
+import {
+  type WorkOrderVoiceAdminStatus,
+  normalizeWorkOrderStatusForAdmin,
+} from '@/lib/admin/work-order-status'
+
+export type WorkOrderTrackingPhase =
+  | 'pending'
+  | 'production'
+  | 'installation'
+  | 'ready_for_pickup'
+  | 'completed'
+  | 'delivered'
+  | 'cancelled'
+  | 'other'
 
 export type WorkOrderVoiceInfo = {
   status_code: string
+  tracking_phase: WorkOrderTrackingPhase
   client_message_es: string
   pickup_ready: boolean
 }
 
+const VOICE_MESSAGE_BY_STATUS: Record<WorkOrderVoiceAdminStatus, WorkOrderVoiceInfo> = {
+  pending: {
+    status_code: 'pending',
+    tracking_phase: 'pending',
+    client_message_es: 'Su orden está pendiente.',
+    pickup_ready: false,
+  },
+  in_production: {
+    status_code: 'in_production',
+    tracking_phase: 'production',
+    client_message_es: 'Su orden está en producción.',
+    pickup_ready: false,
+  },
+  installation: {
+    status_code: 'installation',
+    tracking_phase: 'installation',
+    client_message_es: 'Su orden está en instalación.',
+    pickup_ready: false,
+  },
+  ready_for_pickup: {
+    status_code: 'ready_for_pickup',
+    tracking_phase: 'ready_for_pickup',
+    client_message_es: 'Su orden está lista para retirar.',
+    pickup_ready: true,
+  },
+  completed: {
+    status_code: 'completed',
+    tracking_phase: 'completed',
+    client_message_es: 'Su orden fue completada.',
+    pickup_ready: false,
+  },
+  cancelled: {
+    status_code: 'cancelled',
+    tracking_phase: 'cancelled',
+    client_message_es: 'Su orden fue cancelada.',
+    pickup_ready: false,
+  },
+}
+
+function normalizeStatus(raw: string): string {
+  return raw.toLowerCase().trim()
+}
+
 export function workOrderStatusForVoice(row: Record<string, unknown>): WorkOrderVoiceInfo {
-  const raw = String(row.status ?? '').toLowerCase().trim()
-  const pickupAt = row.pickup_ready_at ?? row.confirmed_delivery_at
-
-  if (pickupAt) {
-    return {
-      status_code: raw || 'pickup_ready',
-      client_message_es: 'Tu trabajo ya está listo y podés venir a retirarlo.',
-      pickup_ready: true,
-    }
+  const raw = String(row.status ?? '').trim()
+  if (!raw) {
+    return { ...VOICE_MESSAGE_BY_STATUS.pending, status_code: '' }
   }
-
-  if (raw === 'pickup_ready' || raw === 'ready_for_pickup') {
-    return {
-      status_code: raw,
-      client_message_es: 'Tu trabajo ya está listo y podés venir a retirarlo.',
-      pickup_ready: true,
-    }
+  const canonical = normalizeWorkOrderStatusForAdmin(raw)
+  if (canonical) {
+    return { ...VOICE_MESSAGE_BY_STATUS[canonical] }
   }
-
-  const map: Record<string, string> = {
-    pending_approval:
-      'Tu pedido está pendiente de aprobación del equipo. No confirmamos fechas de terminación hasta que esté aprobado.',
-    draft: 'Tu pedido está en borrador pendiente de confirmación.',
-    received: 'Registramos tu pedido; el equipo lo está revisando.',
-    approved: 'Tu pedido fue aprobado y está pasando a producción.',
-    in_production: 'Tu trabajo está en producción. Te avisamos cuando esté listo para retirar.',
-    in_progress: 'Tu trabajo está en producción.',
-    production: 'Tu trabajo está en producción.',
-    completed:
-      'Tu trabajo figura como finalizado. Si no retiraste aún, consultá en el local el detalle de entrega.',
-    delivered: 'Tu trabajo figura como entregado.',
-    cancelled: 'Este trabajo fue cancelado. Si necesitás ayuda, podemos pasarte con un asesor.',
-  }
-
-  if (map[raw]) {
-    return { status_code: raw, client_message_es: map[raw], pickup_ready: false }
-  }
-
   return {
-    status_code: raw || 'unknown',
+    status_code: normalizeStatus(raw) || 'unknown',
+    tracking_phase: 'other',
     client_message_es:
-      'Tenemos un registro de tu trabajo. Para el estado exacto y plazos, un miembro del equipo te lo confirma; no inventamos fechas.',
+      'Tenemos un registro de su orden. Para el estado exacto, un miembro del equipo se lo confirma; no inventamos datos.',
     pickup_ready: false,
   }
 }

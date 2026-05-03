@@ -9,6 +9,7 @@ import {
   getSummaryFromPayload,
   getTranscriptFromPayload,
 } from '@/lib/vapi/payload'
+import { timingSafeEqualUtf8 } from '@/lib/security/timing-safe'
 import { normalizePhone } from '@/lib/phone'
 import { createServiceRoleClient } from '@/lib/supabase/service-role'
 import {
@@ -441,11 +442,14 @@ async function handleToolCalls(request: NextRequest, flat: JsonRecord) {
 
 export async function POST(request: NextRequest) {
   try {
-    const rawSecret = process.env.VAPI_WEBHOOK_SECRET
+    const rawSecret = process.env.VAPI_WEBHOOK_SECRET?.trim()
     if (rawSecret) {
-      const headerSecret =
-        request.headers.get('x-vapi-secret') || request.headers.get('X-Vapi-Secret')
-      if (!headerSecret || headerSecret !== rawSecret) {
+      const headerSecret = (
+        request.headers.get('x-vapi-secret') ||
+        request.headers.get('X-Vapi-Secret') ||
+        ''
+      ).trim()
+      if (!timingSafeEqualUtf8(headerSecret, rawSecret)) {
         console.warn('[vapi:webhook] Invalid or missing webhook secret header')
         return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
       }

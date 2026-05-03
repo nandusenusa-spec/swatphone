@@ -318,7 +318,7 @@ export async function createWorkOrder(input: {
     order_number: orderNumber,
     service_type: input.title,
     issue_description: input.issueDescription || null,
-    status: 'pending_approval',
+    status: 'pending',
   }
 
   const legacyRow = {
@@ -327,7 +327,7 @@ export async function createWorkOrder(input: {
     work_order_number: orderNumber,
     title: input.title,
     issue_description: input.issueDescription || null,
-    status: 'pending_approval',
+    status: 'pending',
     created_by: 'vapi',
     owner: 'Ramon',
   }

@@ -27,6 +27,10 @@ import {
 } from 'lucide-react'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import { getAdminAuthHeaders } from '@/lib/admin/client-headers'
+import {
+  WORK_ORDER_VOICE_ADMIN_STATUSES,
+  workOrderStatusForAdminDropdown,
+} from '@/lib/admin/work-order-status'
 
 type TransferDestinationRow = {
   id: string
@@ -127,6 +131,8 @@ export default function AdminClientDetailPage() {
   const [newJobCustomerMsg, setNewJobCustomerMsg] = useState('')
   const [newJobInternal, setNewJobInternal] = useState('')
   const [jobsDraft, setJobsDraft] = useState<Record<string, Record<string, string>>>({})
+  const [crmWorkOrders, setCrmWorkOrders] = useState<any[]>([])
+  const [woStatusDraft, setWoStatusDraft] = useState<Record<string, string>>({})
   const [screeningRows, setScreeningRows] = useState<
     Array<{
       id: string
@@ -163,6 +169,14 @@ export default function AdminClientDetailPage() {
     }
     setJobsDraft(next)
   }, [printJobs])
+
+  useEffect(() => {
+    const next: Record<string, string> = {}
+    for (const w of crmWorkOrders) {
+      next[w.id] = workOrderStatusForAdminDropdown(w.status as string)
+    }
+    setWoStatusDraft(next)
+  }, [crmWorkOrders])
 
   async function loadClientData() {
     setLoading(true)
@@ -258,6 +272,10 @@ export default function AdminClientDetailPage() {
       const pjJson = await pjRes.json()
       if (pjJson.data) setPrintJobs(pjJson.data)
 
+      const woRes = await fetch(`/api/admin/data?type=work_orders&id=${clientId}`, adminFetchOpts)
+      const woJson = await woRes.json()
+      setCrmWorkOrders(Array.isArray(woJson.data) ? woJson.data : [])
+
       const credRes = await fetch(`/api/admin/data?type=owner_credential&id=${clientId}`, {
         ...adminFetchOpts,
         cache: 'no-store',
@@ -286,6 +304,36 @@ export default function AdminClientDetailPage() {
     }
 
     setLoading(false)
+  }
+
+  async function saveCrmWorkOrder(woId: string) {
+    const status = woStatusDraft[woId]
+    if (!status) return
+    setSaving(true)
+    try {
+      const res = await fetch('/api/admin/data', {
+        method: 'POST',
+        credentials: 'include',
+        headers: adminJsonHeaders(),
+        body: JSON.stringify({
+          type: 'update_work_order',
+          id: woId,
+          data: { organization_id: clientId, status },
+        }),
+      })
+      const j = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        alert(typeof j.error === 'string' ? j.error : 'Error al guardar orden')
+        return
+      }
+      await loadClientData()
+      alert('Estado de orden actualizado (el bot usa este valor al instante).')
+    } catch (e) {
+      console.error(e)
+      alert('Error al guardar orden')
+    } finally {
+      setSaving(false)
+    }
   }
 
   async function createPrintClient() {
@@ -1044,11 +1092,61 @@ export default function AdminClientDetailPage() {
                 Clientes finales y trabajos (voz)
               </CardTitle>
               <CardDescription>
-                Datos que el bot consulta por teléfono. El Server URL del proveedor debe incluir{' '}
-                <code className="text-xs">organization_id={clientId}</code>.
+                Imprenta legacy usa la tabla <code className="text-xs">jobs</code>. El asistente telefónico usa{' '}
+                <code className="text-xs">work_orders</code> para <code className="text-xs">get_job_status</code>.
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-6">
+              <div className="space-y-3 rounded-lg border border-primary/20 bg-muted/30 p-4">
+                <h4 className="font-medium">Órdenes work_orders (fuente del bot)</h4>
+                <p className="text-sm text-muted-foreground">
+                  Cambiar el estado aquí actualiza lo que dice el asistente al consultar el pedido (sin otra tabla ni
+                  duplicar jobs).
+                </p>
+                {crmWorkOrders.length === 0 ? (
+                  <p className="text-sm text-muted-foreground">
+                    Sin filas en work_orders. El bot puede crear órdenes con la herramienta create_work_order.
+                  </p>
+                ) : (
+                  <div className="space-y-3">
+                    {crmWorkOrders.map((wo: Record<string, unknown>) => {
+                      const wid = String(wo.id)
+                      const cust = wo.customers as { name?: string; phone?: string } | null
+                      return (
+                        <div key={wid} className="space-y-2 rounded-md border bg-background p-3">
+                          <div className="font-mono text-sm">
+                            {String(wo.work_order_number || wo.order_number || wid)}
+                          </div>
+                          <div className="text-xs text-muted-foreground">
+                            {cust?.name || '—'} — {cust?.phone || '—'}
+                          </div>
+                          <div className="text-sm">{String(wo.title || '')}</div>
+                          <div className="space-y-1">
+                            <Label>Estado (voz)</Label>
+                            <select
+                              className="flex h-10 w-full rounded-md border border-input bg-background px-3 py-2 text-sm"
+                              value={woStatusDraft[wid] ?? workOrderStatusForAdminDropdown(String(wo.status))}
+                              onChange={(e) =>
+                                setWoStatusDraft((d) => ({ ...d, [wid]: e.target.value }))
+                              }
+                            >
+                              {WORK_ORDER_VOICE_ADMIN_STATUSES.map((s) => (
+                                <option key={s} value={s}>
+                                  {s}
+                                </option>
+                              ))}
+                            </select>
+                          </div>
+                          <Button size="sm" variant="secondary" onClick={() => saveCrmWorkOrder(wid)} disabled={saving}>
+                            Guardar estado
+                          </Button>
+                        </div>
+                      )
+                    })}
+                  </div>
+                )}
+              </div>
+
               <div className="space-y-2 rounded-lg border p-4">
                 <h4 className="font-medium">Nuevo cliente final</h4>
                 <div className="grid gap-3 md:grid-cols-3">

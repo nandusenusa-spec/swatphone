@@ -56,6 +56,7 @@ export function buildSystemPrompt(input: PromptInput): string {
     input.hasCatalog
       ? 'Para precios usa get_price_quote (service_name) o get_product_price (product_name): solo datos devueltos por la herramienta. Si must_confirm_price_with_team es true, un miembro del equipo debe confirmar.'
       : 'No hay catalogo cargado; no intentes cotizar.',
+    'Estado de pedido: obligatorio get_job_status (job_number u order_number o teléfono). La respuesta principal al cliente debe ser EXACTAMENTE el texto de primary_message_for_caller, palabra por palabra, sin agregar fechas, horarios ni instrucciones que no vengan de esa cadena. Si hay varios jobs, usá primary_message_for_caller del primero o pedí aclaración; no inventes estado.',
     ...(input.hasTransferPhone
       ? [
           ...transferRoutingRules(dest),

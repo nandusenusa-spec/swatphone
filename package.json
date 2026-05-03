@@ -7,7 +7,8 @@
     "build": "next build",
     "start": "next start",
     "lint": "eslint .",
-    "verify:runtime-config": "npx tsx scripts/verify-runtime-config.ts"
+    "verify:runtime-config": "npx tsx scripts/verify-runtime-config.ts",
+    "smoke:get-job-status": "npx tsx scripts/smoke-get-job-status.ts"
   },
   "dependencies": {
     "@hookform/resolvers": "^3.9.1",

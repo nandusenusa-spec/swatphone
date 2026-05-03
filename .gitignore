@@ -13,6 +13,8 @@ next.user-config.*
 .env*.local
 .env.*
 !.env.example
+# Copia local rellenada desde vercel-env.template (no commitear)
+vercel-env.local
 
 # Dependencies & build output
 node_modules/

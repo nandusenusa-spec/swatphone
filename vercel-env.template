@@ -1,0 +1,63 @@
+# =============================================================================
+# Plantilla para Vercel → Settings → Environment Variables
+#
+# 1) Copiá este archivo (ej. vercel-env.local) y completá los valores REALES.
+# 2) NO subas ese archivo copiado a Git (solo este .template puede versionarse).
+# 3) En Vercel: Project → Settings → Environment Variables:
+#    - Pegá línea por línea, o usá "Import" si tu plan/UI lo permite (.env).
+# 4) Marcá cada variable para Production (y Preview si querés previews con datos reales).
+#
+# Tras el primer deploy, actualizá NEXT_PUBLIC_APP_URL con la URL final y redeploy.
+# =============================================================================
+
+# --- App (público) ---
+NEXT_PUBLIC_APP_URL=https://TU-PROYECTO.vercel.app
+NEXT_PUBLIC_DEV_SUPABASE_REDIRECT_URL=
+NEXT_PUBLIC_SUPABASE_URL=https://TU-REF.supabase.co
+NEXT_PUBLIC_SUPABASE_ANON_KEY=
+NEXT_PUBLIC_SUPABASE_PUBLISHABLE_KEY=
+
+# --- Supabase (servidor; suele repetir la misma URL que NEXT_PUBLIC) ---
+SUPABASE_URL=https://TU-REF.supabase.co
+SUPABASE_ANON_KEY=
+SUPABASE_PUBLISHABLE_KEY=
+SUPABASE_SERVICE_ROLE_KEY=
+SUPABASE_SECRET_KEY=
+SUPABASE_JWT_SECRET=
+
+# --- Vapi ---
+VAPI_API_KEY=
+VAPI_PRIVATE_KEY=
+VAPI_PUBLIC_KEY=
+VAPI_ASSISTANT_ID=
+VAPI_PHONE_NUMBER_ID=
+# Mismo secreto que configurás en Vapi para header x-vapi-secret (obligatorio si querés bloquear POST anónimos).
+VAPI_WEBHOOK_SECRET=
+VAPI_TRANSFER_HOLD_AUDIO_URL=
+
+# --- OpenAI (si aplica) ---
+OPENAI_API_KEY=
+
+# --- Twilio ---
+TWILIO_ACCOUNT_SID=
+TWILIO_AUTH_TOKEN=
+TWILIO_PHONE_NUMBER=
+TWILIO_FORWARD_NUMBER=
+
+# --- Auth genérico (si aplica) ---
+NEXTAUTH_SECRET=
+JWT_SECRET=
+
+# --- Postgres directo (opcional) ---
+DATABASE_URL=
+POSTGRES_DATABASE=
+POSTGRES_HOST=
+POSTGRES_USER=
+POSTGRES_PASSWORD=
+POSTGRES_URL=
+POSTGRES_URL_NON_POOLING=
+POSTGRES_PRISMA_URL=
+
+# --- Esta app ---
+ADMIN_TOKEN_SECRET=
+INTERNAL_API_KEY=

@@ -64,6 +64,8 @@ export async function runGetJobStatus(input: {
       id: j.id,
       work_order_number: j.work_order_number || j.order_number,
       status: j.status,
+      tracking_phase: voice.tracking_phase,
+      title: (j.title as string | undefined) || null,
       estimated_delivery_at: j.estimated_delivery_at || j.promised_date,
       confirmed_delivery_at: j.confirmed_delivery_at || j.pickup_ready_at,
       owner: j.owner || j.assigned_to,
@@ -71,10 +73,19 @@ export async function runGetJobStatus(input: {
       caller_message_es: voice.client_message_es,
     }
   })
+  const first = mapped[0]
+  const pickupReady = Boolean(first?.pickup_ready)
   return {
     found: true,
     ambiguous: jobs.ambiguous,
-    primary_message_for_caller: mapped[0]?.caller_message_es ?? '',
+    primary_message_for_caller: first?.caller_message_es ?? '',
+    tracking_phase: first?.tracking_phase ?? 'other',
+    tracking_summary: {
+      phase: first?.tracking_phase ?? 'other',
+      pickup_ready: pickupReady,
+    },
+    pickup_ready: pickupReady,
+    title: first?.title ?? null,
     jobs: mapped,
   }
 }

@@ -12,6 +12,15 @@ export const FindCustomerSchema = ToolBaseSchema.extend({
 export const GetJobStatusSchema = ToolBaseSchema.extend({
   job_number: z.string().optional(),
   phone: z.string().optional(),
+}).refine((d) => !!(d.job_number?.trim() || d.phone?.trim()), {
+  message: 'job_number or phone is required',
+  path: ['job_number'],
+})
+
+/** GET /api/work-orders/status — solo organization_id + phone */
+export const WorkOrderStatusQuerySchema = z.object({
+  organization_id: z.string().uuid(),
+  phone: z.string().min(6, 'phone is required'),
 })
 
 export const CreateAppointmentSchema = ToolBaseSchema.extend({

@@ -1,17 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { isValidInternalApiKey } from '@/lib/security/internal-api-key'
 import { normalizePhone } from '@/lib/phone'
 import { createServiceRoleClient } from '@/lib/supabase/service-role'
 import { clientLookupResponse, findClientByNormalizedPhone } from '@/lib/print-shop/service'
 
-function hasValidInternalKey(request: NextRequest): boolean {
-  const expected = process.env.INTERNAL_API_KEY
-  if (!expected) return true
-  const provided = request.headers.get('x-internal-key') || request.headers.get('authorization')?.replace(/^Bearer\s+/i, '')
-  return !!provided && provided === expected
-}
-
 export async function GET(request: NextRequest) {
-  if (!hasValidInternalKey(request)) {
+  if (!isValidInternalApiKey(request)) {
     return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
   }
 
