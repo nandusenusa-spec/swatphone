@@ -74,39 +74,51 @@ function resolvePhoneForJobStatusTool(input: {
   flat: JsonRecord
   rawBody: JsonRecord
   toolCallId: string
-}): { phone: string; usedDemoFallback: boolean; phoneSource: 'args' | 'payload' | 'demo_fallback' } {
+}): { phone: string; phoneSource: 'args' | 'flat' | 'rawBody' | 'demo' | 'missing' } {
   const argRaw = typeof input.args.phone === 'string' ? input.args.phone.trim() : ''
-  const fromFlat = getCallerPhoneFromPayload(input.flat) || ''
-  const fromBody = getCallerPhoneFromPayload(input.rawBody) || ''
-  const raw = argRaw || fromFlat || fromBody || ''
-  let normalized = normalizePhone(raw)
+  const nArg = argRaw ? normalizePhone(argRaw) : ''
+  if (nArg) return { phone: nArg, phoneSource: 'args' }
 
-  if (!normalized) {
-    const call = asRecord(input.flat.call)
-    console.error('[vapi/tools/get-job-status] missing_or_invalid_caller_phone', {
-      tool: 'get_job_status',
-      toolCallId: input.toolCallId || null,
-      hadArgPhone: Boolean(argRaw),
-      hadFlatCall: Boolean(call),
-      flatCallKeys: call ? Object.keys(call).slice(0, 24) : [],
-      hadRawBodyMessage: Boolean(asRecord(input.rawBody.message)),
-    })
-    normalized = normalizePhone(DEMO_PHONE_FALLBACK)
+  const fromFlat = getCallerPhoneFromPayload(input.flat) || ''
+  const nFlat = fromFlat ? normalizePhone(fromFlat) : ''
+  if (nFlat) return { phone: nFlat, phoneSource: 'flat' }
+
+  const fromRaw = getCallerPhoneFromPayload(input.rawBody) || ''
+  const nRaw = fromRaw ? normalizePhone(fromRaw) : ''
+  if (nRaw) return { phone: nRaw, phoneSource: 'rawBody' }
+
+  const call = asRecord(input.flat.call)
+  console.error('[vapi/tools/get-job-status] missing_or_invalid_caller_phone', {
+    tool: 'get_job_status',
+    toolCallId: input.toolCallId || null,
+    stage: 'before_demo_fallback',
+    hadArgPhone: Boolean(argRaw),
+    hadFlatCall: Boolean(call),
+    flatCallKeys: call ? Object.keys(call).slice(0, 24) : [],
+    hadRawBodyMessage: Boolean(asRecord(input.rawBody.message)),
+  })
+
+  const demo = normalizePhone(DEMO_PHONE_FALLBACK)
+  if (demo) {
     console.warn('[vapi/tools/get-job-status] using_demo_phone_fallback', {
       toolCallId: input.toolCallId,
       fallback: DEMO_PHONE_FALLBACK,
     })
-    return { phone: normalized, usedDemoFallback: true, phoneSource: 'demo_fallback' }
+    return { phone: demo, phoneSource: 'demo' }
   }
 
-  const phoneSource: 'args' | 'payload' = argRaw ? 'args' : 'payload'
-  return { phone: normalized, usedDemoFallback: false, phoneSource }
+  console.error('[vapi/tools/get-job-status] missing_or_invalid_caller_phone', {
+    tool: 'get_job_status',
+    toolCallId: input.toolCallId || null,
+    stage: 'final_missing',
+  })
+  return { phone: '', phoneSource: 'missing' }
 }
 
 function resolveOrganizationIdForTool(
   args: JsonRecord,
   toolCallId: string,
-): { organizationId: string | null; orgSource: 'args' | 'env' } {
+): { organizationId: string | null; orgSource: 'args' | 'config' | 'missing' } {
   let raw = typeof args.organization_id === 'string' ? args.organization_id.trim() : ''
   if (raw && !UUID_RE.test(raw)) {
     console.warn('[vapi/tools/get-job-status] invalid_organization_id_arg_ignored', {
@@ -117,17 +129,17 @@ function resolveOrganizationIdForTool(
   }
   if (raw) return { organizationId: raw, orgSource: 'args' }
 
-  const fromEnv = defaultOrgIdForJobStatusTool()
-  if (fromEnv && UUID_RE.test(fromEnv)) {
-    return { organizationId: fromEnv, orgSource: 'env' }
+  const fromConfig = defaultOrgIdForJobStatusTool()
+  if (fromConfig && UUID_RE.test(fromConfig)) {
+    return { organizationId: fromConfig, orgSource: 'config' }
   }
-  if (fromEnv) {
+  if (fromConfig) {
     console.error('[vapi/tools/get-job-status] invalid_default_org_env', {
-      preview: fromEnv.slice(0, 24),
+      preview: fromConfig.slice(0, 24),
     })
   }
   console.error('[vapi/tools/get-job-status] missing_organization_id', { toolCallId })
-  return { organizationId: null, orgSource: 'env' }
+  return { organizationId: null, orgSource: 'missing' }
 }
 
 function safeArgsKeys(args: JsonRecord): string[] {
@@ -147,25 +159,24 @@ async function executeGetJobStatusForTool(input: {
 }) {
   const { toolCallId, name, args, flat, rawBody } = input
 
-  console.info('[vapi/tools/get-job-status] tool_call_args', {
-    toolCallId,
-    argKeys: safeArgsKeys(args),
-  })
-
   const { organizationId, orgSource } = resolveOrganizationIdForTool(args, toolCallId)
-  const { phone, usedDemoFallback, phoneSource } = resolvePhoneForJobStatusTool({
+  const { phone, phoneSource } = resolvePhoneForJobStatusTool({
     args,
     flat,
     rawBody,
     toolCallId,
   })
 
+  const jn = typeof args.job_number === 'string' ? args.job_number.trim() : ''
+  const on = typeof args.order_number === 'string' ? args.order_number.trim() : ''
+  const jobNumRaw = jn || on || undefined
+
   console.info('[vapi/tools/get-job-status] resolution', {
     toolCallId,
+    argKeys: safeArgsKeys(args),
     orgSource,
     hasOrganizationId: Boolean(organizationId),
     phoneSource,
-    usedDemoFallback,
     runGetJobStatus_preview: organizationId ? 'pending' : 'skipped',
   })
 
@@ -178,9 +189,19 @@ async function executeGetJobStatusForTool(input: {
     return { toolCallId, name, result: JSON.stringify(payload) }
   }
 
-  const jn = typeof args.job_number === 'string' ? args.job_number.trim() : ''
-  const on = typeof args.order_number === 'string' ? args.order_number.trim() : ''
-  const jobNumRaw = jn || on || undefined
+  if (!phone && !jobNumRaw) {
+    const payload = toolErrorResult({
+      error: 'missing_or_invalid_caller_phone',
+      primary_message_for_caller:
+        'No pudimos identificar tu número para buscar el pedido. Te comunicamos con un asesor.',
+    })
+    console.error('[vapi/tools/get-job-status] missing_or_invalid_caller_phone', {
+      toolCallId,
+      phoneSource,
+      hasJobNumber: false,
+    })
+    return { toolCallId, name, result: JSON.stringify(payload) }
+  }
 
   const parsed = GetJobStatusSchema.safeParse({
     organization_id: organizationId,
@@ -211,6 +232,7 @@ async function executeGetJobStatusForTool(input: {
     console.info('[vapi/tools/get-job-status] runGetJobStatus_ok', {
       toolCallId,
       found: out.found,
+      runGetJobStatus_status: out.found ? 'found' : 'not_found',
       orgSource,
       phoneSource,
     })
@@ -296,19 +318,23 @@ export async function POST(request: NextRequest) {
     })
 
     const { organizationId, orgSource } = resolveOrganizationIdForTool(body, toolCallId)
-    const { phone, phoneSource, usedDemoFallback } = resolvePhoneForJobStatusTool({
+    const { phone, phoneSource } = resolvePhoneForJobStatusTool({
       args: body,
       flat,
       rawBody: body,
       toolCallId,
     })
 
+    const jf = typeof body.job_number === 'string' ? body.job_number.trim() : ''
+    const of = typeof body.order_number === 'string' ? body.order_number.trim() : ''
+    const jobNumFlat = jf || of || undefined
+
     console.info('[vapi/tools/get-job-status] resolution', {
       toolCallId,
+      argKeys: safeArgsKeys(body),
       orgSource,
       hasOrganizationId: Boolean(organizationId),
       phoneSource,
-      usedDemoFallback,
     })
 
     if (!organizationId) {
@@ -322,9 +348,21 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const jf = typeof body.job_number === 'string' ? body.job_number.trim() : ''
-    const of = typeof body.order_number === 'string' ? body.order_number.trim() : ''
-    const jobNumFlat = jf || of || undefined
+    if (!phone && !jobNumFlat) {
+      console.error('[vapi/tools/get-job-status] missing_or_invalid_caller_phone', {
+        toolCallId,
+        phoneSource,
+        hasJobNumber: false,
+      })
+      return NextResponse.json(
+        toolErrorResult({
+          error: 'missing_or_invalid_caller_phone',
+          primary_message_for_caller:
+            'No pudimos identificar tu número para buscar el pedido. Te comunicamos con un asesor.',
+        }),
+        { status: 200 },
+      )
+    }
 
     const parsed = GetJobStatusSchema.safeParse({
       organization_id: organizationId,
@@ -353,6 +391,7 @@ export async function POST(request: NextRequest) {
       console.info('[vapi/tools/get-job-status] runGetJobStatus_ok', {
         toolCallId,
         found: result.found,
+        runGetJobStatus_status: result.found ? 'found' : 'not_found',
         orgSource,
         phoneSource,
       })

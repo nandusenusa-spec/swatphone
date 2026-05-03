@@ -49,8 +49,8 @@ export function buildSystemPrompt(input: PromptInput): string {
 
   const orgId = input.organizationId?.trim()
   const jobStatusOrgLine = orgId
-    ? `(1) Si preguntan por el estado de un pedido u orden: llamá de inmediato a get_job_status (nunca get_client_status) sin pedir datos al cliente. Podés invocar get_job_status sin argumentos o solo con job_number u order_number si el cliente los menciona. El servidor usa organization_id ${orgId} y el teléfono del llamante automáticamente. Respondé al cliente únicamente con el texto primary_message_for_caller que devuelva la herramienta.`
-    : '(1) Si preguntan por el estado de un pedido u orden: llamá de inmediato a get_job_status (nunca get_client_status) sin pedir nombre ni teléfono. Podés invocar get_job_status sin argumentos; el servidor completa organization_id y teléfono del llamante si están configurados. Respondé con exactamente primary_message_for_caller.'
+    ? `(1) Si el cliente pregunta por el estado de su pedido u orden: el primer paso exacto es llamar get_job_status de inmediato. Prohibido llamar find_customer antes de get_job_status para ese fin. No pidas nombre, teléfono ni datos antes. Podés invocar get_job_status sin argumentos o solo con job_number u order_number si el cliente los menciona. No inventes organization_id: si la herramienta lo acepta vacío, omití ese argumento; el backend usa ${orgId} desde configuración. Respondé al cliente solo con primary_message_for_caller.`
+    : '(1) Si el cliente pregunta por el estado de su pedido u orden: el primer paso exacto es get_job_status de inmediato. Prohibido find_customer antes de get_job_status para ese fin. No pidas nombre ni teléfono antes. No inventes organization_id: omitilo si la tool lo permite; el backend lo resuelve desde configuración. Respondé solo con primary_message_for_caller.'
 
   const policy = [
     'Nunca inventes precios, fechas ni estados.',
@@ -66,8 +66,8 @@ export function buildSystemPrompt(input: PromptInput): string {
       ? 'Para precios usa get_price_quote (service_name) o get_product_price (product_name): solo datos devueltos por la herramienta. Si must_confirm_price_with_team es true, un miembro del equipo debe confirmar.'
       : 'No hay catalogo cargado; no intentes cotizar.',
     orgId
-      ? `get_job_status: organization_id del tenant es ${orgId} (no lo pidas al cliente). phone lo infiere el servidor. Opcional: job_number u order_number si el cliente los dice. Si hay varios jobs, usá primary_message_for_caller del primero o pedí aclaración.`
-      : 'get_job_status: no pidas organization_id ni phone al cliente; el servidor los completa cuando estén configurados. Opcional: job_number u order_number.',
+      ? `get_job_status: no llames find_customer solo para consultar estado. organization_id y phone son opcionales en la tool; backend usa ${orgId} y el Caller ID. No inventes UUID. Opcional: job_number u order_number. Varias órdenes: primary_message_for_caller del primero o aclaración.`
+      : 'get_job_status: sin find_customer antes para estado de pedido. Omití organization_id y phone si la tool lo permite; el backend los resuelve. Opcional: job_number u order_number.',
     ...(input.hasTransferPhone
       ? [
           ...transferRoutingRules(dest),

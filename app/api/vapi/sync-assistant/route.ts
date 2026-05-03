@@ -298,7 +298,8 @@ export async function POST(request: NextRequest) {
         type: 'function',
         function: {
           name: 'find_customer',
-          description: 'Busca o crea el cliente por teléfono',
+          description:
+            'Busca o crea el cliente por teléfono. No la uses antes de get_job_status cuando el cliente solo pregunta por el estado de su pedido u orden.',
           parameters: {
             type: 'object',
             properties: {
@@ -312,18 +313,18 @@ export async function POST(request: NextRequest) {
         type: 'function',
         function: {
           name: 'get_job_status',
-          description: `Estado del pedido u orden. Llamar apenas el cliente pregunte por estado; no pedir datos antes. organization_id y phone son opcionales: el servidor usa por defecto ${organizationId} y el teléfono del llamante (Caller ID). Opcional: job_number u order_number si el cliente los menciona. No usar get_client_status.`,
+          description: `Order status. Call immediately when the user asks about order status; do not ask for name or phone first. Do not call find_customer first for this intent. organization_id and phone are optional — backend defaults to org ${organizationId} and extracts caller phone from the Vapi call payload. Optional: job_number, order_number. Do not use get_client_status.`,
           parameters: {
             type: 'object',
             properties: {
               organization_id: {
                 type: 'string',
-                description: `Opcional. UUID de la organización; si se omite, el servidor usa ${organizationId}.`,
+                description: 'Optional. Backend uses configured organization id if omitted.',
               },
               phone: {
                 type: 'string',
                 description:
-                  'Opcional. E.164; si se omite, el servidor infiere el número del llamante desde la llamada.',
+                  'Optional. Caller phone in E.164 if known. If omitted, backend extracts it from Vapi call payload.',
               },
               job_number: { type: 'string' },
               order_number: { type: 'string' },
