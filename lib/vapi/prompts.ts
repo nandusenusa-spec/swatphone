@@ -134,14 +134,16 @@ export function extractRawSystemPromptFromVapiAssistant(payload: unknown): strin
 function transferRoutingRules(destinations: TransferDestination[]): string[] {
   if (destinations.length === 0) {
     return [
-      'Si piden persona humana: (1) prepare_warm_transfer con customer_name, order_number (si hay), intent y short_summary; (2) si ok, transfer_to_ramon.',
+      'Transferencia: confirmá con el cliente a quién o qué área busca (una pregunta corta si hace falta).',
+      'Luego (1) prepare_warm_transfer con customer_name, order_number (si hay), intent y short_summary; (2) si la herramienta responde ok, transfer_to_ramon.',
     ]
   }
   if (destinations.length === 1) {
     const d = destinations[0]
     return [
       `Solo hay una línea de transferencia: ${d.extension ? `interno ${d.extension} — ` : ''}${d.name}.`,
-      'Antes de transferir: (1) prepare_warm_transfer incluyendo transfer_extension o transfer_department si el cliente lo mencionó (opcional con un solo destino); (2) transfer_to_ramon.',
+      'Confirmá en voz alta que ese es el destino si hubo ambigüedad.',
+      'Orden: (1) prepare_warm_transfer (transfer_extension o transfer_department según corresponda); (2) si ok, transfer_to_ramon.',
     ]
   }
   const list = destinations
@@ -155,6 +157,7 @@ function transferRoutingRules(destinations: TransferDestination[]): string[] {
     'Hay varias áreas/personas con transferencia. Lista interna (usala para enrutar según lo que diga el cliente):',
     list,
     'Si el cliente no aclaró a quién llamar, preguntá una sola vez ofreciendo las opciones por nombre (y el interno si ayuda).',
+    'Confirmá el destino elegido antes de llamar herramientas.',
     'Cuando sepas el destino, en prepare_warm_transfer enviá obligatoriamente transfer_department (nombre del área o persona) o transfer_extension (número interno, ej. 90).',
     'Después de prepare_warm_transfer ok, llamá transfer_to_ramon.',
   ]
@@ -172,26 +175,28 @@ export function buildSystemPrompt(input: PromptInput): string {
 
   const policy = [
     'Nunca inventes precios, fechas ni estados.',
+    'Flujo ideal de la llamada: detectá intención → resolvé con la tool adecuada si alcanza → si no se puede resolver solo con herramientas, tomá datos mínimos → save_lead_info → si prometés acción humana o plazo, create_follow_up → confirmá el próximo paso y despedite.',
     'Cliente existente vs nuevo (seguí este orden; no contradigas reglas posteriores):',
     jobStatusOrgLine,
-    '(2) Si get_job_status devuelve found true: el cliente es existente para este fin. No pidas nombre, teléfono ni motivo salvo que el cliente pida otro trámite distinto del estado.',
-    '(3) Si get_job_status devuelve found false (sin pedido / not_found): tratá al cliente como nuevo. Pedí nombre, teléfono y motivo de la llamada (una pregunta por turno); cuando los tengas, llamá save_lead_info.',
-    '(4) Si la consulta no es sobre estado de pedido: no llames get_job_status hasta que el cliente lo pida. Para cotizar, agendar o transferir, si aún no tenés nombre, teléfono y motivo confirmados, pedilos (una pregunta por turno) y luego save_lead_info cuando corresponda.',
-    'Obligatorio: si le decís al cliente que alguien del equipo lo va a contactar, que le mandarán presupuesto/cotización, o que lo llaman en un plazo (ej. 24 horas), antes de despedirte llamá create_follow_up con title, notes (pedido + datos), due_at en ISO-8601 (ej. mañana misma hora) y callback_required true. No prometas seguimiento sin ejecutar esa herramienta.',
-    'Si no existe dato en base, dilo claramente y ofrece seguimiento.',
+    '(2) Si get_job_status devuelve found true y hay pedido claro: el cliente es existente para este fin. No pidas nombre, teléfono ni motivo salvo que pida otro trámite distinto del estado.',
+    '(3) Cliente nuevo (misma rama si get_job_status devuelve found false, not_found, no hay pedido, o el mensaje indica que no se encontró pedido): una pregunta por turno, en este orden: (a) nombre y apellido (podés pedir ambos en una sola pregunta), (b) teléfono de contacto, (c) qué necesita o en qué podés ayudarlo. Cuando tengas esos datos, llamá save_lead_info. Si en la misma conversación prometés contacto humano, cotización formal o devolución de llamada, antes de despedirte llamá create_follow_up (title, notes, due_at ISO-8601, callback_required según corresponda).',
+    '(4) Si la consulta no es sobre estado de pedido: no llames get_job_status hasta que el cliente lo pida. Para cotizar, agendar o transferir, si faltan datos de (3), pedilos una cosa por turno y luego save_lead_info cuando corresponda.',
+    'Promesas: nunca digas que lo van a llamar, mandar presupuesto o hacer seguimiento sin haber ejecutado create_follow_up en ese mismo flujo antes de cerrar.',
+    'Si no existe dato en base, dilo claro y ofrecé seguimiento con herramientas (lead y/o follow-up), no inventes.',
     'Si el caller falla validacion dos veces, corta escalado y marca spam_or_invalid.',
     input.hasCatalog
-      ? 'Para precios usa get_price_quote (service_name) o get_product_price (product_name): solo datos devueltos por la herramienta. Si must_confirm_price_with_team es true, un miembro del equipo debe confirmar.'
-      : 'No hay catalogo cargado; no intentes cotizar.',
+      ? 'Cotizaciones: solo precios que devuelvan get_price_quote o get_product_price; no redondees ni completes con suposiciones. Si la tool dice que no hay precio, must_confirm_price_with_team, o no hay match: no inventes cifra; guardá lead con save_lead_info y creá create_follow_up para que el equipo cotice o confirme.'
+      : 'No hay catalogo cargado; no intentes cotizar con cifras; ofrecé que un humano lo contacte y usá save_lead_info + create_follow_up si aplica.',
     orgId
       ? `get_job_status: sin find_customer antes solo por estado. parameters.required debe tratarse como vacío: no pidas phone ni organization_id al cliente. Backend usa org configurada y Caller ID. No inventes UUID. Opcional: job_number u order_number. Varias órdenes: primary_message_for_caller del primero o aclaración.`
       : 'get_job_status: sin find_customer antes solo por estado. No pidas phone ni organization_id; el backend los resuelve. Opcional: job_number u order_number.',
     ...(input.hasTransferPhone
       ? [
           ...transferRoutingRules(dest),
-          'El operador recibe warm transfer con el contexto. Si la transferencia falla o vuelve al bot, ofrece callback y create_follow_up.',
+          'El operador recibe warm transfer con el contexto. Si prepare_warm_transfer o transfer_to_ramon falla o la llamada vuelve al bot, ofrecé callback y create_follow_up antes de cerrar.',
         ]
       : ['Si no hay linea de transferencia, ofrece callback y create_follow_up.']),
+    'Experiencia del cliente: respuestas muy breves; una pregunta por turno; sin relleno. Antes de despedirte, confirmá en una frase lo registrado (nombre, teléfono, necesidad o próximo paso) cuando hayas usado save_lead_info o follow-up.',
     'Conversation style requirements (mandatory): keep replies very brief; one short sentence at a time; ask one question at a time; no filler; conversational but professional.',
   ]
   return `${input.basePrompt}${routingExtra}\n\nReglas operativas:\n- ${policy.join('\n- ')}\n\nFallback: ${input.fallbackMessage}`
