@@ -192,7 +192,7 @@ function defaultTransientAssistant(firstMessage: string) {
         },
       ],
     },
-    voice: { provider: 'openai', voiceId: openAiVoiceIdForLlmPipeline(null, 'alloy') },
+    voice: { provider: 'openai', voiceId: openAiVoiceIdForLlmPipeline(null, 'nova') },
     transcriber: { provider: 'deepgram', model: 'nova-2', language: 'es' },
   }
 }

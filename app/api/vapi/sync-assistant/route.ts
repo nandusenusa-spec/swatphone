@@ -797,11 +797,11 @@ export async function POST(request: NextRequest) {
       tool_ids: preExistingModelToolIds ?? null,
     })
 
-    // Anthropic model: OpenAI "coral" is realtime-only on Vapi; use assistant_configs.voice_id or alloy.
+    // Anthropic + pipeline estándar: voz OpenAI femenina por defecto (nova); coral es solo realtime.
     const chosenVoiceProvider = 'openai'
     const chosenVoiceId = openAiVoiceIdForLlmPipeline(
       typeof config.voice_id === 'string' ? config.voice_id : null,
-      'alloy',
+      'nova',
     )
     const firstMessageRaw =
       config.first_message ||
@@ -836,11 +836,21 @@ export async function POST(request: NextRequest) {
       transcriber: {
         provider: 'deepgram',
         model: 'nova-2',
-        language: config.language,
+        // Deepgram: `multi` = detección multilingüe (es/en en la misma llamada). Para solo ES/EN fijo, cambiar en Vapi o vía assistant_configs si más adante lo exponemos.
+        language: 'multi',
       },
       serverUrl: `${appBase}/api/voice/events?organization_id=${organizationId}`,
       serverUrlSecret: process.env.VAPI_WEBHOOK_SECRET,
     }
+
+    console.log('[vapi/sync-assistant] voice_transcriber_config', {
+      organization_id: organizationId,
+      voice_provider: chosenVoiceProvider,
+      voice_id: chosenVoiceId,
+      transcriber_provider: 'deepgram',
+      transcriber_model: 'nova-2',
+      transcriber_language: 'multi',
+    })
 
     console.log('[vapi/sync-assistant] patch_payload_model_tool_preview', {
       model_tool_count: modelTools.length,

@@ -4,9 +4,10 @@
  */
 const OPENAI_REALTIME_ONLY_VOICE_IDS = new Set(['coral'])
 
+/** Default femenina y usable con Anthropic + pipeline estándar en Vapi (evitar coral = solo realtime). */
 export function openAiVoiceIdForLlmPipeline(
   requested: string | null | undefined,
-  fallback: string = 'alloy',
+  fallback: string = 'nova',
 ): string {
   const raw = typeof requested === 'string' ? requested.trim() : ''
   if (!raw) return fallback
