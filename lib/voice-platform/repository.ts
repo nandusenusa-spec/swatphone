@@ -368,6 +368,47 @@ function mapProductRowToQuote(r: Record<string, unknown>): QuoteRow {
   }
 }
 
+/** Cantidad en nombre tipo "Business Cards - 500" (catálogo admin). */
+export function parseBusinessCardsCatalogQty(name: string): number | null {
+  const m = String(name).match(/business\s+cards\s*-\s*(\d+)/i)
+  return m ? parseInt(m[1], 10) : null
+}
+
+export function sortQuoteRowsByBusinessCardsCatalogQty(rows: QuoteRow[]): QuoteRow[] {
+  return [...rows].sort((a, b) => {
+    const na = parseBusinessCardsCatalogQty(a.service_name)
+    const nb = parseBusinessCardsCatalogQty(b.service_name)
+    if (na != null && nb != null) return na - nb
+    if (na != null) return -1
+    if (nb != null) return 1
+    return a.service_name.localeCompare(b.service_name)
+  })
+}
+
+export function allQuoteRowsLookLikeBusinessCardsCatalog(rows: QuoteRow[]): boolean {
+  if (!rows.length) return false
+  return rows.every((r) => /business\s+cards/i.test(r.service_name))
+}
+
+/**
+ * Productos `products` cuyo nombre contiene "Business Cards" (misma fuente que admin), ordenados por cantidad en el nombre.
+ */
+export async function listBusinessCardsProductVariants(organizationId: string): Promise<QuoteRow[]> {
+  const supabase = createServiceRoleClient()
+  const { data, error } = await supabase
+    .from('products')
+    .select('id, name, price, currency, description, is_active, category')
+    .eq('organization_id', organizationId)
+    .ilike('name', '%Business Cards%')
+    .limit(40)
+  if (error && error.code !== 'PGRST205') throw error
+  const raw = data || []
+  const rows = raw
+    .filter((r) => /business\s+cards/i.test(String((r as Record<string, unknown>).name || '')))
+    .map((r) => mapProductRowToQuote(r as Record<string, unknown>))
+  return sortQuoteRowsByBusinessCardsCatalogQty(rows)
+}
+
 /** ILIKE literal: sin % ni _ comodines → coincidencia exacta case-insensitive. */
 function escapeIlikeLiteral(pattern: string): string {
   return pattern.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_')

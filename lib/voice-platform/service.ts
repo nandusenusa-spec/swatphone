@@ -21,10 +21,52 @@ import {
 import {
   expandPriceLookupTerms,
   normalizeVoiceProductQuery,
+  mentionsBusinessCardsProductFamily,
+  hasBusinessCardsSkuQuantityInQuery,
+  detectedBusinessCardsQuantityFromInput,
 } from '@/lib/voice-platform/price-lookup-terms'
 import { logPriceLookup, type PriceLookupSearchMeta } from '@/lib/voice-platform/price-lookup-log'
+import { logProductSuggestion } from '@/lib/voice-platform/product-suggestion-log'
 import type { QuoteRow } from '@/lib/voice-platform/repository'
+import {
+  allQuoteRowsLookLikeBusinessCardsCatalog,
+  listBusinessCardsProductVariants,
+  parseBusinessCardsCatalogQty,
+  sortQuoteRowsByBusinessCardsCatalogQty,
+} from '@/lib/voice-platform/repository'
 import { workOrderStatusForVoice } from '@/lib/voice-platform/work-order-voice'
+
+function formatPriceForVoiceUnit(unit: unknown, currency: string | null): string {
+  const n = typeof unit === 'number' ? unit : Number(unit)
+  const cur = (currency || 'USD').toUpperCase()
+  if (!Number.isFinite(n) || n <= 0) return 'precio a confirmar con el equipo'
+  if (cur === 'USD') return `USD ${n}`
+  return `${cur} ${n}`
+}
+
+function allQuotesHaveConfirmedNumericPrice(rows: QuoteRow[]): boolean {
+  return rows.every((r) => {
+    const n = typeof r.unit_price === 'number' ? r.unit_price : Number(r.unit_price)
+    return Number.isFinite(n) && n > 0
+  })
+}
+
+function buildBusinessCardsVariantsAssistantInstruction(rows: QuoteRow[]): string {
+  const sorted = sortQuoteRowsByBusinessCardsCatalogQty(rows)
+  const parts = sorted.map(
+    (q) => `${q.service_name} por ${formatPriceForVoiceUnit(q.unit_price, q.currency)}`,
+  )
+  const listLine = `Decí al cliente, en pocas palabras: tenemos ${parts.join(' y ')}. ¿Cuál cantidad le interesa?`
+  const has500 = sorted.some((q) => parseBusinessCardsCatalogQty(q.service_name) === 500)
+  const has1000 = sorted.some((q) => parseBusinessCardsCatalogQty(q.service_name) === 1000)
+  const rec =
+    has500 && has1000
+      ? ' Si preguntan qué conviene más, podés orientar: 500 suele servir para empezar; 1000 conviene más si las usan seguido porque la diferencia de precio entre esas dos opciones suele ser baja (no inventes montos: solo compará en términos generales y usá los precios exactos de quotes).'
+      : ''
+  const close =
+    ' Cuando elija cantidad, llamá de nuevo get_product_price o get_price_quote con el product_name o service_name exacto del artículo elegido (como en quotes). Solo usá nombres y precios que vienen en quotes.'
+  return `${listLine}${rec}${close}`
+}
 
 export async function runFindCustomer(input: {
   organizationId: string
@@ -166,6 +208,35 @@ export async function runGetPriceQuote(input: {
     }
   }
 
+  if (
+    rows.length === 0 &&
+    mentionsBusinessCardsProductFamily(inputName) &&
+    !hasBusinessCardsSkuQuantityInQuery(inputName)
+  ) {
+    const variants = await listBusinessCardsProductVariants(input.organizationId)
+    if (variants.length) {
+      rows = variants
+      winningTerm = '__business_cards_variants__'
+      winningSearchMeta = lastSearchMeta
+      logProductSuggestion({
+        inputName,
+        normalizedName,
+        detectedProductFamily: 'business_cards',
+        detectedQuantity: detectedBusinessCardsQuantityFromInput(inputName),
+        suggestedProducts: variants.map((v) => ({
+          id: v.source_row_id,
+          name: v.service_name,
+          unit_price: v.unit_price,
+          currency: v.currency,
+        })),
+      })
+    }
+  }
+
+  if (rows.length > 1 && allQuoteRowsLookLikeBusinessCardsCatalog(rows)) {
+    rows = sortQuoteRowsByBusinessCardsCatalogQty(rows)
+  }
+
   const first = rows[0]
   const numericPrice = (v: unknown) => {
     if (v == null) return NaN
@@ -178,8 +249,15 @@ export async function runGetPriceQuote(input: {
     Boolean(first) &&
     (first.unit_price == null || !Number.isFinite(firstPrice) || firstPrice <= 0)
 
+  const isBusinessCardsMultiVariantOffer =
+    rows.length > 1 &&
+    allQuoteRowsLookLikeBusinessCardsCatalog(rows) &&
+    allQuotesHaveConfirmedNumericPrice(rows)
+
   const mustConfirmPriceWithTeam =
-    rows.length === 0 || rows.length > 1 || (rows.length === 1 && priceNeedsTeamConfirm)
+    rows.length === 0 ||
+    (rows.length > 1 && !isBusinessCardsMultiVariantOffer) ||
+    (rows.length === 1 && priceNeedsTeamConfirm)
 
   const metaForLog = winningSearchMeta ?? lastSearchMeta
   logPriceLookup({
@@ -223,6 +301,27 @@ export async function runGetPriceQuote(input: {
   }
 
   if (rows.length > 1) {
+    if (isBusinessCardsMultiVariantOffer) {
+      logProductSuggestion({
+        inputName,
+        normalizedName,
+        detectedProductFamily: 'business_cards',
+        detectedQuantity: detectedBusinessCardsQuantityFromInput(inputName),
+        suggestedProducts: rows.map((v) => ({
+          id: v.source_row_id,
+          name: v.service_name,
+          unit_price: v.unit_price,
+          currency: v.currency,
+        })),
+      })
+      return {
+        found: true,
+        match_count: rows.length,
+        quotes: quotes.slice(0, 8),
+        must_confirm_price_with_team: false,
+        assistant_instruction: buildBusinessCardsVariantsAssistantInstruction(rows),
+      }
+    }
     return {
       found: true,
       match_count: rows.length,

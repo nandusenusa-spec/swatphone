@@ -1,8 +1,43 @@
 /**
- * Si el usuario menciona cantidad + BC / business cards / tarjetas de presentación,
- * genera el nombre de catálogo tal como suele cargarse en admin: "Business Cards - 500".
- * Se prueban primero en expandPriceLookupTerms para match exacto en `products.name`.
+ * Aliases BC / business cards / tarjetas (presentación, personales, visita) y SKUs "Business Cards - N".
+ * Si hay cantidad en la frase, collectBusinessCardSkuAliases genera el nombre de catálogo del admin.
  */
+/** True si el texto menciona BC / business cards / tarjetas de presentación (u alias), sin exigir cantidad. */
+export function mentionsBusinessCardsProductFamily(raw: string): boolean {
+  const t = raw.trim()
+  if (!t) return false
+  const lower = t.toLowerCase()
+  if (/\bbc\b/.test(lower)) return true
+  if (/\bb\.?\s*c\.?\b/i.test(t)) return true
+  if (/\bbusiness\s+cards?\b/i.test(lower)) return true
+  if (/\btarjetas\s+de\s+presentaci[oó]n\b/i.test(lower)) return true
+  if (/\btarjeta\s+de\s+presentaci[oó]n\b/i.test(lower)) return true
+  if (/\btarjetas\s+personales\b/i.test(lower)) return true
+  if (/\btarjetas\s+de\s+visita\b/i.test(lower)) return true
+  if (/\btarjeta\s+de\s+visita\b/i.test(lower)) return true
+  return false
+}
+
+/** True si hay cantidad explícita tipo BC 500 / 1000 business cards → SKU Business Cards - N */
+export function hasBusinessCardsSkuQuantityInQuery(raw: string): boolean {
+  return (
+    collectBusinessCardSkuAliases(raw).length > 0 ||
+    collectBusinessCardSkuAliases(normalizeVoiceProductQuery(raw)).length > 0
+  )
+}
+
+export function detectedBusinessCardsQuantityFromInput(raw: string): number | null {
+  for (const sku of collectBusinessCardSkuAliases(raw)) {
+    const m = sku.match(/-\s*(\d+)\s*$/i)
+    if (m) return parseInt(m[1], 10)
+  }
+  for (const sku of collectBusinessCardSkuAliases(normalizeVoiceProductQuery(raw))) {
+    const m = sku.match(/-\s*(\d+)\s*$/i)
+    if (m) return parseInt(m[1], 10)
+  }
+  return null
+}
+
 export function collectBusinessCardSkuAliases(raw: string): string[] {
   const t = raw.trim()
   if (!t) return []
@@ -70,8 +105,23 @@ export function expandPriceLookupTerms(raw: string): string[] {
     add(sku)
   }
 
-  add(compact)
-  if (trimmed !== compact) add(trimmed)
+  // Familia BC sin cantidad: priorizar nombre de catálogo antes que "bc" suelto (ilike %bc% demasiado amplio)
+  if (mentionsBusinessCardsProductFamily(trimmed) && !hasBusinessCardsSkuQuantityInQuery(trimmed)) {
+    add('Business Cards')
+    add('business cards')
+    add('tarjetas de presentación')
+    add('tarjeta de presentación')
+  }
+
+  // No usar solo "bc" / "b c" como término de búsqueda aislado
+  const skipBareBc =
+    (lower === 'bc' || lower === 'b c' || /^b\.?\s*c\.?$/i.test(compact)) &&
+    !hasBusinessCardsSkuQuantityInQuery(trimmed)
+
+  if (!skipBareBc) {
+    add(compact)
+    if (trimmed !== compact) add(trimmed)
+  }
 
   // BC / B.C. (solo o dentro de frase: "precio para BC", "500 BC")
   if (
