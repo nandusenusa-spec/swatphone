@@ -1,10 +1,14 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { ZodError } from 'zod'
 import { getCallerPhoneFromPayload } from '@/lib/vapi/payload'
+import { normalizePhone } from '@/lib/phone'
 import { GetJobStatusSchema } from '@/lib/voice-platform/validation'
 import { runGetJobStatus } from '@/lib/voice-platform/service'
 
 type JsonRecord = Record<string, unknown>
+
+/** Fallback temporal demo si Vapi no envía caller phone en el envelope (quitar cuando producción estable). */
+const DEMO_PHONE_FALLBACK = '+17868673165'
 
 function asRecord(value: unknown): JsonRecord | null {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -41,9 +45,44 @@ function isVapiToolCallsPayload(flat: JsonRecord): boolean {
   return flat.type === 'tool-calls' && Array.isArray(flat.toolCallList)
 }
 
-async function handleVapiToolCalls(flat: JsonRecord) {
+/**
+ * Orden: args.phone → payload flatten (call / message.call / customer) → body crudo.
+ * Normaliza a E.164; si sigue vacío, log técnico + fallback demo.
+ */
+function resolvePhoneForJobStatusTool(input: {
+  args: JsonRecord
+  flat: JsonRecord
+  rawBody: JsonRecord
+  toolCallId: string
+}): string {
+  const argRaw = typeof input.args.phone === 'string' ? input.args.phone.trim() : ''
+  const fromFlat = getCallerPhoneFromPayload(input.flat) || ''
+  const fromBody = getCallerPhoneFromPayload(input.rawBody) || ''
+  const raw = argRaw || fromFlat || fromBody || ''
+  let normalized = normalizePhone(raw)
+
+  if (!normalized) {
+    const call = asRecord(input.flat.call)
+    console.error('[vapi/tools/get-job-status] missing_or_invalid_caller_phone', {
+      tool: 'get_job_status',
+      toolCallId: input.toolCallId || null,
+      hadArgPhone: Boolean(argRaw),
+      hadFlatCall: Boolean(call),
+      flatCallKeys: call ? Object.keys(call).slice(0, 24) : [],
+      hadRawBodyMessage: Boolean(asRecord(input.rawBody.message)),
+    })
+    normalized = normalizePhone(DEMO_PHONE_FALLBACK)
+    console.warn('[vapi/tools/get-job-status] using_demo_phone_fallback', {
+      toolCallId: input.toolCallId,
+      fallback: DEMO_PHONE_FALLBACK,
+    })
+  }
+
+  return normalized
+}
+
+async function handleVapiToolCalls(rawBody: JsonRecord, flat: JsonRecord) {
   const list = flat.toolCallList as JsonRecord[]
-  const phoneFromCall = getCallerPhoneFromPayload(flat)
 
   const results = await Promise.all(
     list.map(async (item) => {
@@ -67,14 +106,19 @@ async function handleVapiToolCalls(flat: JsonRecord) {
         }
       }
 
-      const phoneArg = typeof args.phone === 'string' ? args.phone.trim() : ''
-      const phone = phoneArg || (phoneFromCall?.trim() ?? '')
+      const phone = resolvePhoneForJobStatusTool({
+        args,
+        flat,
+        rawBody,
+        toolCallId,
+      })
+
       const orgArg = typeof args.organization_id === 'string' ? args.organization_id.trim() : ''
 
       const parsed = GetJobStatusSchema.safeParse({
         organization_id: orgArg,
         job_number: typeof args.job_number === 'string' ? args.job_number : undefined,
-        phone: phone || undefined,
+        phone,
       })
 
       if (!parsed.success) {
@@ -106,10 +150,20 @@ export async function POST(request: NextRequest) {
     const flat = flattenVapiBody(body)
 
     if (isVapiToolCallsPayload(flat)) {
-      return handleVapiToolCalls(flat)
+      return handleVapiToolCalls(body, flat)
     }
 
-    const payload = GetJobStatusSchema.parse(body)
+    const phone = resolvePhoneForJobStatusTool({
+      args: body,
+      flat,
+      rawBody: body,
+      toolCallId: 'flat_json',
+    })
+
+    const payload = GetJobStatusSchema.parse({
+      ...body,
+      phone,
+    })
     const result = await runGetJobStatus({
       organizationId: payload.organization_id,
       jobNumber: payload.job_number,

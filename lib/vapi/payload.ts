@@ -87,28 +87,52 @@ export function getCallIdFromPayload(payload: unknown): string | null {
   return readString(call, 'id') || readString(data, 'callId') || readString(data, 'call_id') || null
 }
 
-export function getCallerPhoneFromPayload(payload: unknown): string | null {
-  const data = asRecord(payload)
-  if (!data) return null
-  const call = asRecord(data.call)
-  const customer = asRecord(call?.customer)
-  const phoneNumber = asRecord(call?.phoneNumber)
-  const fromObj = asRecord(call?.from)
+/** Lee número del llamante desde un objeto tipo `call` de Vapi (inbound, tool-calls, etc.). */
+export function getCallerPhoneFromCallLike(call: unknown): string | null {
+  const c = asRecord(call)
+  if (!c) return null
+  const customer = asRecord(c.customer)
+  const phoneNumber = asRecord(c.phoneNumber)
+  const fromObj = asRecord(c.from)
 
   const fromDirect =
-    typeof call?.from === 'string' && call.from.trim() ? call.from.trim() : null
+    typeof c.from === 'string' && c.from.trim() ? c.from.trim() : null
 
   return (
     fromDirect ||
     readString(fromObj, 'number') ||
     readString(fromObj, 'phoneNumber') ||
     readString(customer, 'number') ||
+    readString(customer, 'phone') ||
     readString(phoneNumber, 'number') ||
-    readString(call, 'customerNumber') ||
-    readString(call, 'phoneNumber') ||
-    readString(data, 'phoneNumber') ||
+    readString(c, 'customerNumber') ||
+    readString(c, 'phoneNumber') ||
+    readString(c, 'phone') ||
     null
   )
+}
+
+/**
+ * Teléfono del llamante desde payloads Vapi (webhook, tool-calls, assistant-request).
+ * Cubre: call.from (string u objeto), call.customer.number, message.call.*, customer a nivel raíz.
+ */
+export function getCallerPhoneFromPayload(payload: unknown): string | null {
+  const data = asRecord(payload)
+  if (!data) return null
+
+  const fromTopCall = getCallerPhoneFromCallLike(data.call)
+  if (fromTopCall) return fromTopCall
+
+  const message = asRecord(data.message)
+  const fromMessageCall = getCallerPhoneFromCallLike(message?.call)
+  if (fromMessageCall) return fromMessageCall
+
+  const customerRoot = asRecord(data.customer)
+  const fromCustomerRoot =
+    readString(customerRoot, 'number') || readString(customerRoot, 'phone')
+  if (fromCustomerRoot) return fromCustomerRoot
+
+  return readString(data, 'phoneNumber') || readString(data, 'phone') || null
 }
 
 export function getSummaryFromPayload(payload: unknown): string | null {
