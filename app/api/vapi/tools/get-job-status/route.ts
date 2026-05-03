@@ -299,6 +299,60 @@ function toolErrorResult(input: {
   }
 }
 
+type JobStatusRunDebugStatus = 'found' | 'not_found' | 'skipped' | 'error'
+
+function vapiGetJobStatusDebugEnabled(): boolean {
+  return (
+    process.env.NODE_ENV === 'production' &&
+    process.env.DEBUG_VAPI_TOOLS?.trim().toLowerCase() === 'true'
+  )
+}
+
+function maskPhoneE164ForDebug(phone: string): string {
+  const digits = phone.replace(/\D/g, '')
+  if (digits.length <= 2) return '****'
+  return `…${digits.slice(-4)}`
+}
+
+function buildGetJobStatusDebug(input: {
+  toolCallId: string
+  assistantIdDetected: string | null
+  organization_id_final: string | null
+  orgSource: JobStatusOrgSource
+  phoneSource: string
+  phone: string
+  hasJobNumber: boolean
+  hasOrderNumber: boolean
+  runGetJobStatus_status: JobStatusRunDebugStatus
+}): Record<string, unknown> | null {
+  if (!vapiGetJobStatusDebugEnabled()) return null
+  const hasPhone = Boolean(input.phone?.trim())
+  const row: Record<string, unknown> = {
+    toolCallId: input.toolCallId,
+    assistantIdDetected: input.assistantIdDetected,
+    organization_id_final: input.organization_id_final,
+    orgSource: input.orgSource,
+    phoneSource: input.phoneSource,
+    hasPhone,
+    hasJobNumber: input.hasJobNumber,
+    hasOrderNumber: input.hasOrderNumber,
+    runGetJobStatus_status: input.runGetJobStatus_status,
+  }
+  if (hasPhone) {
+    row.phone_e164_masked = maskPhoneE164ForDebug(input.phone)
+  }
+  return row
+}
+
+function withDebug<T extends Record<string, unknown>>(base: T, debug: Record<string, unknown> | null): T {
+  if (!debug) return base
+  return { ...base, debug }
+}
+
+function stringifyToolResult(base: Record<string, unknown>, debug: Record<string, unknown> | null): string {
+  return JSON.stringify(withDebug(base, debug))
+}
+
 function resolvePhoneForJobStatusTool(input: {
   args: JsonRecord
   flat: JsonRecord
@@ -398,15 +452,37 @@ async function executeGetJobStatusForTool(input: {
   })
 
   if (!organizationId) {
+    const dbg = buildGetJobStatusDebug({
+      toolCallId,
+      assistantIdDetected,
+      organization_id_final: organizationId,
+      orgSource,
+      phoneSource,
+      phone,
+      hasJobNumber: Boolean(jn),
+      hasOrderNumber: Boolean(on),
+      runGetJobStatus_status: 'skipped',
+    })
     const payload = toolErrorResult({
       error: 'missing_organization_id',
       primary_message_for_caller:
         'No pudimos consultar el estado en este momento. Te comunicamos con un asesor.',
     })
-    return { toolCallId, name, result: JSON.stringify(payload) }
+    return { toolCallId, name, result: stringifyToolResult(payload as Record<string, unknown>, dbg) }
   }
 
   if (!phone && !jobNumRaw) {
+    const dbg = buildGetJobStatusDebug({
+      toolCallId,
+      assistantIdDetected,
+      organization_id_final: organizationId,
+      orgSource,
+      phoneSource,
+      phone,
+      hasJobNumber: Boolean(jn),
+      hasOrderNumber: Boolean(on),
+      runGetJobStatus_status: 'skipped',
+    })
     const payload = toolErrorResult({
       error: 'missing_or_invalid_caller_phone',
       primary_message_for_caller:
@@ -417,7 +493,7 @@ async function executeGetJobStatusForTool(input: {
       phoneSource,
       hasJobNumber: false,
     })
-    return { toolCallId, name, result: JSON.stringify(payload) }
+    return { toolCallId, name, result: stringifyToolResult(payload as Record<string, unknown>, dbg) }
   }
 
   const parsed = GetJobStatusSchema.safeParse({
@@ -427,6 +503,17 @@ async function executeGetJobStatusForTool(input: {
   })
 
   if (!parsed.success) {
+    const dbg = buildGetJobStatusDebug({
+      toolCallId,
+      assistantIdDetected,
+      organization_id_final: organizationId,
+      orgSource,
+      phoneSource,
+      phone,
+      hasJobNumber: Boolean(jn),
+      hasOrderNumber: Boolean(on),
+      runGetJobStatus_status: 'error',
+    })
     const payload = toolErrorResult({
       error: 'invalid_payload',
       primary_message_for_caller:
@@ -437,7 +524,7 @@ async function executeGetJobStatusForTool(input: {
       toolCallId,
       issues: parsed.error.flatten(),
     })
-    return { toolCallId, name, result: JSON.stringify(payload) }
+    return { toolCallId, name, result: stringifyToolResult(payload as Record<string, unknown>, dbg) }
   }
 
   try {
@@ -453,18 +540,44 @@ async function executeGetJobStatusForTool(input: {
       orgSource,
       phoneSource,
     })
-    return { toolCallId, name, result: JSON.stringify(out) }
+    const dbg = buildGetJobStatusDebug({
+      toolCallId,
+      assistantIdDetected,
+      organization_id_final: organizationId,
+      orgSource,
+      phoneSource,
+      phone,
+      hasJobNumber: Boolean(jn),
+      hasOrderNumber: Boolean(on),
+      runGetJobStatus_status: out.found ? 'found' : 'not_found',
+    })
+    return {
+      toolCallId,
+      name,
+      result: stringifyToolResult({ ...(out as Record<string, unknown>) }, dbg),
+    }
   } catch (err) {
     console.error('[vapi/tools/get-job-status] runGetJobStatus_failed', {
       toolCallId,
       message: err instanceof Error ? err.message : String(err),
+    })
+    const dbg = buildGetJobStatusDebug({
+      toolCallId,
+      assistantIdDetected,
+      organization_id_final: organizationId,
+      orgSource,
+      phoneSource,
+      phone,
+      hasJobNumber: Boolean(jn),
+      hasOrderNumber: Boolean(on),
+      runGetJobStatus_status: 'error',
     })
     const payload = toolErrorResult({
       error: 'internal_error',
       primary_message_for_caller:
         'Hubo un problema al consultar tu pedido. Te contactamos en breve.',
     })
-    return { toolCallId, name, result: JSON.stringify(payload) }
+    return { toolCallId, name, result: stringifyToolResult(payload as Record<string, unknown>, dbg) }
   }
 }
 
@@ -569,12 +682,26 @@ export async function POST(request: NextRequest) {
     })
 
     if (!organizationId) {
+      const dbg = buildGetJobStatusDebug({
+        toolCallId,
+        assistantIdDetected,
+        organization_id_final: organizationId,
+        orgSource,
+        phoneSource,
+        phone,
+        hasJobNumber: Boolean(jf),
+        hasOrderNumber: Boolean(of),
+        runGetJobStatus_status: 'skipped',
+      })
       return NextResponse.json(
-        toolErrorResult({
-          error: 'missing_organization_id',
-          primary_message_for_caller:
-            'No pudimos consultar el estado en este momento. Te comunicamos con un asesor.',
-        }),
+        withDebug(
+          toolErrorResult({
+            error: 'missing_organization_id',
+            primary_message_for_caller:
+              'No pudimos consultar el estado en este momento. Te comunicamos con un asesor.',
+          }) as Record<string, unknown>,
+          dbg,
+        ),
         { status: 200 },
       )
     }
@@ -585,12 +712,26 @@ export async function POST(request: NextRequest) {
         phoneSource,
         hasJobNumber: false,
       })
+      const dbg = buildGetJobStatusDebug({
+        toolCallId,
+        assistantIdDetected,
+        organization_id_final: organizationId,
+        orgSource,
+        phoneSource,
+        phone,
+        hasJobNumber: Boolean(jf),
+        hasOrderNumber: Boolean(of),
+        runGetJobStatus_status: 'skipped',
+      })
       return NextResponse.json(
-        toolErrorResult({
-          error: 'missing_or_invalid_caller_phone',
-          primary_message_for_caller:
-            'No pudimos identificar tu número para buscar el pedido. Te comunicamos con un asesor.',
-        }),
+        withDebug(
+          toolErrorResult({
+            error: 'missing_or_invalid_caller_phone',
+            primary_message_for_caller:
+              'No pudimos identificar tu número para buscar el pedido. Te comunicamos con un asesor.',
+          }) as Record<string, unknown>,
+          dbg,
+        ),
         { status: 200 },
       )
     }
@@ -602,13 +743,27 @@ export async function POST(request: NextRequest) {
     })
 
     if (!parsed.success) {
+      const dbg = buildGetJobStatusDebug({
+        toolCallId,
+        assistantIdDetected,
+        organization_id_final: organizationId,
+        orgSource,
+        phoneSource,
+        phone,
+        hasJobNumber: Boolean(jf),
+        hasOrderNumber: Boolean(of),
+        runGetJobStatus_status: 'error',
+      })
       return NextResponse.json(
-        toolErrorResult({
-          error: 'invalid_payload',
-          primary_message_for_caller:
-            'No pudimos validar la consulta. Pedí hablar con un asesor o intentá de nuevo.',
-          details: parsed.error.flatten(),
-        }),
+        withDebug(
+          toolErrorResult({
+            error: 'invalid_payload',
+            primary_message_for_caller:
+              'No pudimos validar la consulta. Pedí hablar con un asesor o intentá de nuevo.',
+            details: parsed.error.flatten(),
+          }) as Record<string, unknown>,
+          dbg,
+        ),
         { status: 200 },
       )
     }
@@ -626,18 +781,43 @@ export async function POST(request: NextRequest) {
         orgSource,
         phoneSource,
       })
-      return NextResponse.json(result, { status: 200 })
+      const dbg = buildGetJobStatusDebug({
+        toolCallId,
+        assistantIdDetected,
+        organization_id_final: organizationId,
+        orgSource,
+        phoneSource,
+        phone,
+        hasJobNumber: Boolean(jf),
+        hasOrderNumber: Boolean(of),
+        runGetJobStatus_status: result.found ? 'found' : 'not_found',
+      })
+      return NextResponse.json(withDebug({ ...(result as Record<string, unknown>) }, dbg), { status: 200 })
     } catch (err) {
       console.error('[vapi/tools/get-job-status] runGetJobStatus_failed', {
         toolCallId,
         message: err instanceof Error ? err.message : String(err),
       })
+      const dbg = buildGetJobStatusDebug({
+        toolCallId,
+        assistantIdDetected,
+        organization_id_final: organizationId,
+        orgSource,
+        phoneSource,
+        phone,
+        hasJobNumber: Boolean(jf),
+        hasOrderNumber: Boolean(of),
+        runGetJobStatus_status: 'error',
+      })
       return NextResponse.json(
-        toolErrorResult({
-          error: 'internal_error',
-          primary_message_for_caller:
-            'Hubo un problema al consultar tu pedido. Te contactamos en breve.',
-        }),
+        withDebug(
+          toolErrorResult({
+            error: 'internal_error',
+            primary_message_for_caller:
+              'Hubo un problema al consultar tu pedido. Te contactamos en breve.',
+          }) as Record<string, unknown>,
+          dbg,
+        ),
         { status: 200 },
       )
     }
