@@ -214,12 +214,40 @@ function extractToolsArrayFromAssistantPayload(a: Record<string, unknown>): unkn
 
 /** IDs de Tools Library en `model.toolIds` (Vapi permite `model.tools` + `model.toolIds` a la vez). */
 function extractModelToolIdsFromAssistant(rec: Record<string, unknown>): string[] | null {
-  const model = rec.model
-  if (!model || typeof model !== 'object' || Array.isArray(model)) return null
-  const ids = (model as Record<string, unknown>).toolIds
-  if (!Array.isArray(ids)) return null
-  const out = ids.filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
-  return out.length ? out : null
+  const merged = collectToolIdsFromAssistantGetPayload(rec)
+  return merged.length ? merged : null
+}
+
+/** Une IDs desde model.toolIds / model.tool_ids y raíz toolIds (respuestas GET de Vapi varían). */
+function collectToolIdsFromAssistantGetPayload(preJson: Record<string, unknown>): string[] {
+  const out: string[] = []
+  const model =
+    preJson.model && typeof preJson.model === 'object' && !Array.isArray(preJson.model)
+      ? (preJson.model as Record<string, unknown>)
+      : null
+  const fromModel = model ? (model.toolIds ?? model.tool_ids) : undefined
+  if (Array.isArray(fromModel)) {
+    for (const x of fromModel) {
+      if (typeof x === 'string' && x.trim()) out.push(x.trim())
+    }
+  }
+  const fromRoot = preJson.toolIds ?? preJson.tool_ids
+  if (Array.isArray(fromRoot)) {
+    for (const x of fromRoot) {
+      if (typeof x === 'string' && x.trim()) out.push(x.trim())
+    }
+  }
+  return [...new Set(out)]
+}
+
+/** UUIDs de Tools Library a fusionar con el GET (Vercel). Ej: 5e4f2d25-...,abc-... */
+function toolIdsFromEnv(): string[] {
+  const raw =
+    process.env.VAPI_ASSISTANT_MODEL_TOOL_IDS?.trim() ||
+    process.env.VAPI_MODEL_TOOL_IDS?.trim() ||
+    ''
+  if (!raw) return []
+  return [...new Set(raw.split(/[\s,]+/).map((s) => s.trim()).filter(Boolean))]
 }
 
 function extractTopLevelToolsArrayFromAssistant(rec: Record<string, unknown>): unknown[] {
@@ -824,8 +852,11 @@ export async function POST(request: NextRequest) {
 
     const modelTools = [...persistentTransferTools, ...staticFunctionTools]
 
-    /** Si no reenviamos `model.toolIds`, Vapi puede dejarlos en null al publicar aunque mandemos `model.tools`. */
-    let preExistingModelToolIds: string[] | undefined
+    /**
+     * Reenviar siempre `model.toolIds` si hay algo que preservar (GET + env).
+     * Si el PATCH omite la clave, Vapi / Publish pueden dejar toolIds en null aunque haya `model.tools`.
+     */
+    let mergedModelToolIds: string[] = [...toolIdsFromEnv()]
     if (assistantId) {
       try {
         const preGetRes = await fetch(`https://api.vapi.ai/assistant/${assistantId}`, {
@@ -834,17 +865,8 @@ export async function POST(request: NextRequest) {
         })
         if (preGetRes.ok) {
           const preJson = (await preGetRes.json()) as Record<string, unknown>
-          const modelPre =
-            preJson.model && typeof preJson.model === 'object' && !Array.isArray(preJson.model)
-              ? (preJson.model as Record<string, unknown>)
-              : null
-          const rawIds = modelPre?.toolIds
-          if (Array.isArray(rawIds)) {
-            const cleaned = rawIds.filter(
-              (x): x is string => typeof x === 'string' && x.trim().length > 0,
-            )
-            if (cleaned.length) preExistingModelToolIds = cleaned
-          }
+          const fromApi = collectToolIdsFromAssistantGetPayload(preJson)
+          mergedModelToolIds = [...new Set([...fromApi, ...mergedModelToolIds])]
         } else {
           console.warn('[vapi/sync-assistant] pre_patch_get_assistant_for_tool_ids_http', {
             httpStatus: preGetRes.status,
@@ -855,11 +877,17 @@ export async function POST(request: NextRequest) {
         console.warn('[vapi/sync-assistant] pre_patch_get_assistant_for_tool_ids_failed', e)
       }
     }
-    console.log('[vapi/sync-assistant] pre_patch_preserved_model_tool_ids', {
+    console.log('[vapi/sync-assistant] pre_patch_merged_model_tool_ids', {
       assistant_id: assistantId || null,
-      count: preExistingModelToolIds?.length ?? 0,
-      tool_ids: preExistingModelToolIds ?? null,
+      count: mergedModelToolIds.length,
+      tool_ids: mergedModelToolIds.length ? mergedModelToolIds : null,
+      from_env: toolIdsFromEnv().length > 0,
     })
+    if (!mergedModelToolIds.length) {
+      console.warn('[vapi/sync-assistant] model_tool_ids_empty_after_merge', {
+        hint: 'Definí VAPI_ASSISTANT_MODEL_TOOL_IDS en Vercel (UUIDs de Tools Library, separados por coma) para no perder get_job_status al publicar si el GET no devuelve toolIds.',
+      })
+    }
 
     // Anthropic + pipeline estándar: voz OpenAI femenina por defecto (nova); coral es solo realtime.
     const chosenVoiceProvider = 'openai'
@@ -885,8 +913,8 @@ export async function POST(request: NextRequest) {
       systemPrompt,
       tools: modelTools,
     }
-    if (preExistingModelToolIds && preExistingModelToolIds.length > 0) {
-      modelForVapi.toolIds = preExistingModelToolIds
+    if (mergedModelToolIds.length > 0) {
+      modelForVapi.toolIds = mergedModelToolIds
     }
 
     const assistantConfig = {
