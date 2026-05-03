@@ -1,0 +1,99 @@
+{
+  "BASE_URL": "http://localhost:3000",
+  "ORG": "11111111-1111-1111-1111-111111111111",
+  "get_job_status_WO_1001": {
+    "type": "tool-calls",
+    "organization_id": "11111111-1111-1111-1111-111111111111",
+    "call": {
+      "id": "e2e-call-wo1001",
+      "customerPhoneNumber": "+18135551001"
+    },
+    "toolCallList": [
+      {
+        "toolCallId": "tc-wo1001",
+        "function": {
+          "name": "get_job_status",
+          "arguments": "{\"order_number\":\"WO-1001\"}"
+        }
+      }
+    ]
+  },
+  "get_job_status_WO_1002": {
+    "type": "tool-calls",
+    "organization_id": "11111111-1111-1111-1111-111111111111",
+    "call": {
+      "id": "e2e-call-wo1002",
+      "customerPhoneNumber": "+18135551002"
+    },
+    "toolCallList": [
+      {
+        "toolCallId": "tc-wo1002",
+        "function": {
+          "name": "get_job_status",
+          "arguments": "{\"order_number\":\"WO-1002\"}"
+        }
+      }
+    ]
+  },
+  "find_customer": {
+    "type": "tool-calls",
+    "organization_id": "11111111-1111-1111-1111-111111111111",
+    "call": {
+      "id": "e2e-find-cust",
+      "customerPhoneNumber": "+18135551001"
+    },
+    "toolCallList": [
+      {
+        "toolCallId": "tc-find",
+        "function": {
+          "name": "find_customer",
+          "arguments": "{\"phone\":\"+18135551001\",\"name\":\"Juan Perez\"}"
+        }
+      }
+    ]
+  },
+  "create_appointment": {
+    "type": "tool-calls",
+    "organization_id": "11111111-1111-1111-1111-111111111111",
+    "call": {
+      "id": "e2e-appt",
+      "customerPhoneNumber": "+18135551001"
+    },
+    "toolCallList": [
+      {
+        "toolCallId": "tc-appt",
+        "function": {
+          "name": "create_appointment",
+          "arguments": "{\"appointment_at\":\"2026-04-28T16:00:00.000Z\",\"notes\":\"Demo E2E\",\"customer_name\":\"Juan Perez\"}"
+        }
+      }
+    ]
+  },
+  "transfer_destination_request": {
+    "type": "transfer-destination-request",
+    "organization_id": "11111111-1111-1111-1111-111111111111",
+    "call": {
+      "id": "e2e-xfer",
+      "customerPhoneNumber": "+18135551001"
+    }
+  },
+  "call_ended": {
+    "type": "call-ended",
+    "organization_id": "11111111-1111-1111-1111-111111111111",
+    "call": {
+      "id": "e2e-ended-1",
+      "customerPhoneNumber": "+18135551001",
+      "customerName": "Juan Perez"
+    },
+    "transcript": "Usuario: Estado del WO-1001. Asistente: Sigue en progreso.",
+    "summary": "Consulta estado impresión WO-1001.",
+    "disposition": "resolved",
+    "intent": "estado_trabajo",
+    "structured_extraction": {
+      "job_number": "WO-1001",
+      "intent": "estado_trabajo",
+      "quoted_price": null,
+      "urgent": false
+    }
+  }
+}
