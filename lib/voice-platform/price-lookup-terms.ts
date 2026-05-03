@@ -33,20 +33,28 @@ export function expandPriceLookupTerms(raw: string): string[] {
   add(compact)
   if (trimmed !== compact) add(trimmed)
 
-  // BC / B.C.
-  if (/^b\.?\s*c\.?$/i.test(compact) || lower === 'bc' || lower === 'b c') {
+  // BC / B.C. (solo o dentro de frase: "precio para BC", "500 BC")
+  if (
+    /^b\.?\s*c\.?$/i.test(compact) ||
+    lower === 'bc' ||
+    lower === 'b c' ||
+    /\bbc\b/i.test(trimmed) ||
+    /\bbc\b/i.test(compact)
+  ) {
     add('business cards')
     add('business card')
     add('tarjetas de presentación')
     add('tarjeta de presentación')
   }
 
-  // business card(s) y variantes en frase ("500 business cards", "full color business cards")
+  // business card(s) → también términos ES usados en admin (nombre/categoría)
   if (/\bbusiness\s+cards?\b/i.test(trimmed) || /\bbusiness\s+cards?\b/i.test(compact)) {
     add('business cards')
     add('business card')
     add('tarjetas de presentación')
     add('tarjeta de presentación')
+    add('tarjetas de visita')
+    add('tarjeta de visita')
   }
 
   // singular → plural

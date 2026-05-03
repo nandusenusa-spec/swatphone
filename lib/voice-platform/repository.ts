@@ -1,5 +1,6 @@
 import { randomUUID } from 'crypto'
 import { createServiceRoleClient } from '@/lib/supabase/service-role'
+import type { PriceLookupSearchMeta } from '@/lib/voice-platform/price-lookup-log'
 import { normalizePhone } from '@/lib/phone'
 import type { CallClassification, StructuredExtraction, ValidationStatus } from '@/lib/voice-platform/types'
 
@@ -356,37 +357,103 @@ function catalogRowActive(r: Record<string, unknown>): boolean {
   return true
 }
 
-export async function getPriceQuote(input: { organizationId: string; serviceName: string }) {
+function mapProductRowToQuote(r: Record<string, unknown>): QuoteRow {
+  return {
+    service_name: String(r.name || ''),
+    unit_price: r.price,
+    currency: (r.currency as string) || 'USD',
+    description: (r.description as string) || null,
+    source: 'products',
+    source_row_id: typeof r.id === 'string' ? r.id : null,
+  }
+}
+
+/**
+ * Misma fuente que el admin: `GET /api/admin/data?type=products` → tabla `products` por `organization_id`
+ * sin filtrar `is_active` (el listado admin muestra todas las filas de la org).
+ * Búsqueda flexible: name → description → category (ilike).
+ */
+async function searchProductsForPriceQuote(
+  supabase: ReturnType<typeof createServiceRoleClient>,
+  organizationId: string,
+  term: string,
+): Promise<{ rows: QuoteRow[]; meta: PriceLookupSearchMeta }> {
+  const cols: Array<{ col: 'name' | 'description' | 'category'; matchMode: string }> = [
+    { col: 'name', matchMode: 'name_ilike' },
+    { col: 'description', matchMode: 'description_ilike' },
+    { col: 'category', matchMode: 'category_ilike' },
+  ]
+  for (const { col, matchMode } of cols) {
+    const { data, error } = await supabase
+      .from('products')
+      .select('id, name, price, currency, description, is_active, category')
+      .eq('organization_id', organizationId)
+      .ilike(col, `%${term}%`)
+      .limit(8)
+
+    if (error && error.code !== 'PGRST205') throw error
+    const raw = data || []
+    const rows = raw.map((r) => mapProductRowToQuote(r as Record<string, unknown>))
+    if (rows.length) {
+      return {
+        rows,
+        meta: {
+          tableQueried: 'products',
+          queryFilters: {
+            organization_id: organizationId,
+            column: col,
+            ilike: `%${term}%`,
+            matchMode,
+            is_active_filter: 'none (aligned with admin products list)',
+          },
+          resultCount: rows.length,
+          matchMode,
+        },
+      }
+    }
+  }
+  return {
+    rows: [],
+    meta: {
+      tableQueried: 'products',
+      queryFilters: {
+        organization_id: organizationId,
+        term,
+        tried: 'name_ilike,description_ilike,category_ilike',
+        is_active_filter: 'none (aligned with admin products list)',
+      },
+      resultCount: 0,
+    },
+  }
+}
+
+export async function getPriceQuote(input: {
+  organizationId: string
+  serviceName: string
+}): Promise<{ rows: QuoteRow[]; searchMeta: PriceLookupSearchMeta }> {
   const supabase = createServiceRoleClient()
   const term = input.serviceName.trim()
-  if (!term) return []
-
-  // 1) Fuente principal: products (cargada desde /dashboard/products)
-  const fromProducts = await supabase
-    .from('products')
-    .select('id, name, price, currency, description, is_active')
-    .eq('organization_id', input.organizationId)
-    .eq('is_active', true)
-    .ilike('name', `%${term}%`)
-    .limit(8)
-
-  if (fromProducts.error && fromProducts.error.code !== 'PGRST205') {
-    throw fromProducts.error
-  }
-  if (!fromProducts.error && fromProducts.data?.length) {
-    return (fromProducts.data || []).map(
-      (r: Record<string, unknown>): QuoteRow => ({
-        service_name: String(r.name || ''),
-        unit_price: r.price,
-        currency: (r.currency as string) || 'USD',
-        description: (r.description as string) || null,
-        source: 'products',
-        source_row_id: typeof r.id === 'string' ? r.id : null,
-      }),
-    )
+  if (!term) {
+    return {
+      rows: [],
+      searchMeta: {
+        tableQueried: 'none',
+        queryFilters: { reason: 'empty_term' },
+        resultCount: 0,
+      },
+    }
   }
 
-  // 2) organization_catalog (sync/admin legacy; columnas active / is_active según migraciones)
+  const { rows: productRows, meta: productMeta } = await searchProductsForPriceQuote(
+    supabase,
+    input.organizationId,
+    term,
+  )
+  if (productRows.length) {
+    return { rows: productRows, searchMeta: productMeta }
+  }
+
+  // 2) organization_catalog (legacy)
   const fromOrgCatalog = await supabase
     .from('organization_catalog')
     .select('*')
@@ -401,7 +468,7 @@ export async function getPriceQuote(input: { organizationId: string; serviceName
     catalogRowActive(r),
   )
   if (catFiltered.length) {
-    return catFiltered.slice(0, 8).map(
+    const rows = catFiltered.slice(0, 8).map(
       (r: Record<string, unknown>): QuoteRow => ({
         service_name: String(r.service_name || ''),
         unit_price: r.public_price ?? r.unit_price ?? r.price,
@@ -411,9 +478,22 @@ export async function getPriceQuote(input: { organizationId: string; serviceName
         source_row_id: typeof r.id === 'string' ? r.id : null,
       }),
     )
+    return {
+      rows,
+      searchMeta: {
+        tableQueried: 'organization_catalog',
+        queryFilters: {
+          organization_id: input.organizationId,
+          service_name_ilike: `%${term}%`,
+          catalog_row_active: true,
+        },
+        resultCount: rows.length,
+        matchMode: 'service_name_ilike',
+      },
+    }
   }
 
-  // 3) price_catalog (schema 006 legacy)
+  // 3) price_catalog (legacy)
   const { data, error } = await supabase
     .from('price_catalog')
     .select('*')
@@ -421,9 +501,11 @@ export async function getPriceQuote(input: { organizationId: string; serviceName
     .eq('is_active', true)
     .ilike('service_name', `%${term}%`)
     .limit(8)
-  if (error?.code === 'PGRST205') return []
+  if (error?.code === 'PGRST205') {
+    return { rows: [], searchMeta: productMeta }
+  }
   if (error) throw error
-  return (data || []).map(
+  const pcRows = (data || []).map(
     (r: Record<string, unknown>): QuoteRow => ({
       service_name: String(r.service_name || ''),
       unit_price: r.unit_price,
@@ -433,6 +515,23 @@ export async function getPriceQuote(input: { organizationId: string; serviceName
       source_row_id: typeof r.id === 'string' ? r.id : null,
     }),
   )
+  if (pcRows.length) {
+    return {
+      rows: pcRows,
+      searchMeta: {
+        tableQueried: 'price_catalog',
+        queryFilters: {
+          organization_id: input.organizationId,
+          service_name_ilike: `%${term}%`,
+          is_active: true,
+        },
+        resultCount: pcRows.length,
+        matchMode: 'service_name_ilike',
+      },
+    }
+  }
+
+  return { rows: [], searchMeta: productMeta }
 }
 
 export async function upsertCallLog(input: {

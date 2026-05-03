@@ -22,7 +22,7 @@ import {
   expandPriceLookupTerms,
   normalizeVoiceProductQuery,
 } from '@/lib/voice-platform/price-lookup-terms'
-import { logPriceLookup } from '@/lib/voice-platform/price-lookup-log'
+import { logPriceLookup, type PriceLookupSearchMeta } from '@/lib/voice-platform/price-lookup-log'
 import type { QuoteRow } from '@/lib/voice-platform/repository'
 import { workOrderStatusForVoice } from '@/lib/voice-platform/work-order-voice'
 
@@ -149,15 +149,19 @@ export async function runGetPriceQuote(input: {
   const normalizedName = normalizeVoiceProductQuery(inputName)
   const terms = expandPriceLookupTerms(input.serviceName)
   let rows: QuoteRow[] = []
-  let winningQuery = ''
+  let winningTerm = ''
+  let lastSearchMeta: PriceLookupSearchMeta | null = null
+  let winningSearchMeta: PriceLookupSearchMeta | null = null
   for (const term of terms) {
-    const chunk = await getPriceQuote({
+    const { rows: chunk, searchMeta } = await getPriceQuote({
       organizationId: input.organizationId,
       serviceName: term,
     })
+    lastSearchMeta = searchMeta
     if (chunk.length) {
       rows = chunk
-      winningQuery = term
+      winningTerm = term
+      winningSearchMeta = searchMeta
       break
     }
   }
@@ -177,18 +181,21 @@ export async function runGetPriceQuote(input: {
   const mustConfirmPriceWithTeam =
     rows.length === 0 || rows.length > 1 || (rows.length === 1 && priceNeedsTeamConfirm)
 
+  const metaForLog = winningSearchMeta ?? lastSearchMeta
   logPriceLookup({
     toolCallId: input.logContext?.toolCallId,
     toolName: input.logContext?.toolName,
     inputName,
     normalizedName,
-    lookupType: first?.source ?? 'none',
-    query: winningQuery || terms[0] || normalizedName || inputName,
-    found: rows.length > 0,
-    matchedProductId: first?.source === 'products' ? first.source_row_id : null,
+    organization_id: input.organizationId,
+    tableQueried: metaForLog?.tableQueried ?? 'none',
+    queryFilters: metaForLog?.queryFilters ?? { reason: 'no_query_meta' },
+    resultCount: rows.length,
     matchedName: first?.service_name ?? null,
+    matchedId: first?.source_row_id ?? null,
     mustConfirmPriceWithTeam,
     termsTried: terms,
+    winningTerm: winningTerm || undefined,
   })
 
   const quotes = rows.map((r: QuoteRow) => ({
