@@ -81,6 +81,7 @@ type VapiPublishPayload = {
   getJobStatusToolPostUrl: string
   webhookSecretHeader: string
   getJobStatusSchemaNote: string
+  vapiDashboardNotes?: string[]
 }
 
 type VapiVerificationPayload = {
@@ -740,7 +741,8 @@ export default function AdminClientDetailPage() {
     prompt += `## Instrucciones importantes\n`
     prompt += `- Siempre se amable y profesional\n`
     prompt += `- Si no sabes algo, ofrece transferir a un humano\n`
-    prompt += `- Captura nombre, telefono y email cuando sea posible\n`
+    prompt += `- Estado de pedido u orden: no pidas organization_id ni teléfono para consultar; llamá get_job_status al instante (las reglas detalladas las agrega el sistema al sincronizar).\n`
+    prompt += `- Para otros trámites, captura nombre, telefono y email cuando sea posible\n`
     prompt += `- Responde en el mismo idioma que el cliente use\n`
 
     setSystemPrompt(prompt)
@@ -1487,6 +1489,13 @@ export default function AdminClientDetailPage() {
                     </div>
                   </div>
                   <p className="text-xs text-muted-foreground">{lastVapiPublish.getJobStatusSchemaNote}</p>
+                  {lastVapiPublish.vapiDashboardNotes?.length ? (
+                    <ul className="list-disc space-y-1 pl-4 text-xs text-muted-foreground">
+                      {lastVapiPublish.vapiDashboardNotes.map((n, i) => (
+                        <li key={i}>{n}</li>
+                      ))}
+                    </ul>
+                  ) : null}
                 </div>
               ) : null}
 

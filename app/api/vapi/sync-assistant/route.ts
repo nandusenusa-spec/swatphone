@@ -2,7 +2,13 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createServiceRoleClient } from '@/lib/supabase/service-role'
 import { getOrganizationRuntimeConfig } from '@/lib/vapi/runtime-config'
-import { buildSystemPrompt } from '@/lib/vapi/prompts'
+import {
+  auditSystemPromptForSync,
+  buildSystemPrompt,
+  extractRawSystemPromptFromVapiAssistant,
+  JOB_STATUS_SYNC_VERIFICATION_PHRASE,
+  sanitizeAssistantBasePromptForSync,
+} from '@/lib/vapi/prompts'
 import { openAiVoiceIdForLlmPipeline } from '@/lib/vapi/openai-voice-for-pipeline'
 import {
   buildPrepareWarmTransferServerTool,
@@ -422,9 +428,11 @@ export async function POST(request: NextRequest) {
 
     const runtime = await getOrganizationRuntimeConfig(organizationId)
 
-    const basePrompt =
+    const rawBasePrompt =
       config.system_prompt?.trim() ||
       'Eres un asistente de atencion telefonica empresarial.'
+    const { cleaned: basePrompt, removedLabels: basePromptSanitizeRemoved } =
+      sanitizeAssistantBasePromptForSync(rawBasePrompt)
 
     let systemPrompt = buildSystemPrompt({
       basePrompt,
@@ -441,6 +449,25 @@ export async function POST(request: NextRequest) {
         systemPrompt += `- ${f.question}: ${f.answer}\n`
       })
     }
+
+    const promptAuditPatchPayload = auditSystemPromptForSync(systemPrompt)
+    console.log('[vapi/sync-assistant] system_prompt_final_sent_to_vapi_audit', {
+      base_prompt_sanitize_removed: basePromptSanitizeRemoved,
+      has_verification_phrase: promptAuditPatchPayload.hasVerificationPhrase,
+      verification_phrase_marker: JOB_STATUS_SYNC_VERIFICATION_PHRASE,
+      forbidden_hits: promptAuditPatchPayload.forbiddenHits,
+      reglas_fragment: clipText(promptAuditPatchPayload.reglasFragment, 1200),
+    })
+    if (promptAuditPatchPayload.forbiddenHits.length > 0) {
+      console.warn('[vapi/sync-assistant] system_prompt_still_contains_forbidden_phrases', {
+        forbidden_hits: promptAuditPatchPayload.forbiddenHits,
+        hint: 'Revisá assistant_configs.system_prompt, FAQs u otra fuente que repita instrucciones viejas.',
+      })
+    }
+    if (!promptAuditPatchPayload.hasVerificationPhrase) {
+      console.warn('[vapi/sync-assistant] system_prompt_missing_verification_phrase')
+    }
+
     const persistentPrepare = buildPrepareWarmTransferServerTool(organizationId)
     const persistentTransfer = buildWarmTransferCallTool(runtime)
     const persistentTransferTools = [
@@ -819,7 +846,34 @@ export async function POST(request: NextRequest) {
     })
 
     const postSummary = summarizeAssistantFromVapi(postPatchFetched)
+    const vapiGetSystemPrompt = extractRawSystemPromptFromVapiAssistant(postPatchFetched)
+    const promptAuditAfterGet = vapiGetSystemPrompt
+      ? auditSystemPromptForSync(vapiGetSystemPrompt)
+      : null
+    if (promptAuditAfterGet) {
+      console.log('[vapi/sync-assistant] system_prompt_from_vapi_get_audit', {
+        has_verification_phrase: promptAuditAfterGet.hasVerificationPhrase,
+        forbidden_hits: promptAuditAfterGet.forbiddenHits,
+        reglas_fragment: clipText(promptAuditAfterGet.reglasFragment, 1200),
+      })
+    }
+
     const warnings: string[] = []
+    if (basePromptSanitizeRemoved.length > 0) {
+      warnings.push(
+        `Se eliminaron del system_prompt de BD patrones viejos (${basePromptSanitizeRemoved.join(', ')}). Guardá el prompt en Admin si querés persistir la versión limpia.`,
+      )
+    }
+    if (promptAuditPatchPayload.forbiddenHits.length > 0) {
+      warnings.push(
+        `El prompt enviado al PATCH aún contiene texto conflictivo: ${promptAuditPatchPayload.forbiddenHits.join(', ')}. Revisá assistant_configs (Prompts) o FAQs.`,
+      )
+    }
+    if (!promptAuditPatchPayload.hasVerificationPhrase) {
+      warnings.push(
+        'El prompt final no incluye la frase de verificación de estado de pedido; revisá buildSystemPrompt.',
+      )
+    }
     if (postPatchGetStatus !== 200) {
       warnings.push(
         `GET assistant después del PATCH devolvió HTTP ${postPatchGetStatus}; no se pudo verificar el schema en Vapi.`,
@@ -858,6 +912,18 @@ export async function POST(request: NextRequest) {
         `Tras el PATCH, Vapi aún devuelve get_job_status.parameters.required = ${JSON.stringify(postSummary.get_job_status.parametersRequired)}.`,
       )
     }
+    if (postPatchGetStatus === 200 && promptAuditAfterGet) {
+      if (!promptAuditAfterGet.hasVerificationPhrase) {
+        warnings.push(
+          'El GET del assistant en Vapi no devuelve el system prompt con la frase de verificación nueva. Posibles causas: caché en la UI de Vapi, cambios sin publicar (botón Publish), o el GET no refleja el último PATCH.',
+        )
+      }
+      if (promptAuditAfterGet.forbiddenHits.length > 0) {
+        warnings.push(
+          `El system prompt que devuelve Vapi (GET) aún contiene: ${promptAuditAfterGet.forbiddenHits.join(', ')}.`,
+        )
+      }
+    }
 
     return NextResponse.json({
       success: true,
@@ -873,6 +939,9 @@ export async function POST(request: NextRequest) {
         webhookSecretHeader: 'x-vapi-secret',
         getJobStatusSchemaNote:
           'En Vapi, get_job_status debe tener parameters.required = [] y puede llevar server.url al endpoint get-job-status (ya publicado en sync).',
+        vapiDashboardNotes: [
+          'Si el dashboard muestra un borrador o el botón Publish sigue activo tras el sync: el PATCH por API actualiza el recurso del assistant, pero la UI de Vapi puede exigir “Publicar” para que la vista y las pruebas reflejen exactamente lo guardado.',
+        ],
       },
       vapiVerification: {
         prePatchGetJobStatus: prePatchGjs
@@ -895,6 +964,13 @@ export async function POST(request: NextRequest) {
         postPatchAssistantSummary:
           postPatchGetStatus === 200 ? summarizeAssistantFromVapi(postPatchFetched) : null,
         phoneNumbers: phoneReport,
+        promptAudit: {
+          verificationPhraseMarker: JOB_STATUS_SYNC_VERIFICATION_PHRASE,
+          basePromptSanitizeRemoved: basePromptSanitizeRemoved,
+          patchPayload: promptAuditPatchPayload,
+          vapiGet: promptAuditAfterGet,
+          vapiGetSystemPromptLength: vapiGetSystemPrompt?.length ?? null,
+        },
         warnings,
       },
     })
