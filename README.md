@@ -232,12 +232,18 @@ Copiar `.env.example` -> `.env.local` y completar:
 
 ### get_job_status
 
+**Vapi (dashboard / tool con Server URL):** usá `POST https://<tu-dominio>/api/vapi/tools/get-job-status`. Vapi envía el cuerpo `tool-calls` y espera `{ "results": [ { "toolCallId", "name", "result" } ] }` (este endpoint lo soporta). Si en Vercel tenés `VAPI_WEBHOOK_SECRET`, configurá la misma credencial en Vapi para el header **`X-Vapi-Secret`** ([docs](https://docs.vapi.ai/server-url/server-authentication)). **No** uses `Authorization` ni `INTERNAL_API_KEY` en este tool.
+
+**cURL / integraciones (JSON plano):**
+
 ```json
 {
   "organization_id": "ORG_UUID",
-  "job_number": "WO-12345"
+  "phone": "+15551234567"
 }
 ```
+
+Opcional: `job_number` en lugar de `phone` si el cliente da número de orden.
 
 ### save_call_outcome
 
