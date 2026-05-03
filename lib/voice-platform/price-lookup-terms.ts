@@ -1,4 +1,36 @@
 /**
+ * Si el usuario menciona cantidad + BC / business cards / tarjetas de presentación,
+ * genera el nombre de catálogo tal como suele cargarse en admin: "Business Cards - 500".
+ * Se prueban primero en expandPriceLookupTerms para match exacto en `products.name`.
+ */
+export function collectBusinessCardSkuAliases(raw: string): string[] {
+  const t = raw.trim()
+  if (!t) return []
+  const patterns: RegExp[] = [
+    /\bbc\s+(\d{2,5})\b/i,
+    /\bbc\s*(\d{2,5})\b/i,
+    /\b(\d{2,5})\s+bc\b/i,
+    /\bbusiness\s+cards?\s+(\d{2,5})\b/i,
+    /\b(\d{2,5})\s+business\s+cards?\b/i,
+    /\btarjetas\s+de\s+presentaci[oó]n\s+(\d{2,5})\b/i,
+    /\b(\d{2,5})\s+tarjetas\s+de\s+presentaci[oó]n\b/i,
+  ]
+  const seen = new Set<string>()
+  const out: string[] = []
+  for (const re of patterns) {
+    const m = t.match(re)
+    if (m?.[1]) {
+      const sku = `Business Cards - ${m[1]}`
+      if (!seen.has(sku)) {
+        seen.add(sku)
+        out.push(sku)
+      }
+    }
+  }
+  return out
+}
+
+/**
  * Normaliza consultas de voz tipo "500 business cards" → núcleo buscable.
  */
 export function normalizeVoiceProductQuery(raw: string): string {
@@ -29,6 +61,14 @@ export function expandPriceLookupTerms(raw: string): string[] {
   const compact = normalized.replace(/\s+/g, ' ').trim()
   const lower = compact.toLowerCase()
   const lowerRaw = trimmed.toLowerCase()
+
+  // Primero: SKU admin típico "Business Cards - 500" (BC 500, 500 business cards, etc.)
+  for (const sku of collectBusinessCardSkuAliases(trimmed)) {
+    add(sku)
+  }
+  for (const sku of collectBusinessCardSkuAliases(compact)) {
+    add(sku)
+  }
 
   add(compact)
   if (trimmed !== compact) add(trimmed)

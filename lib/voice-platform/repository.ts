@@ -368,16 +368,89 @@ function mapProductRowToQuote(r: Record<string, unknown>): QuoteRow {
   }
 }
 
+/** ILIKE literal: sin % ni _ comodines → coincidencia exacta case-insensitive. */
+function escapeIlikeLiteral(pattern: string): string {
+  return pattern.replace(/\\/g, '\\\\').replace(/%/g, '\\%').replace(/_/g, '\\_')
+}
+
 /**
- * Misma fuente que el admin: `GET /api/admin/data?type=products` → tabla `products` por `organization_id`
- * sin filtrar `is_active` (el listado admin muestra todas las filas de la org).
- * Búsqueda flexible: name → description → category (ilike).
+ * Si `ilike %term%` en nombre devuelve varias filas tipo "Business Cards - 500/1000"
+ * y el término incluye una cantidad, quedarse con la que termina en "- {qty}".
+ */
+function narrowBusinessCardRowsByQuantity(rows: QuoteRow[], searchTerm: string): QuoteRow[] {
+  if (rows.length <= 1) return rows
+  const qtyMatch = searchTerm.match(/\b(\d{2,5})\b/)
+  if (!qtyMatch) return rows
+  const q = qtyMatch[1]
+  const allNamedLikeBc = rows.every((r) => /\bbusiness\s+cards?\s*-/i.test(r.service_name))
+  if (!allNamedLikeBc) return rows
+  const narrowed = rows.filter((r) => new RegExp(`-\\s*${q}\\s*$`, 'i').test(r.service_name.trim()))
+  return narrowed.length === 1 ? narrowed : rows
+}
+
+/**
+ * Misma fuente que dashboard Productos y admin: tabla `products` (`select('*')` en UI, `organization_id` en admin).
+ * Sin `is_active` / `deleted_at` en schema base (no filtramos deleted_at).
+ * Orden: name exacto (eq) → name ILIKE literal → name/description/category parcial (ilike %).
  */
 async function searchProductsForPriceQuote(
   supabase: ReturnType<typeof createServiceRoleClient>,
   organizationId: string,
   term: string,
 ): Promise<{ rows: QuoteRow[]; meta: PriceLookupSearchMeta }> {
+  const baseSelect =
+    'id, name, price, currency, description, is_active, category' as const
+
+  const metaFor = (
+    matchMode: string,
+    queryFilters: Record<string, unknown>,
+    resultCount: number,
+  ): PriceLookupSearchMeta => ({
+    tableQueried: 'products',
+    queryFilters: {
+      ...queryFilters,
+      organization_id: organizationId,
+      is_active_filter: 'none (aligned with dashboard/admin products)',
+    },
+    resultCount,
+    matchMode,
+  })
+
+  // 1) Case-sensitive exact (copiar/pegar desde admin)
+  const eqRes = await supabase
+    .from('products')
+    .select(baseSelect)
+    .eq('organization_id', organizationId)
+    .eq('name', term)
+    .limit(8)
+  if (eqRes.error && eqRes.error.code !== 'PGRST205') throw eqRes.error
+  const eqRows = (eqRes.data || []).map((r) => mapProductRowToQuote(r as Record<string, unknown>))
+  if (eqRows.length) {
+    return {
+      rows: eqRows,
+      meta: metaFor('name_eq', { name_eq: term }, eqRows.length),
+    }
+  }
+
+  // 2) Case-insensitive exact en `name` (misma columna que la tabla Productos)
+  const exactPattern = escapeIlikeLiteral(term)
+  const ilikeExactRes = await supabase
+    .from('products')
+    .select(baseSelect)
+    .eq('organization_id', organizationId)
+    .ilike('name', exactPattern)
+    .limit(8)
+  if (ilikeExactRes.error && ilikeExactRes.error.code !== 'PGRST205') throw ilikeExactRes.error
+  const exactRows = (ilikeExactRes.data || []).map((r) =>
+    mapProductRowToQuote(r as Record<string, unknown>),
+  )
+  if (exactRows.length) {
+    return {
+      rows: exactRows,
+      meta: metaFor('name_ilike_exact', { name_ilike: exactPattern }, exactRows.length),
+    }
+  }
+
   const cols: Array<{ col: 'name' | 'description' | 'category'; matchMode: string }> = [
     { col: 'name', matchMode: 'name_ilike' },
     { col: 'description', matchMode: 'description_ilike' },
@@ -386,29 +459,21 @@ async function searchProductsForPriceQuote(
   for (const { col, matchMode } of cols) {
     const { data, error } = await supabase
       .from('products')
-      .select('id, name, price, currency, description, is_active, category')
+      .select(baseSelect)
       .eq('organization_id', organizationId)
       .ilike(col, `%${term}%`)
       .limit(8)
 
     if (error && error.code !== 'PGRST205') throw error
     const raw = data || []
-    const rows = raw.map((r) => mapProductRowToQuote(r as Record<string, unknown>))
+    let rows = raw.map((r) => mapProductRowToQuote(r as Record<string, unknown>))
+    if (col === 'name') {
+      rows = narrowBusinessCardRowsByQuantity(rows, term)
+    }
     if (rows.length) {
       return {
         rows,
-        meta: {
-          tableQueried: 'products',
-          queryFilters: {
-            organization_id: organizationId,
-            column: col,
-            ilike: `%${term}%`,
-            matchMode,
-            is_active_filter: 'none (aligned with admin products list)',
-          },
-          resultCount: rows.length,
-          matchMode,
-        },
+        meta: metaFor(matchMode, { column: col, ilike: `%${term}%` }, rows.length),
       }
     }
   }
@@ -419,8 +484,8 @@ async function searchProductsForPriceQuote(
       queryFilters: {
         organization_id: organizationId,
         term,
-        tried: 'name_ilike,description_ilike,category_ilike',
-        is_active_filter: 'none (aligned with admin products list)',
+        tried: 'name_eq,name_ilike_exact,name_ilike,description_ilike,category_ilike',
+        is_active_filter: 'none (aligned with dashboard/admin products)',
       },
       resultCount: 0,
     },
