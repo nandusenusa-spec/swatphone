@@ -85,6 +85,11 @@ export async function executeToolHandler(
           typeof args.issue_description === 'string' ? args.issue_description : undefined,
       })
     case 'get_price_quote':
+      console.info('[vapi/tool-call] get_price_quote', {
+        organization_id: context.organizationId,
+        vapi_call_id: context.vapiCallId || null,
+        service_name_preview: String(args.service_name ?? '').slice(0, 120),
+      })
       if (!args.service_name) return missing(['service_name'])
       return runGetPriceQuote({
         organizationId: context.organizationId,
@@ -97,6 +102,11 @@ export async function executeToolHandler(
           : typeof args.service_name === 'string'
             ? args.service_name
             : ''
+      console.info('[vapi/tool-call] get_product_price', {
+        organization_id: context.organizationId,
+        vapi_call_id: context.vapiCallId || null,
+        product_name_preview: name.slice(0, 120),
+      })
       if (!name.trim()) return missing(['product_name'])
       return runGetPriceQuote({
         organizationId: context.organizationId,
@@ -104,6 +114,15 @@ export async function executeToolHandler(
       })
     }
     case 'save_lead_info': {
+      console.info('[vapi/tool-call] save_lead_info', {
+        organization_id: context.organizationId,
+        vapi_call_id: context.vapiCallId || null,
+        arg_keys: Object.keys(args).slice(0, 24),
+        has_phone_arg: Boolean(
+          typeof args.phone === 'string' && String(args.phone).trim(),
+        ),
+        has_context_phone: Boolean(context.phone?.trim()),
+      })
       const argPhone = typeof args.phone === 'string' ? normalizePhone(args.phone) : ''
       const ctxPhone = context.phone ? normalizePhone(context.phone) : ''
       const phone = argPhone || ctxPhone || ''
@@ -238,6 +257,12 @@ export async function executeToolHandler(
         spamScore: typeof args.spam_score === 'number' ? args.spam_score : undefined,
       })
     case 'create_follow_up':
+      console.info('[vapi/tool-call] create_follow_up', {
+        organization_id: context.organizationId,
+        vapi_call_id: context.vapiCallId || null,
+        title_preview: String(args.title ?? '').slice(0, 120),
+        callback_required: Boolean(args.callback_required),
+      })
       if (!args.title) return missing(['title'])
       return persistFollowUp({
         organizationId: context.organizationId,
@@ -258,6 +283,11 @@ export async function executeToolHandler(
         callbackRequired: Boolean(args.callback_required),
       })
     default:
-      return { error: `tool_not_supported:${toolName}` }
+      console.warn('[vapi/tool-call] unknown_tool_no_handler', { toolName })
+      return {
+        ok: false as const,
+        error: 'unknown_tool' as const,
+        toolName,
+      }
   }
 }

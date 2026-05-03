@@ -24,6 +24,7 @@ import { resolveTrustedCallerFirstName } from '@/lib/voice-platform/caller-ident
 import { screenInboundAssistantRequest } from '@/lib/vapi/phone-screening'
 import { textSuggestsPromisedCallback } from '@/lib/voice-platform/callback-heuristic'
 import { normalizePhone } from '@/lib/phone'
+import { logVapiToolCallReceived } from '@/lib/vapi/tool-call-logging'
 
 type JsonRecord = Record<string, unknown>
 
@@ -124,6 +125,8 @@ function conciseDynamicGreeting(raw: string): string {
 export async function dispatchVapiEvent(input: {
   body: JsonRecord
   organizationId: string
+  /** URL completa del POST (p. ej. request.url) para logs en Vercel */
+  requestUrl?: string | null
 }) {
   const payload = flattenEvent(input.body)
   const type = str(payload, 'type')
@@ -353,6 +356,7 @@ export async function dispatchVapiEvent(input: {
       'get_product_price',
       'get_job_status',
       'save_lead_info',
+      'create_follow_up',
     ])
     console.log('[vapi/dispatcher] tool-calls', {
       organization_id: input.organizationId,
@@ -375,6 +379,14 @@ export async function dispatchVapiEvent(input: {
       calls.map(async (tc) => {
         const toolCallId = str(tc, 'toolCallId') || str(tc, 'id')
         const name = parseToolName(tc)
+        const args = parseToolArgs(tc)
+        logVapiToolCallReceived({
+          requestUrl: input.requestUrl,
+          toolCallId,
+          toolName: name,
+          argKeys: Object.keys(args),
+          source: 'dispatcher',
+        })
         const allowed =
           transferToolsAlwaysOn.has(name) || runtime.toolsEnabled.includes(name)
         if (!allowed) {
@@ -385,10 +397,13 @@ export async function dispatchVapiEvent(input: {
           return {
             toolCallId,
             name,
-            result: JSON.stringify({ error: 'tool_disabled_for_org' }),
+            result: JSON.stringify({
+              ok: false,
+              error: 'tool_disabled_for_org',
+              toolName: name,
+            }),
           }
         }
-        const args = parseToolArgs(tc)
         const argPhoneNorm =
           typeof args.phone === 'string' && args.phone.trim()
             ? normalizePhone(args.phone)

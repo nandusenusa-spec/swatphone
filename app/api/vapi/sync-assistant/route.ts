@@ -520,6 +520,9 @@ export async function POST(request: NextRequest) {
       ),
     })
 
+    /** Misma URL que assistant.serverUrl: Vapi debe POSTear estas tools al dispatcher, no solo a get-job-status. */
+    const voiceEventsToolServerUrl = `${appBase}/api/voice/events?organization_id=${organizationId}`
+
     const staticFunctionTools = [
       {
         type: 'function',
@@ -568,7 +571,8 @@ export async function POST(request: NextRequest) {
         type: 'function',
         function: {
           name: 'get_product_price',
-          description: 'Busca el precio de un producto o servicio',
+          description:
+            'Busca el precio de un producto o servicio en el catálogo. Obligatorio ante consultas de precio o cotización; llamá esta tool antes de decir que no tenés precio.',
           parameters: {
             type: 'object',
             properties: {
@@ -580,12 +584,16 @@ export async function POST(request: NextRequest) {
             required: ['product_name'],
           },
         },
+        server: {
+          url: voiceEventsToolServerUrl,
+        },
       },
       {
         type: 'function',
         function: {
           name: 'get_price_quote',
-          description: 'Busca precio por service_name en catálogo',
+          description:
+            'Busca precio por service_name en catálogo. Obligatorio ante consultas de precio o cotización; llamá esta tool antes de decir que no tenés precio.',
           parameters: {
             type: 'object',
             properties: {
@@ -593,6 +601,9 @@ export async function POST(request: NextRequest) {
             },
             required: ['service_name'],
           },
+        },
+        server: {
+          url: voiceEventsToolServerUrl,
         },
       },
       {
@@ -625,6 +636,9 @@ export async function POST(request: NextRequest) {
             },
             required: [] as string[],
           },
+        },
+        server: {
+          url: voiceEventsToolServerUrl,
         },
       },
       {
@@ -700,6 +714,9 @@ export async function POST(request: NextRequest) {
             },
             required: ['title'],
           },
+        },
+        server: {
+          url: voiceEventsToolServerUrl,
         },
       },
     ]

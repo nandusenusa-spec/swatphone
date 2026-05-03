@@ -29,6 +29,7 @@ import {
 import { resolveOrganizationIdForVapiTools } from '@/lib/vapi/vapi-org-resolution'
 import { resolvePhoneForVapiTool } from '@/lib/vapi/vapi-caller-phone'
 import { executeToolHandler } from '@/lib/vapi/tool-handlers'
+import { logVapiToolCallReceived } from '@/lib/vapi/tool-call-logging'
 
 type JsonRecord = Record<string, unknown>
 
@@ -304,6 +305,7 @@ async function handleAssistantRequest(request: NextRequest, flat: JsonRecord, ra
 }
 
 async function handleToolCalls(request: NextRequest, flat: JsonRecord, rawBody: JsonRecord) {
+  const requestUrl = request.url
   const list = Array.isArray(flat.toolCallList)
     ? flat.toolCallList
     : Array.isArray(flat.toolCalls)
@@ -341,6 +343,14 @@ async function handleToolCalls(request: NextRequest, flat: JsonRecord, rawBody: 
         return {}
       }
       const args = parseArgs()
+
+      logVapiToolCallReceived({
+        requestUrl,
+        toolCallId,
+        toolName: name,
+        argKeys: Object.keys(args),
+        source: 'webhook',
+      })
 
       const orgRes = await resolveOrganizationIdForVapiTools({
         args,
@@ -385,6 +395,11 @@ async function handleToolCalls(request: NextRequest, flat: JsonRecord, rawBody: 
             : typeof args.service_name === 'string'
               ? args.service_name
               : ''
+        console.info(`[vapi/tool-call] ${name}`, {
+          organization_id: orgId,
+          toolCallId,
+          query_preview: serviceName.slice(0, 120),
+        })
         const out = serviceName.trim()
           ? await runGetPriceQuote({
               organizationId: orgId,
@@ -463,6 +478,12 @@ async function handleToolCalls(request: NextRequest, flat: JsonRecord, rawBody: 
         result = JSON.stringify(out)
       } else if (name === 'create_follow_up' && orgId) {
         const title = typeof args.title === 'string' ? args.title.trim() : ''
+        console.info('[vapi/tool-call] create_follow_up', {
+          organization_id: orgId,
+          toolCallId,
+          title_preview: title.slice(0, 120),
+          callback_required: Boolean(args.callback_required),
+        })
         const out = title
           ? await runCreateFollowUp({
               organizationId: orgId,
@@ -509,6 +530,11 @@ async function handleToolCalls(request: NextRequest, flat: JsonRecord, rawBody: 
             primary_message_for_caller: 'Me falta un dato para registrar tu solicitud.',
           })
         }
+      }
+
+      if (result === '{}' && name) {
+        console.warn('[vapi:webhook] unknown_tool_unhandled', { toolCallId, toolName: name })
+        result = JSON.stringify({ ok: false, error: 'unknown_tool', toolName: name })
       }
 
       // Vapi ToolCallResult requires both toolCallId and name

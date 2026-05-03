@@ -5,7 +5,15 @@ import { runGetPriceQuote } from '@/lib/voice-platform/service'
 
 export async function POST(request: NextRequest) {
   try {
-    const payload = GetPriceQuoteSchema.parse(await request.json())
+    const raw = (await request.json()) as Record<string, unknown>
+    console.info('[vapi/tool-call] received', {
+      requestUrl: request.url,
+      toolCallId: 'get-price-quote-http',
+      toolName: 'get_price_quote',
+      argKeys: Object.keys(raw || {}).slice(0, 32),
+      source: 'get-price-quote-route',
+    })
+    const payload = GetPriceQuoteSchema.parse(raw)
     const result = await runGetPriceQuote({
       organizationId: payload.organization_id,
       serviceName: payload.service_name,

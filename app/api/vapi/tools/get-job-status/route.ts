@@ -10,6 +10,7 @@ import {
   type JsonRecord,
 } from '@/lib/vapi/vapi-org-resolution'
 import { resolvePhoneForVapiTool } from '@/lib/vapi/vapi-caller-phone'
+import { logVapiToolCallReceived } from '@/lib/vapi/tool-call-logging'
 
 export type { JobStatusOrgSource } from '@/lib/vapi/vapi-org-resolution'
 
@@ -295,7 +296,12 @@ async function executeGetJobStatusForTool(input: {
   }
 }
 
-async function handleVapiToolCalls(request: NextRequest, rawBody: JsonRecord, flat: JsonRecord) {
+async function handleVapiToolCalls(
+  request: NextRequest,
+  rawBody: JsonRecord,
+  flat: JsonRecord,
+  requestUrl: string,
+) {
   const list = flat.toolCallList as JsonRecord[]
 
   const results = await Promise.all(
@@ -309,13 +315,23 @@ async function handleVapiToolCalls(request: NextRequest, rawBody: JsonRecord, fl
         typeof fn?.name === 'string' ? fn.name : typeof item.name === 'string' ? item.name : ''
       const args = parseToolCallArgs(item)
 
+      logVapiToolCallReceived({
+        requestUrl,
+        toolCallId,
+        toolName: name,
+        argKeys: Object.keys(args),
+        source: 'get-job-status',
+      })
+
       if (name !== 'get_job_status') {
         return {
           toolCallId,
           name: name || 'unknown',
           result: JSON.stringify({
-            error: 'unsupported_tool',
-            expected: 'get_job_status',
+            ok: false,
+            error: 'unknown_tool',
+            toolName: name || 'unknown',
+            hint: 'This endpoint only handles get_job_status; price/lead/follow-up use /api/voice/events',
           }),
         }
       }
@@ -353,10 +369,17 @@ export async function POST(request: NextRequest) {
     const flat = flattenVapiBody(body)
 
     if (isVapiToolCallsPayload(flat)) {
-      return handleVapiToolCalls(request, body, flat)
+      return handleVapiToolCalls(request, body, flat, request.url)
     }
 
     const toolCallId = 'flat_json'
+    logVapiToolCallReceived({
+      requestUrl: request.url,
+      toolCallId,
+      toolName: 'get_job_status',
+      argKeys: safeArgsKeys(body),
+      source: 'get-job-status-flat',
+    })
     console.info('[vapi/tools/get-job-status] flat_body_keys', {
       toolCallId,
       keys: safeArgsKeys(body),
