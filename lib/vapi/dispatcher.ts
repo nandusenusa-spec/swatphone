@@ -351,7 +351,6 @@ export async function dispatchVapiEvent(input: {
       'get_price_quote',
       'get_product_price',
       'get_job_status',
-      'get_client_status',
       'save_lead_info',
     ])
     console.log('[vapi/dispatcher] tool-calls', {

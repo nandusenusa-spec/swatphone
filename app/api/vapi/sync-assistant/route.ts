@@ -252,10 +252,14 @@ export async function POST(request: NextRequest) {
       })
     }
 
+    const demoOrgId = '9bb50e58-9ba6-4d54-8171-13922749f570'
+    const orderStatusBlock =
+      organizationId === demoOrgId
+        ? '\n\nSi preguntan por el estado de su pedido u orden, llama inmediatamente a get_job_status con:\norganization_id = 9bb50e58-9ba6-4d54-8171-13922749f570\nphone = +18132303791.\nNo pidas nombre, teléfono ni número de orden.\nCuando la herramienta devuelva primary_message_for_caller, responde exactamente ese texto.\nNo uses get_client_status.\n\nEl nombre de la función expuesta al modelo es get_job_status. Si en el dashboard de Vapi ves una etiqueta genérica (p. ej. function_tool), usá igualmente la herramienta cuyo Server URL es el endpoint de estado de orden (get_job_status).'
+        : '\n\nSi preguntan por el estado de su pedido u orden, llama inmediatamente a get_job_status con organization_id (UUID de esta organización) y phone del cliente en formato E.164. No pidas nombre ni número de orden antes de llamar la herramienta si ya tenés el teléfono del llamante o los datos en contexto.\nCuando la herramienta devuelva primary_message_for_caller, responde exactamente ese texto.\nNo uses get_client_status.\n\nEl nombre de la función expuesta al modelo es get_job_status. Si en el dashboard ves function_tool u otra etiqueta, debe ser la herramienta de estado de orden enlazada a tu Server URL.'
+    systemPrompt += orderStatusBlock
     systemPrompt +=
-      '\n\nSi preguntan por el estado de su pedido u orden, llama a la herramienta get_client_status (sin argumentos). El servidor identifica al llamante por su número de teléfono.'
-    systemPrompt +=
-      '\n\nEn todas las llamadas, pedí activamente y confirmá estos datos: nombre, apellido, teléfono y motivo de la llamada. Si falta alguno, preguntá hasta completarlo (una pregunta por turno) antes de cotizar, agendar o transferir.'
+      '\n\nEn llamadas que no sean únicamente una consulta de estado de pedido u orden, pedí activamente y confirmá estos datos: nombre, apellido, teléfono y motivo de la llamada. Si falta alguno, preguntá hasta completarlo (una pregunta por turno) antes de cotizar, agendar o transferir.'
     systemPrompt +=
       '\n\nSi preguntan por precio o disponibilidad de un producto/servicio, SIEMPRE llama get_product_price (o get_price_quote) antes de responder. No uses memoria, no adivines. Solo con el resultado de la herramienta decís si existe o no.'
     systemPrompt +=
@@ -313,27 +317,24 @@ export async function POST(request: NextRequest) {
       {
         type: 'function',
         function: {
-          name: 'get_client_status',
-          description:
-            'Obtiene el estado del pedido del cliente en esta llamada. Usar cuando pregunten por su orden o entrega. Sin argumentos: el servidor usa el teléfono del llamante.',
-          parameters: {
-            type: 'object',
-            properties: {},
-          },
-        },
-      },
-      {
-        type: 'function',
-        function: {
           name: 'get_job_status',
-          description: 'Busca estado de orden por número o teléfono',
+          description:
+            'Estado del pedido u orden. Llamar en cuanto el cliente pregunte por estado; usar organization_id y phone indicados en el system prompt (o UUID de esta org + E.164). No usar get_client_status.',
           parameters: {
             type: 'object',
             properties: {
+              organization_id: {
+                type: 'string',
+                description: 'UUID de la organización (ver instrucciones del asistente).',
+              },
+              phone: {
+                type: 'string',
+                description: 'Teléfono del cliente en E.164 (ver instrucciones del asistente).',
+              },
               job_number: { type: 'string' },
               order_number: { type: 'string' },
-              phone: { type: 'string' },
             },
+            required: ['organization_id', 'phone'],
           },
         },
       },

@@ -220,6 +220,10 @@ Copiar `.env.example` -> `.env.local` y completar:
 
 ## 9) Ejemplos payload Vapi tools
 
+### Prompt en Vapi vs sync-assistant
+
+El `systemPrompt` que se envía a Vapi al correr **`/api/vapi/sync-assistant`** se arma con `assistant_configs` (Supabase), FAQs y **texto fijo** en `app/api/vapi/sync-assistant/route.ts`. Si editás el System Prompt **solo en el dashboard de Vapi**, esa copia puede **quedarse vieja** respecto al código hasta el próximo sync o hasta que pegues el texto actualizado ahí. El nombre de función que ve el modelo es el de **`function.name`** (p. ej. `get_job_status`); una etiqueta genérica en la UI (p. ej. `function_tool`) no sustituye ese nombre salvo que redefinas el tool.
+
 ### find_customer
 
 ```json

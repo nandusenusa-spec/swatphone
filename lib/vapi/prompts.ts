@@ -47,8 +47,9 @@ export function buildSystemPrompt(input: PromptInput): string {
 
   const policy = [
     'Nunca inventes precios, fechas ni estados.',
-    'En todas las llamadas, pedí activamente y confirmá exactamente: nombre, apellido, teléfono y motivo.',
-    'Si falta cualquiera de esos 4 datos, preguntá hasta completarlos (una pregunta por turno) antes de cotizar, agendar o transferir.',
+    'Si la consulta es únicamente el estado de un pedido u orden: llamá de inmediato a get_job_status (nunca get_client_status) con organization_id y phone; no pidas antes nombre, apellido, número de orden ni teléfono. La respuesta al cliente debe ser exactamente el texto primary_message_for_caller.',
+    'En el resto de las llamadas, pedí activamente y confirmá exactamente: nombre, apellido, teléfono y motivo.',
+    'Si falta cualquiera de esos 4 datos (en esos otros casos), preguntá hasta completarlos (una pregunta por turno) antes de cotizar, agendar o transferir.',
     'Luego de confirmar esos datos, llamá save_lead_info para persistir CRM.',
     'Obligatorio: si le decís al cliente que alguien del equipo lo va a contactar, que le mandarán presupuesto/cotización, o que lo llaman en un plazo (ej. 24 horas), antes de despedirte llamá create_follow_up con title, notes (pedido + datos), due_at en ISO-8601 (ej. mañana misma hora) y callback_required true. No prometas seguimiento sin ejecutar esa herramienta.',
     'Si no existe dato en base, dilo claramente y ofrece seguimiento.',
@@ -56,7 +57,7 @@ export function buildSystemPrompt(input: PromptInput): string {
     input.hasCatalog
       ? 'Para precios usa get_price_quote (service_name) o get_product_price (product_name): solo datos devueltos por la herramienta. Si must_confirm_price_with_team es true, un miembro del equipo debe confirmar.'
       : 'No hay catalogo cargado; no intentes cotizar.',
-    'Cuando uses get_job_status, la respuesta al cliente debe ser exactamente el texto de primary_message_for_caller (palabra por palabra). No inventes fechas, estados ni información adicional. Para consultar estado: get_job_status con organization_id, teléfono del cliente y opcionalmente job_number u order_number. Si hay varios jobs, usá primary_message_for_caller del primero o pedí aclaración.',
+    'get_job_status: opcionalmente job_number u order_number si el cliente los menciona; si hay varios jobs en la respuesta, usá primary_message_for_caller del primero o pedí aclaración. No inventes fechas ni estados.',
     ...(input.hasTransferPhone
       ? [
           ...transferRoutingRules(dest),
