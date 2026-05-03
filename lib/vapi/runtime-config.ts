@@ -44,6 +44,9 @@ export type VapiRuntimeConfig = {
     priceType: string | null
     estimatedOnly: boolean
   }>
+  /** Para armar el mismo prompt que `prompt` con otro `basePrompt` (ej. sync desde assistant_configs). */
+  hasCatalogForPrompt: boolean
+  hasTransferPhoneForPrompt: boolean
 }
 
 export async function getOrganizationRuntimeConfig(
@@ -109,6 +112,8 @@ export async function getOrganizationRuntimeConfig(
     organizationId,
     organizationDisplayName: displayName,
     prompt,
+    hasCatalogForPrompt: catalogRows.length > 0 || hasProductCatalog,
+    hasTransferPhoneForPrompt: hasTransferPhone,
     welcomeMessage:
       (aiRow?.welcome_message as string | null) ||
       'Hola, gracias por llamar. ¿En qué puedo ayudarte hoy?',

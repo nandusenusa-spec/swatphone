@@ -2,6 +2,7 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createClient } from '@/lib/supabase/server'
 import { createServiceRoleClient } from '@/lib/supabase/service-role'
 import { getOrganizationRuntimeConfig } from '@/lib/vapi/runtime-config'
+import { buildSystemPrompt } from '@/lib/vapi/prompts'
 import { openAiVoiceIdForLlmPipeline } from '@/lib/vapi/openai-voice-for-pipeline'
 import {
   buildPrepareWarmTransferServerTool,
@@ -242,34 +243,26 @@ export async function POST(request: NextRequest) {
       .eq('is_active', true)
       .limit(10)
 
-    // Build system prompt with context
-    let systemPrompt = config.system_prompt || ''
-    
+    const runtime = await getOrganizationRuntimeConfig(organizationId)
+
+    const basePrompt =
+      config.system_prompt?.trim() ||
+      'Eres un asistente de atencion telefonica empresarial.'
+
+    let systemPrompt = buildSystemPrompt({
+      basePrompt,
+      fallbackMessage: runtime.fallbackMessage,
+      hasCatalog: runtime.hasCatalogForPrompt,
+      hasTransferPhone: runtime.hasTransferPhoneForPrompt,
+      transferDestinations: runtime.transferPolicy.transferDestinations,
+    })
+
     if (faqs && faqs.length > 0) {
       systemPrompt += '\n\nPreguntas frecuentes:\n'
-      faqs.forEach(f => {
+      faqs.forEach((f) => {
         systemPrompt += `- ${f.question}: ${f.answer}\n`
       })
     }
-
-    const demoOrgId = '9bb50e58-9ba6-4d54-8171-13922749f570'
-    const orderStatusBlock =
-      organizationId === demoOrgId
-        ? '\n\nSi preguntan por el estado de su pedido u orden, llama inmediatamente a get_job_status con:\norganization_id = 9bb50e58-9ba6-4d54-8171-13922749f570\nphone = +18132303791.\nNo pidas nombre, teléfono ni número de orden.\nCuando la herramienta devuelva primary_message_for_caller, responde exactamente ese texto.\nNo uses get_client_status.\n\nEl nombre de la función expuesta al modelo es get_job_status. Si en el dashboard de Vapi ves una etiqueta genérica (p. ej. function_tool), usá igualmente la herramienta cuyo Server URL es el endpoint de estado de orden (get_job_status).'
-        : '\n\nSi preguntan por el estado de su pedido u orden, llama inmediatamente a get_job_status con organization_id (UUID de esta organización) y phone del cliente en formato E.164. No pidas nombre ni número de orden antes de llamar la herramienta si ya tenés el teléfono del llamante o los datos en contexto.\nCuando la herramienta devuelva primary_message_for_caller, responde exactamente ese texto.\nNo uses get_client_status.\n\nEl nombre de la función expuesta al modelo es get_job_status. Si en el dashboard ves function_tool u otra etiqueta, debe ser la herramienta de estado de orden enlazada a tu Server URL.'
-    systemPrompt += orderStatusBlock
-    systemPrompt +=
-      '\n\nEn llamadas que no sean únicamente una consulta de estado de pedido u orden, pedí activamente y confirmá estos datos: nombre, apellido, teléfono y motivo de la llamada. Si falta alguno, preguntá hasta completarlo (una pregunta por turno) antes de cotizar, agendar o transferir.'
-    systemPrompt +=
-      '\n\nSi preguntan por precio o disponibilidad de un producto/servicio, SIEMPRE llama get_product_price (o get_price_quote) antes de responder. No uses memoria, no adivines. Solo con el resultado de la herramienta decís si existe o no.'
-    systemPrompt +=
-      '\n\nDespués de confirmar nombre+apellido+teléfono+motivo, llama save_lead_info para guardar CRM. Si prometés presupuesto, cotización o contacto del equipo en un plazo, obligatorio llamar create_follow_up antes de despedirte (title, notes, due_at ISO, callback_required true). Alternativa: save_call_outcome con callback_required true al colgar. Si piden turno/agenda, llama create_appointment.'
-    systemPrompt +=
-      '\n\nSi el cliente pide hablar con humano, operador o un área interna: primero llama prepare_warm_transfer (incluyendo transfer_department o transfer_extension cuando aplique) y luego llama transfer_to_ramon. No digas que no puedes transferir sin intentar esas herramientas.'
-    systemPrompt +=
-      '\n\nConversation style requirements (mandatory): keep replies very brief; one short sentence at a time; ask one question at a time; no filler; conversational but professional.'
-
-    const runtime = await getOrganizationRuntimeConfig(organizationId)
     const persistentPrepare = buildPrepareWarmTransferServerTool(organizationId)
     const persistentTransfer = buildWarmTransferCallTool(runtime)
     const persistentTransferTools = [
