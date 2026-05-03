@@ -341,12 +341,14 @@ export async function createWorkOrder(input: {
   return data
 }
 
-type QuoteRow = {
+export type QuoteRow = {
   service_name: string
   unit_price: unknown
   currency: string | null
   description: string | null
   source: 'products' | 'organization_catalog' | 'price_catalog'
+  /** id de fila en `products` u otra tabla según `source` */
+  source_row_id: string | null
 }
 
 function catalogRowActive(r: Record<string, unknown>): boolean {
@@ -362,7 +364,7 @@ export async function getPriceQuote(input: { organizationId: string; serviceName
   // 1) Fuente principal: products (cargada desde /dashboard/products)
   const fromProducts = await supabase
     .from('products')
-    .select('name, price, currency, description, is_active')
+    .select('id, name, price, currency, description, is_active')
     .eq('organization_id', input.organizationId)
     .eq('is_active', true)
     .ilike('name', `%${term}%`)
@@ -379,6 +381,7 @@ export async function getPriceQuote(input: { organizationId: string; serviceName
         currency: (r.currency as string) || 'USD',
         description: (r.description as string) || null,
         source: 'products',
+        source_row_id: typeof r.id === 'string' ? r.id : null,
       }),
     )
   }
@@ -405,6 +408,7 @@ export async function getPriceQuote(input: { organizationId: string; serviceName
         currency: (r.currency as string) || 'USD',
         description: (r.description as string) || null,
         source: 'organization_catalog',
+        source_row_id: typeof r.id === 'string' ? r.id : null,
       }),
     )
   }
@@ -426,6 +430,7 @@ export async function getPriceQuote(input: { organizationId: string; serviceName
       currency: (r.currency as string) || 'USD',
       description: (r.description as string) || null,
       source: 'price_catalog',
+      source_row_id: typeof r.id === 'string' ? r.id : null,
     }),
   )
 }

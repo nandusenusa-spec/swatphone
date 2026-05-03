@@ -94,6 +94,7 @@ export async function executeToolHandler(
       return runGetPriceQuote({
         organizationId: context.organizationId,
         serviceName: String(args.service_name || ''),
+        logContext: { toolCallId: context.vapiCallId || null, toolName: 'get_price_quote' },
       })
     case 'get_product_price': {
       const name =
@@ -111,6 +112,7 @@ export async function executeToolHandler(
       return runGetPriceQuote({
         organizationId: context.organizationId,
         serviceName: name,
+        logContext: { toolCallId: context.vapiCallId || null, toolName: 'get_product_price' },
       })
     }
     case 'save_lead_info': {

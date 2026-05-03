@@ -18,7 +18,12 @@ import {
   upsertCustomerLeadInfo,
   upsertCallLog,
 } from '@/lib/voice-platform/repository'
-import { expandPriceLookupTerms } from '@/lib/voice-platform/price-lookup-terms'
+import {
+  expandPriceLookupTerms,
+  normalizeVoiceProductQuery,
+} from '@/lib/voice-platform/price-lookup-terms'
+import { logPriceLookup } from '@/lib/voice-platform/price-lookup-log'
+import type { QuoteRow } from '@/lib/voice-platform/repository'
 import { workOrderStatusForVoice } from '@/lib/voice-platform/work-order-voice'
 
 export async function runFindCustomer(input: {
@@ -138,9 +143,13 @@ export async function runCreateWorkOrder(input: {
 export async function runGetPriceQuote(input: {
   organizationId: string
   serviceName: string
+  logContext?: { toolCallId?: string | null; toolName?: string | null }
 }) {
+  const inputName = input.serviceName.trim()
+  const normalizedName = normalizeVoiceProductQuery(inputName)
   const terms = expandPriceLookupTerms(input.serviceName)
-  let rows: Awaited<ReturnType<typeof getPriceQuote>> = []
+  let rows: QuoteRow[] = []
+  let winningQuery = ''
   for (const term of terms) {
     const chunk = await getPriceQuote({
       organizationId: input.organizationId,
@@ -148,10 +157,41 @@ export async function runGetPriceQuote(input: {
     })
     if (chunk.length) {
       rows = chunk
+      winningQuery = term
       break
     }
   }
-  const quotes = rows.map((r: Record<string, unknown>) => ({
+
+  const first = rows[0]
+  const numericPrice = (v: unknown) => {
+    if (v == null) return NaN
+    if (typeof v === 'number') return v
+    const n = Number(v)
+    return Number.isFinite(n) ? n : NaN
+  }
+  const firstPrice = first ? numericPrice(first.unit_price) : NaN
+  const priceNeedsTeamConfirm =
+    Boolean(first) &&
+    (first.unit_price == null || !Number.isFinite(firstPrice) || firstPrice <= 0)
+
+  const mustConfirmPriceWithTeam =
+    rows.length === 0 || rows.length > 1 || (rows.length === 1 && priceNeedsTeamConfirm)
+
+  logPriceLookup({
+    toolCallId: input.logContext?.toolCallId,
+    toolName: input.logContext?.toolName,
+    inputName,
+    normalizedName,
+    lookupType: first?.source ?? 'none',
+    query: winningQuery || terms[0] || normalizedName || inputName,
+    found: rows.length > 0,
+    matchedProductId: first?.source === 'products' ? first.source_row_id : null,
+    matchedName: first?.service_name ?? null,
+    mustConfirmPriceWithTeam,
+    termsTried: terms,
+  })
+
+  const quotes = rows.map((r: QuoteRow) => ({
     service_name: r.service_name,
     unit_price: r.unit_price,
     currency: r.currency,
@@ -162,7 +202,7 @@ export async function runGetPriceQuote(input: {
   if (rows.length === 0) {
     const triedNote =
       terms.length > 1
-        ? ' Se probaron términos relacionados (p. ej. abreviaturas como BC → tarjetas / business cards).'
+        ? ' Se probaron términos relacionados (p. ej. cantidad + producto, BC, business cards, tarjetas).'
         : ''
     return {
       found: false,
@@ -183,6 +223,17 @@ export async function runGetPriceQuote(input: {
       must_confirm_price_with_team: true,
       assistant_instruction:
         'Hay varias coincidencias: leé nombre y precio tal cual vienen en quotes (sin redondear). Si el cliente no elige, pedí aclaración o ofrecé pasar con un asesor.',
+    }
+  }
+
+  if (priceNeedsTeamConfirm) {
+    return {
+      found: true,
+      match_count: 1,
+      quotes,
+      must_confirm_price_with_team: true,
+      assistant_instruction:
+        'Hay coincidencia en catálogo pero el precio no está confirmado o es referencial (p. ej. cotización por volumen). Decí que el equipo confirma el monto; no inventes cifra. Si aún no guardaste lead, usá save_lead_info y create_follow_up si prometés cotización.',
     }
   }
 

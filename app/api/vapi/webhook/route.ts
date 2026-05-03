@@ -404,6 +404,10 @@ async function handleToolCalls(request: NextRequest, flat: JsonRecord, rawBody: 
           ? await runGetPriceQuote({
               organizationId: orgId,
               serviceName,
+              logContext: {
+                toolCallId: getCallIdFromPayload(flat) || null,
+                toolName: name,
+              },
             })
           : { error: 'missing_required_fields', fields: ['product_name'] }
         result = JSON.stringify(out)
