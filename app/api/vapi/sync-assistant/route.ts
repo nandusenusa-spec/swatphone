@@ -227,35 +227,99 @@ function extractTopLevelToolsArrayFromAssistant(rec: Record<string, unknown>): u
   return Array.isArray(t) ? t : []
 }
 
-function postPatchAssistantToolsSummary(fetched: unknown) {
+/** Nombres que el sync envía en model.tools (baseline para comparar con GET). */
+const EXPECTED_SYNC_FUNCTION_TOOL_NAMES = [
+  'get_job_status',
+  'get_product_price',
+  'get_price_quote',
+  'save_lead_info',
+  'create_follow_up',
+  'prepare_warm_transfer',
+  'transfer_to_ramon',
+  'find_customer',
+  'save_call_outcome',
+  'create_appointment',
+  'create_work_order',
+] as const
+
+/** Un item de model.tools / assistant.tools: nombre de función o tipo nativo. */
+function toolDisplayNameFromVapiItem(item: unknown): string {
+  if (!item || typeof item !== 'object') return 'invalid_item'
+  const rec = item as Record<string, unknown>
+  const fn = rec.function
+  if (fn && typeof fn === 'object' && !Array.isArray(fn)) {
+    const n = (fn as Record<string, unknown>).name
+    if (typeof n === 'string' && n.trim()) return n.trim()
+  }
+  if (typeof rec.name === 'string' && rec.name.trim()) return rec.name.trim()
+  const typ = typeof rec.type === 'string' ? rec.type : 'unknown'
+  if (typ === 'transferCall') {
+    const inner = fn && typeof fn === 'object' && !Array.isArray(fn) ? (fn as Record<string, unknown>).name : null
+    return typeof inner === 'string' && inner.trim() ? inner.trim() : 'transferCall'
+  }
+  return typ
+}
+
+function toolNamesFromList(tools: unknown[]): string[] {
+  return tools.map((item) => toolDisplayNameFromVapiItem(item))
+}
+
+function modelToolsItemsPreview(tools: unknown[], max = 24): Array<{ index: number; type: string; name: string }> {
+  return tools.slice(0, max).map((item, index) => {
+    const rec = item && typeof item === 'object' ? (item as Record<string, unknown>) : {}
+    const typ = typeof rec.type === 'string' ? rec.type : 'unknown'
+    return { index, type: typ, name: toolDisplayNameFromVapiItem(item) }
+  })
+}
+
+type PostPatchToolsAuditOpts = {
+  /** true si el sync incluyó prepare/transfer en el payload */
+  transferToolsInPayload: boolean
+}
+
+function postPatchAssistantToolsSummary(fetched: unknown, opts: PostPatchToolsAuditOpts) {
   if (!fetched || typeof fetched !== 'object') {
     return { error: 'not_an_object' as const }
   }
   const rec = fetched as Record<string, unknown>
+  const model = rec.model && typeof rec.model === 'object' && !Array.isArray(rec.model) ? (rec.model as Record<string, unknown>) : null
   const modelTools = extractToolsArrayFromAssistantPayload(rec)
   const modelToolIds = extractModelToolIdsFromAssistant(rec)
   const topTools = extractTopLevelToolsArrayFromAssistant(rec)
   const modelToolNames = toolNamesFromList(modelTools)
   const topLevelToolNames = toolNamesFromList(topTools)
   const combined = [...new Set([...modelToolNames, ...topLevelToolNames])]
+
+  const expectedBaseline = [...EXPECTED_SYNC_FUNCTION_TOOL_NAMES].filter((name) => {
+    if (name === 'prepare_warm_transfer' || name === 'transfer_to_ramon') return opts.transferToolsInPayload
+    return true
+  })
+  const missingFromCombined = expectedBaseline.filter((n) => !combined.includes(n))
+  const expectedSet = new Set(expectedBaseline)
+  const unexpectedInCombined = combined.filter((n) => !expectedSet.has(n))
+
+  const toolIdsEmpty = modelToolIds == null || modelToolIds.length === 0
+
   return {
     model_tool_ids: modelToolIds,
+    model_tool_ids_empty: toolIdsEmpty,
     model_tools_count: modelTools.length,
     model_tool_names: modelToolNames,
+    model_tools_items_preview: modelToolsItemsPreview(modelTools),
     assistant_top_level_tools_count: topTools.length,
     assistant_top_level_tool_names: topLevelToolNames,
-    combined_tool_names: combined,
+    assistant_tools_items_preview: modelToolsItemsPreview(topTools),
+    combined_unique_function_names: combined,
+    expected_sync_tool_names: expectedBaseline,
+    missing_from_combined: missingFromCombined,
+    unexpected_in_combined: unexpectedInCombined,
+    vapi_ui_note:
+      'La pestaña Tools del dashboard suele listar sobre todo herramientas de Tools Library (model.toolIds). Las tools inline en model.tools pueden existir en runtime aunque no se listen todas en la UI.',
+    runtime_sanity:
+      missingFromCombined.length === 0
+        ? 'combined incluye todas las tools esperadas del sync'
+        : 'faltan nombres en GET respecto al sync: revisar si Vapi omitió model.tools en la respuesta o si el PATCH no persistió',
   }
-}
-
-function toolNamesFromList(tools: unknown[]): string[] {
-  return tools.map((item) => {
-    const rec = item && typeof item === 'object' ? (item as Record<string, unknown>) : {}
-    const fn = rec.function as Record<string, unknown> | undefined
-    if (typeof fn?.name === 'string') return fn.name
-    const typ = typeof rec.type === 'string' ? rec.type : 'unknown'
-    return typ === 'transferCall' ? 'transfer_to_ramon' : typ
-  })
 }
 
 function digestToolFromList(tools: unknown[], wantName: string): ToolDigest | null {
@@ -924,14 +988,25 @@ export async function POST(request: NextRequest) {
     }
 
     if (response.ok) {
+      const patchModel =
+        result &&
+        typeof result === 'object' &&
+        (result as Record<string, unknown>).model &&
+        typeof (result as Record<string, unknown>).model === 'object' &&
+        !Array.isArray((result as Record<string, unknown>).model)
+          ? ((result as Record<string, unknown>).model as Record<string, unknown>)
+          : null
+      const patchToolIds = patchModel?.toolIds
+      const patchTools = patchModel?.tools
       console.log('[vapi/sync-assistant] Vapi saved assistant', {
         organization_id: organizationId,
         assistant_id: result?.id || assistantId || null,
-        model_tool_names: (assistantConfig.model.tools as unknown[]).map((t) => {
-          const r = t as Record<string, unknown>
-          const fn = r.function as Record<string, unknown> | undefined
-          return typeof fn?.name === 'string' ? fn.name : (r.type as string) || 'unknown'
-        }),
+        patch_response_model_tool_ids: Array.isArray(patchToolIds)
+          ? patchToolIds.filter((x): x is string => typeof x === 'string')
+          : null,
+        patch_response_model_tools_count: Array.isArray(patchTools) ? patchTools.length : null,
+        patch_response_model_tool_names: Array.isArray(patchTools) ? toolNamesFromList(patchTools as unknown[]) : [],
+        model_tool_names_sent: (assistantConfig.model.tools as unknown[]).map((t) => toolDisplayNameFromVapiItem(t)),
       })
     }
 
@@ -989,10 +1064,36 @@ export async function POST(request: NextRequest) {
         httpStatus: postPatchGetStatus,
         ...summary,
       })
-      console.log(
-        '[vapi/sync-assistant] postPatchAssistantSummary',
-        postPatchAssistantToolsSummary(postPatchFetched),
-      )
+      const toolsAudit = postPatchAssistantToolsSummary(postPatchFetched, {
+        transferToolsInPayload: persistentTransferTools.length > 0,
+      })
+      console.log('[vapi/sync-assistant] postPatchAssistantSummary', toolsAudit)
+      const recFetched = postPatchFetched as Record<string, unknown>
+      const modelFetched =
+        recFetched.model && typeof recFetched.model === 'object' && !Array.isArray(recFetched.model)
+          ? (recFetched.model as Record<string, unknown>)
+          : null
+      const mtFetched = modelFetched?.tools
+      if (Array.isArray(mtFetched)) {
+        console.log('[vapi/sync-assistant] post_patch_model_tools_json_preview', {
+          byte_length_estimate: JSON.stringify(mtFetched).length,
+          preview: clipText(JSON.stringify(mtFetched), 14000),
+        })
+      } else {
+        console.warn('[vapi/sync-assistant] post_patch_model_tools_missing', {
+          model_has_tools_key: modelFetched ? Object.prototype.hasOwnProperty.call(modelFetched, 'tools') : false,
+          model_tools_type: mtFetched == null ? 'null_undefined' : typeof mtFetched,
+        })
+      }
+      if (toolsAudit && typeof toolsAudit === 'object' && !('error' in toolsAudit)) {
+        const a = toolsAudit as Record<string, unknown>
+        if (Array.isArray(a.missing_from_combined) && a.missing_from_combined.length > 0) {
+          console.warn('[vapi/sync-assistant] post_patch_tools_missing_vs_expected', {
+            missing_from_combined: a.missing_from_combined,
+            hint: 'Si model.tools en GET está vacío pero el PATCH lo envió, puede ser omisión en la respuesta GET de Vapi. Si faltan en runtime, valorar Tools Library + model.toolIds.',
+          })
+        }
+      }
       console.log('[vapi/sync-assistant] post_patch_get_job_status_required_explicit', {
         parametersRequired: postGjs?.parametersRequired ?? null,
         parametersRequiredJSON: JSON.stringify(postGjs?.parametersRequired ?? null),
