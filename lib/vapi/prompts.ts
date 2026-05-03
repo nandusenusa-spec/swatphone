@@ -7,6 +7,8 @@ type PromptInput = {
   hasCatalog: boolean
   hasTransferPhone: boolean
   transferDestinations?: TransferDestination[]
+  /** UUID del tenant: se inyecta en reglas de get_job_status para que el modelo no invente el valor. */
+  organizationId?: string
 }
 
 function transferRoutingRules(destinations: TransferDestination[]): string[] {
@@ -45,10 +47,15 @@ export function buildSystemPrompt(input: PromptInput): string {
       ? `\nTransferencias internas:\n${transferDestinationsSummary(dest)}.`
       : ''
 
+  const orgId = input.organizationId?.trim()
+  const jobStatusOrgLine = orgId
+    ? `(1) Si preguntan por el estado de un pedido u orden: llamá de inmediato a get_job_status (nunca get_client_status) sin pedir datos al cliente. Podés invocar get_job_status sin argumentos o solo con job_number u order_number si el cliente los menciona. El servidor usa organization_id ${orgId} y el teléfono del llamante automáticamente. Respondé al cliente únicamente con el texto primary_message_for_caller que devuelva la herramienta.`
+    : '(1) Si preguntan por el estado de un pedido u orden: llamá de inmediato a get_job_status (nunca get_client_status) sin pedir nombre ni teléfono. Podés invocar get_job_status sin argumentos; el servidor completa organization_id y teléfono del llamante si están configurados. Respondé con exactamente primary_message_for_caller.'
+
   const policy = [
     'Nunca inventes precios, fechas ni estados.',
     'Cliente existente vs nuevo (seguí este orden; no contradigas reglas posteriores):',
-    '(1) Si preguntan por el estado de un pedido u orden: llamá de inmediato a get_job_status (nunca get_client_status) con organization_id = UUID de esta organización y phone en E.164 (del llamante o contexto). No pidas nombre, teléfono ni ningún dato antes. Al hablar con el cliente, usá exactamente el texto primary_message_for_caller.',
+    jobStatusOrgLine,
     '(2) Si get_job_status devuelve found true: el cliente es existente para este fin. No pidas nombre, teléfono ni motivo salvo que el cliente pida otro trámite distinto del estado.',
     '(3) Si get_job_status devuelve found false (sin pedido / not_found): tratá al cliente como nuevo. Pedí nombre, teléfono y motivo de la llamada (una pregunta por turno); cuando los tengas, llamá save_lead_info.',
     '(4) Si la consulta no es sobre estado de pedido: no llames get_job_status hasta que el cliente lo pida. Para cotizar, agendar o transferir, si aún no tenés nombre, teléfono y motivo confirmados, pedilos (una pregunta por turno) y luego save_lead_info cuando corresponda.',
@@ -58,7 +65,9 @@ export function buildSystemPrompt(input: PromptInput): string {
     input.hasCatalog
       ? 'Para precios usa get_price_quote (service_name) o get_product_price (product_name): solo datos devueltos por la herramienta. Si must_confirm_price_with_team es true, un miembro del equipo debe confirmar.'
       : 'No hay catalogo cargado; no intentes cotizar.',
-    'get_job_status: usá organization_id de esta organización; opcionalmente job_number u order_number si el cliente los menciona; si la respuesta lista varios jobs, usá primary_message_for_caller del primero o pedí aclaración.',
+    orgId
+      ? `get_job_status: organization_id del tenant es ${orgId} (no lo pidas al cliente). phone lo infiere el servidor. Opcional: job_number u order_number si el cliente los dice. Si hay varios jobs, usá primary_message_for_caller del primero o pedí aclaración.`
+      : 'get_job_status: no pidas organization_id ni phone al cliente; el servidor los completa cuando estén configurados. Opcional: job_number u order_number.',
     ...(input.hasTransferPhone
       ? [
           ...transferRoutingRules(dest),

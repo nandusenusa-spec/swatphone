@@ -7,8 +7,19 @@ import { runGetJobStatus } from '@/lib/voice-platform/service'
 
 type JsonRecord = Record<string, unknown>
 
-/** Fallback temporal demo si Vapi no envía caller phone en el envelope (quitar cuando producción estable). */
+/** Fallback temporal si no hay Caller ID en el envelope (quitar cuando producción estable). */
 const DEMO_PHONE_FALLBACK = '+17868673165'
+
+const UUID_RE =
+  /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
+function defaultOrgIdForJobStatusTool(): string {
+  return (
+    process.env.DEFAULT_GET_JOB_STATUS_ORGANIZATION_ID?.trim() ||
+    process.env.VAPI_DEFAULT_ORGANIZATION_ID?.trim() ||
+    ''
+  )
+}
 
 function asRecord(value: unknown): JsonRecord | null {
   return value && typeof value === 'object' && !Array.isArray(value)
@@ -16,7 +27,6 @@ function asRecord(value: unknown): JsonRecord | null {
     : null
 }
 
-/** Misma forma que en /api/vapi/webhook para leer message.* al nivel raíz. */
 function flattenVapiBody(body: JsonRecord): JsonRecord {
   const msg = body.message
   if (!msg || typeof msg !== 'object') return body
@@ -45,16 +55,26 @@ function isVapiToolCallsPayload(flat: JsonRecord): boolean {
   return flat.type === 'tool-calls' && Array.isArray(flat.toolCallList)
 }
 
-/**
- * Orden: args.phone → payload flatten (call / message.call / customer) → body crudo.
- * Normaliza a E.164; si sigue vacío, log técnico + fallback demo.
- */
+/** Respuesta estable para el assistant: siempre found + primary_message_for_caller cuando aplique. */
+function toolErrorResult(input: {
+  error: string
+  primary_message_for_caller: string
+  details?: unknown
+}) {
+  return {
+    found: false as const,
+    primary_message_for_caller: input.primary_message_for_caller,
+    error: input.error,
+    ...(input.details !== undefined ? { details: input.details } : {}),
+  }
+}
+
 function resolvePhoneForJobStatusTool(input: {
   args: JsonRecord
   flat: JsonRecord
   rawBody: JsonRecord
   toolCallId: string
-}): string {
+}): { phone: string; usedDemoFallback: boolean; phoneSource: 'args' | 'payload' | 'demo_fallback' } {
   const argRaw = typeof input.args.phone === 'string' ? input.args.phone.trim() : ''
   const fromFlat = getCallerPhoneFromPayload(input.flat) || ''
   const fromBody = getCallerPhoneFromPayload(input.rawBody) || ''
@@ -76,9 +96,137 @@ function resolvePhoneForJobStatusTool(input: {
       toolCallId: input.toolCallId,
       fallback: DEMO_PHONE_FALLBACK,
     })
+    return { phone: normalized, usedDemoFallback: true, phoneSource: 'demo_fallback' }
   }
 
-  return normalized
+  const phoneSource: 'args' | 'payload' = argRaw ? 'args' : 'payload'
+  return { phone: normalized, usedDemoFallback: false, phoneSource }
+}
+
+function resolveOrganizationIdForTool(
+  args: JsonRecord,
+  toolCallId: string,
+): { organizationId: string | null; orgSource: 'args' | 'env' } {
+  let raw = typeof args.organization_id === 'string' ? args.organization_id.trim() : ''
+  if (raw && !UUID_RE.test(raw)) {
+    console.warn('[vapi/tools/get-job-status] invalid_organization_id_arg_ignored', {
+      toolCallId,
+      preview: raw.slice(0, 24),
+    })
+    raw = ''
+  }
+  if (raw) return { organizationId: raw, orgSource: 'args' }
+
+  const fromEnv = defaultOrgIdForJobStatusTool()
+  if (fromEnv && UUID_RE.test(fromEnv)) {
+    return { organizationId: fromEnv, orgSource: 'env' }
+  }
+  if (fromEnv) {
+    console.error('[vapi/tools/get-job-status] invalid_default_org_env', {
+      preview: fromEnv.slice(0, 24),
+    })
+  }
+  console.error('[vapi/tools/get-job-status] missing_organization_id', { toolCallId })
+  return { organizationId: null, orgSource: 'env' }
+}
+
+function safeArgsKeys(args: JsonRecord): string[] {
+  try {
+    return Object.keys(args).slice(0, 32)
+  } catch {
+    return []
+  }
+}
+
+async function executeGetJobStatusForTool(input: {
+  args: JsonRecord
+  flat: JsonRecord
+  rawBody: JsonRecord
+  toolCallId: string
+  name: string
+}) {
+  const { toolCallId, name, args, flat, rawBody } = input
+
+  console.info('[vapi/tools/get-job-status] tool_call_args', {
+    toolCallId,
+    argKeys: safeArgsKeys(args),
+  })
+
+  const { organizationId, orgSource } = resolveOrganizationIdForTool(args, toolCallId)
+  const { phone, usedDemoFallback, phoneSource } = resolvePhoneForJobStatusTool({
+    args,
+    flat,
+    rawBody,
+    toolCallId,
+  })
+
+  console.info('[vapi/tools/get-job-status] resolution', {
+    toolCallId,
+    orgSource,
+    hasOrganizationId: Boolean(organizationId),
+    phoneSource,
+    usedDemoFallback,
+    runGetJobStatus_preview: organizationId ? 'pending' : 'skipped',
+  })
+
+  if (!organizationId) {
+    const payload = toolErrorResult({
+      error: 'missing_organization_id',
+      primary_message_for_caller:
+        'No pudimos consultar el estado en este momento. Te comunicamos con un asesor.',
+    })
+    return { toolCallId, name, result: JSON.stringify(payload) }
+  }
+
+  const jn = typeof args.job_number === 'string' ? args.job_number.trim() : ''
+  const on = typeof args.order_number === 'string' ? args.order_number.trim() : ''
+  const jobNumRaw = jn || on || undefined
+
+  const parsed = GetJobStatusSchema.safeParse({
+    organization_id: organizationId,
+    job_number: jobNumRaw,
+    phone,
+  })
+
+  if (!parsed.success) {
+    const payload = toolErrorResult({
+      error: 'invalid_payload',
+      primary_message_for_caller:
+        'No pudimos validar la consulta. Pedí hablar con un asesor o intentá de nuevo.',
+      details: parsed.error.flatten(),
+    })
+    console.warn('[vapi/tools/get-job-status] zod_invalid_payload', {
+      toolCallId,
+      issues: parsed.error.flatten(),
+    })
+    return { toolCallId, name, result: JSON.stringify(payload) }
+  }
+
+  try {
+    const out = await runGetJobStatus({
+      organizationId: parsed.data.organization_id,
+      jobNumber: parsed.data.job_number,
+      phone: parsed.data.phone,
+    })
+    console.info('[vapi/tools/get-job-status] runGetJobStatus_ok', {
+      toolCallId,
+      found: out.found,
+      orgSource,
+      phoneSource,
+    })
+    return { toolCallId, name, result: JSON.stringify(out) }
+  } catch (err) {
+    console.error('[vapi/tools/get-job-status] runGetJobStatus_failed', {
+      toolCallId,
+      message: err instanceof Error ? err.message : String(err),
+    })
+    const payload = toolErrorResult({
+      error: 'internal_error',
+      primary_message_for_caller:
+        'Hubo un problema al consultar tu pedido. Te contactamos en breve.',
+    })
+    return { toolCallId, name, result: JSON.stringify(payload) }
+  }
 }
 
 async function handleVapiToolCalls(rawBody: JsonRecord, flat: JsonRecord) {
@@ -106,75 +254,143 @@ async function handleVapiToolCalls(rawBody: JsonRecord, flat: JsonRecord) {
         }
       }
 
-      const phone = resolvePhoneForJobStatusTool({
+      return executeGetJobStatusForTool({
         args,
         flat,
         rawBody,
         toolCallId,
+        name,
       })
-
-      const orgArg = typeof args.organization_id === 'string' ? args.organization_id.trim() : ''
-
-      const parsed = GetJobStatusSchema.safeParse({
-        organization_id: orgArg,
-        job_number: typeof args.job_number === 'string' ? args.job_number : undefined,
-        phone,
-      })
-
-      if (!parsed.success) {
-        return {
-          toolCallId,
-          name,
-          result: JSON.stringify({
-            error: 'invalid_payload',
-            details: parsed.error.flatten(),
-          }),
-        }
-      }
-
-      const out = await runGetJobStatus({
-        organizationId: parsed.data.organization_id,
-        jobNumber: parsed.data.job_number,
-        phone: parsed.data.phone,
-      })
-      return { toolCallId, name, result: JSON.stringify(out) }
     }),
   )
 
-  return NextResponse.json({ results })
+  return NextResponse.json({ results }, { status: 200 })
 }
 
 export async function POST(request: NextRequest) {
+  let body: JsonRecord
   try {
-    const body = (await request.json()) as JsonRecord
+    body = (await request.json()) as JsonRecord
+  } catch {
+    return NextResponse.json(
+      toolErrorResult({
+        error: 'invalid_json',
+        primary_message_for_caller:
+          'No pudimos procesar la consulta. Intentá de nuevo o pedí un asesor.',
+      }),
+      { status: 200 },
+    )
+  }
+
+  try {
     const flat = flattenVapiBody(body)
 
     if (isVapiToolCallsPayload(flat)) {
       return handleVapiToolCalls(body, flat)
     }
 
-    const phone = resolvePhoneForJobStatusTool({
+    const toolCallId = 'flat_json'
+    console.info('[vapi/tools/get-job-status] flat_body_keys', {
+      toolCallId,
+      keys: safeArgsKeys(body),
+    })
+
+    const { organizationId, orgSource } = resolveOrganizationIdForTool(body, toolCallId)
+    const { phone, phoneSource, usedDemoFallback } = resolvePhoneForJobStatusTool({
       args: body,
       flat,
       rawBody: body,
-      toolCallId: 'flat_json',
+      toolCallId,
     })
 
-    const payload = GetJobStatusSchema.parse({
-      ...body,
+    console.info('[vapi/tools/get-job-status] resolution', {
+      toolCallId,
+      orgSource,
+      hasOrganizationId: Boolean(organizationId),
+      phoneSource,
+      usedDemoFallback,
+    })
+
+    if (!organizationId) {
+      return NextResponse.json(
+        toolErrorResult({
+          error: 'missing_organization_id',
+          primary_message_for_caller:
+            'No pudimos consultar el estado en este momento. Te comunicamos con un asesor.',
+        }),
+        { status: 200 },
+      )
+    }
+
+    const jf = typeof body.job_number === 'string' ? body.job_number.trim() : ''
+    const of = typeof body.order_number === 'string' ? body.order_number.trim() : ''
+    const jobNumFlat = jf || of || undefined
+
+    const parsed = GetJobStatusSchema.safeParse({
+      organization_id: organizationId,
+      job_number: jobNumFlat,
       phone,
     })
-    const result = await runGetJobStatus({
-      organizationId: payload.organization_id,
-      jobNumber: payload.job_number,
-      phone: payload.phone,
-    })
-    return NextResponse.json(result)
+
+    if (!parsed.success) {
+      return NextResponse.json(
+        toolErrorResult({
+          error: 'invalid_payload',
+          primary_message_for_caller:
+            'No pudimos validar la consulta. Pedí hablar con un asesor o intentá de nuevo.',
+          details: parsed.error.flatten(),
+        }),
+        { status: 200 },
+      )
+    }
+
+    try {
+      const result = await runGetJobStatus({
+        organizationId: parsed.data.organization_id,
+        jobNumber: parsed.data.job_number,
+        phone: parsed.data.phone,
+      })
+      console.info('[vapi/tools/get-job-status] runGetJobStatus_ok', {
+        toolCallId,
+        found: result.found,
+        orgSource,
+        phoneSource,
+      })
+      return NextResponse.json(result, { status: 200 })
+    } catch (err) {
+      console.error('[vapi/tools/get-job-status] runGetJobStatus_failed', {
+        toolCallId,
+        message: err instanceof Error ? err.message : String(err),
+      })
+      return NextResponse.json(
+        toolErrorResult({
+          error: 'internal_error',
+          primary_message_for_caller:
+            'Hubo un problema al consultar tu pedido. Te contactamos en breve.',
+        }),
+        { status: 200 },
+      )
+    }
   } catch (error) {
     if (error instanceof ZodError) {
-      return NextResponse.json({ error: 'invalid_payload', details: error.flatten() }, { status: 400 })
+      return NextResponse.json(
+        toolErrorResult({
+          error: 'invalid_payload',
+          primary_message_for_caller:
+            'No pudimos validar la consulta. Pedí hablar con un asesor o intentá de nuevo.',
+          details: error.flatten(),
+        }),
+        { status: 200 },
+      )
     }
     console.error('[vapi/tools/get-job-status] failed', error)
-    return NextResponse.json({ error: 'internal_error' }, { status: 500 })
+    return NextResponse.json(
+      toolErrorResult({
+        error: 'internal_error',
+        primary_message_for_caller:
+          'Hubo un problema al consultar tu pedido. Te contactamos en breve.',
+      }),
+      { status: 200 },
+    )
   }
 }

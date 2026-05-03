@@ -255,6 +255,7 @@ export async function POST(request: NextRequest) {
       hasCatalog: runtime.hasCatalogForPrompt,
       hasTransferPhone: runtime.hasTransferPhoneForPrompt,
       transferDestinations: runtime.transferPolicy.transferDestinations,
+      organizationId,
     })
 
     if (faqs && faqs.length > 0) {
@@ -311,23 +312,23 @@ export async function POST(request: NextRequest) {
         type: 'function',
         function: {
           name: 'get_job_status',
-          description:
-            'Estado del pedido u orden. Llamar en cuanto el cliente pregunte por estado; usar organization_id y phone indicados en el system prompt (o UUID de esta org + E.164). No usar get_client_status.',
+          description: `Estado del pedido u orden. Llamar apenas el cliente pregunte por estado; no pedir datos antes. organization_id y phone son opcionales: el servidor usa por defecto ${organizationId} y el teléfono del llamante (Caller ID). Opcional: job_number u order_number si el cliente los menciona. No usar get_client_status.`,
           parameters: {
             type: 'object',
             properties: {
               organization_id: {
                 type: 'string',
-                description: 'UUID de la organización (ver instrucciones del asistente).',
+                description: `Opcional. UUID de la organización; si se omite, el servidor usa ${organizationId}.`,
               },
               phone: {
                 type: 'string',
-                description: 'Teléfono del cliente en E.164 (ver instrucciones del asistente).',
+                description:
+                  'Opcional. E.164; si se omite, el servidor infiere el número del llamante desde la llamada.',
               },
               job_number: { type: 'string' },
               order_number: { type: 'string' },
             },
-            required: ['organization_id', 'phone'],
+            required: [],
           },
         },
       },

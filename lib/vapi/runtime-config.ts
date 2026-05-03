@@ -103,6 +103,7 @@ export async function getOrganizationRuntimeConfig(
     hasCatalog: catalogRows.length > 0 || hasProductCatalog,
     hasTransferPhone,
     transferDestinations,
+    organizationId,
   })
 
   const displayName =

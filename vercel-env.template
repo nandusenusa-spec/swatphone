@@ -61,3 +61,6 @@ POSTGRES_PRISMA_URL=
 # --- Esta app ---
 ADMIN_TOKEN_SECRET=
 INTERNAL_API_KEY=
+# Opcional: si Vapi no manda organization_id en get_job_status, el endpoint usa este UUID (misma org que el número).
+DEFAULT_GET_JOB_STATUS_ORGANIZATION_ID=
+# Alias aceptado: VAPI_DEFAULT_ORGANIZATION_ID
