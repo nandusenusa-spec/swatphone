@@ -212,6 +212,42 @@ function extractToolsArrayFromAssistantPayload(a: Record<string, unknown>): unkn
   return []
 }
 
+/** IDs de Tools Library en `model.toolIds` (Vapi permite `model.tools` + `model.toolIds` a la vez). */
+function extractModelToolIdsFromAssistant(rec: Record<string, unknown>): string[] | null {
+  const model = rec.model
+  if (!model || typeof model !== 'object' || Array.isArray(model)) return null
+  const ids = (model as Record<string, unknown>).toolIds
+  if (!Array.isArray(ids)) return null
+  const out = ids.filter((x): x is string => typeof x === 'string' && x.trim().length > 0)
+  return out.length ? out : null
+}
+
+function extractTopLevelToolsArrayFromAssistant(rec: Record<string, unknown>): unknown[] {
+  const t = rec.tools
+  return Array.isArray(t) ? t : []
+}
+
+function postPatchAssistantToolsSummary(fetched: unknown) {
+  if (!fetched || typeof fetched !== 'object') {
+    return { error: 'not_an_object' as const }
+  }
+  const rec = fetched as Record<string, unknown>
+  const modelTools = extractToolsArrayFromAssistantPayload(rec)
+  const modelToolIds = extractModelToolIdsFromAssistant(rec)
+  const topTools = extractTopLevelToolsArrayFromAssistant(rec)
+  const modelToolNames = toolNamesFromList(modelTools)
+  const topLevelToolNames = toolNamesFromList(topTools)
+  const combined = [...new Set([...modelToolNames, ...topLevelToolNames])]
+  return {
+    model_tool_ids: modelToolIds,
+    model_tools_count: modelTools.length,
+    model_tool_names: modelToolNames,
+    assistant_top_level_tools_count: topTools.length,
+    assistant_top_level_tool_names: topLevelToolNames,
+    combined_tool_names: combined,
+  }
+}
+
 function toolNamesFromList(tools: unknown[]): string[] {
   return tools.map((item) => {
     const rec = item && typeof item === 'object' ? (item as Record<string, unknown>) : {}
@@ -264,6 +300,7 @@ function summarizeAssistantFromVapi(a: unknown) {
       ? {
           provider: typeof model.provider === 'string' ? model.provider : null,
           model: typeof model.model === 'string' ? model.model : null,
+          toolIds: extractModelToolIdsFromAssistant(rec),
         }
       : null,
     systemPromptPreview: sysRaw ? clipText(sysRaw, 500) : null,
@@ -722,6 +759,44 @@ export async function POST(request: NextRequest) {
     ]
 
     const modelTools = [...persistentTransferTools, ...staticFunctionTools]
+
+    /** Si no reenviamos `model.toolIds`, Vapi puede dejarlos en null al publicar aunque mandemos `model.tools`. */
+    let preExistingModelToolIds: string[] | undefined
+    if (assistantId) {
+      try {
+        const preGetRes = await fetch(`https://api.vapi.ai/assistant/${assistantId}`, {
+          method: 'GET',
+          headers: { Authorization: `Bearer ${vapiApiKey}` },
+        })
+        if (preGetRes.ok) {
+          const preJson = (await preGetRes.json()) as Record<string, unknown>
+          const modelPre =
+            preJson.model && typeof preJson.model === 'object' && !Array.isArray(preJson.model)
+              ? (preJson.model as Record<string, unknown>)
+              : null
+          const rawIds = modelPre?.toolIds
+          if (Array.isArray(rawIds)) {
+            const cleaned = rawIds.filter(
+              (x): x is string => typeof x === 'string' && x.trim().length > 0,
+            )
+            if (cleaned.length) preExistingModelToolIds = cleaned
+          }
+        } else {
+          console.warn('[vapi/sync-assistant] pre_patch_get_assistant_for_tool_ids_http', {
+            httpStatus: preGetRes.status,
+            assistant_id: assistantId,
+          })
+        }
+      } catch (e) {
+        console.warn('[vapi/sync-assistant] pre_patch_get_assistant_for_tool_ids_failed', e)
+      }
+    }
+    console.log('[vapi/sync-assistant] pre_patch_preserved_model_tool_ids', {
+      assistant_id: assistantId || null,
+      count: preExistingModelToolIds?.length ?? 0,
+      tool_ids: preExistingModelToolIds ?? null,
+    })
+
     // Anthropic model: OpenAI "coral" is realtime-only on Vapi; use assistant_configs.voice_id or alloy.
     const chosenVoiceProvider = 'openai'
     const chosenVoiceId = openAiVoiceIdForLlmPipeline(
@@ -736,17 +811,23 @@ export async function POST(request: NextRequest) {
     const maxTokensNum = Number(config.max_tokens || 110)
     const maxTokens = Number.isFinite(maxTokensNum) ? Math.min(Math.max(maxTokensNum, 80), 140) : 110
 
-    // Vapi assistant configuration (tools only under model.tools; top-level model_tools is rejected by the API)
+    // Vapi: `model.tools` (inline/transient) y `model.toolIds` (Tools Library) pueden ir juntos; no enviar toolIds: null.
+    const modelForVapi: Record<string, unknown> = {
+      provider: 'anthropic',
+      model: 'claude-haiku-4-5-20251001',
+      temperature:
+        typeof config.temperature === 'number' ? Math.min(Math.max(config.temperature, 0), 0.3) : 0.15,
+      maxTokens,
+      systemPrompt,
+      tools: modelTools,
+    }
+    if (preExistingModelToolIds && preExistingModelToolIds.length > 0) {
+      modelForVapi.toolIds = preExistingModelToolIds
+    }
+
     const assistantConfig = {
       name: config.name,
-      model: {
-        provider: 'anthropic',
-        model: 'claude-haiku-4-5-20251001',
-        temperature: typeof config.temperature === 'number' ? Math.min(Math.max(config.temperature, 0), 0.3) : 0.15,
-        maxTokens,
-        systemPrompt,
-        tools: modelTools,
-      },
+      model: modelForVapi,
       voice: {
         provider: chosenVoiceProvider,
         voiceId: chosenVoiceId,
@@ -760,6 +841,13 @@ export async function POST(request: NextRequest) {
       serverUrl: `${appBase}/api/voice/events?organization_id=${organizationId}`,
       serverUrlSecret: process.env.VAPI_WEBHOOK_SECRET,
     }
+
+    console.log('[vapi/sync-assistant] patch_payload_model_tool_preview', {
+      model_tool_count: modelTools.length,
+      model_tool_ids_in_payload: extractModelToolIdsFromAssistant({
+        model: assistantConfig.model,
+      } as Record<string, unknown>),
+    })
 
     const prePatchGjs = digestToolFromList(assistantConfig.model.tools as unknown[], 'get_job_status')
     const prePatchFind = digestToolFromList(assistantConfig.model.tools as unknown[], 'find_customer')
@@ -891,6 +979,10 @@ export async function POST(request: NextRequest) {
         httpStatus: postPatchGetStatus,
         ...summary,
       })
+      console.log(
+        '[vapi/sync-assistant] postPatchAssistantSummary',
+        postPatchAssistantToolsSummary(postPatchFetched),
+      )
       console.log('[vapi/sync-assistant] post_patch_get_job_status_required_explicit', {
         parametersRequired: postGjs?.parametersRequired ?? null,
         parametersRequiredJSON: JSON.stringify(postGjs?.parametersRequired ?? null),
