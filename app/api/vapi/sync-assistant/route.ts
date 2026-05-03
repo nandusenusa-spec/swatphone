@@ -135,6 +135,181 @@ function conciseFirstMessage(raw: unknown): string {
   return 'Hello, this is SWATWORKS. How can I help?'
 }
 
+function clipText(text: string, max: number): string {
+  if (text.length <= max) return text
+  return `${text.slice(0, max)}…`
+}
+
+type ToolDigest = {
+  functionName: string
+  description: string | null
+  parametersRequired: unknown
+  phoneDescription: string | null
+  organizationIdDescription: string | null
+  serverUrl: string | null
+}
+
+function digestFunctionToolItem(item: unknown, wantName: string): ToolDigest | null {
+  const rec = item && typeof item === 'object' ? (item as Record<string, unknown>) : null
+  if (!rec) return null
+  const fn = rec.function as Record<string, unknown> | undefined
+  const name = typeof fn?.name === 'string' ? fn.name : ''
+  if (name !== wantName) return null
+  const desc = typeof fn.description === 'string' ? fn.description : null
+  const params = fn.parameters as Record<string, unknown> | undefined
+  const props = params?.properties as Record<string, unknown> | undefined
+  let phoneDescription: string | null = null
+  let organizationIdDescription: string | null = null
+  const phoneProp = props?.phone
+  if (phoneProp && typeof phoneProp === 'object' && phoneProp !== null) {
+    const d = (phoneProp as Record<string, unknown>).description
+    phoneDescription = typeof d === 'string' ? d : null
+  }
+  const orgProp = props?.organization_id
+  if (orgProp && typeof orgProp === 'object' && orgProp !== null) {
+    const d = (orgProp as Record<string, unknown>).description
+    organizationIdDescription = typeof d === 'string' ? d : null
+  }
+  const server = rec.server as Record<string, unknown> | undefined
+  const serverUrl = typeof server?.url === 'string' ? server.url : null
+  return {
+    functionName: name,
+    description: desc,
+    parametersRequired: params?.required ?? null,
+    phoneDescription,
+    organizationIdDescription,
+    serverUrl,
+  }
+}
+
+function extractToolsArrayFromAssistantPayload(a: Record<string, unknown>): unknown[] {
+  const model = a.model
+  if (model && typeof model === 'object' && !Array.isArray(model)) {
+    const m = model as Record<string, unknown>
+    const tools = m.tools
+    if (Array.isArray(tools)) return tools
+  }
+  return []
+}
+
+function toolNamesFromList(tools: unknown[]): string[] {
+  return tools.map((item) => {
+    const rec = item && typeof item === 'object' ? (item as Record<string, unknown>) : {}
+    const fn = rec.function as Record<string, unknown> | undefined
+    if (typeof fn?.name === 'string') return fn.name
+    const typ = typeof rec.type === 'string' ? rec.type : 'unknown'
+    return typ === 'transferCall' ? 'transfer_to_ramon' : typ
+  })
+}
+
+function digestToolFromList(tools: unknown[], wantName: string): ToolDigest | null {
+  for (const t of tools) {
+    const d = digestFunctionToolItem(t, wantName)
+    if (d) return d
+  }
+  return null
+}
+
+function summarizeAssistantFromVapi(a: unknown) {
+  if (!a || typeof a !== 'object') {
+    return { error: 'not_an_object' as const }
+  }
+  const rec = a as Record<string, unknown>
+  const model = rec.model as Record<string, unknown> | undefined
+  const tools = extractToolsArrayFromAssistantPayload(rec)
+  const serverUrl =
+    typeof rec.serverUrl === 'string'
+      ? rec.serverUrl
+      : typeof rec.server_url === 'string'
+        ? rec.server_url
+        : null
+  const firstRaw =
+    typeof rec.firstMessage === 'string'
+      ? rec.firstMessage
+      : typeof rec.first_message === 'string'
+        ? rec.first_message
+        : null
+  const sysRaw =
+    model && typeof model.systemPrompt === 'string'
+      ? model.systemPrompt
+      : model && typeof model.system_prompt === 'string'
+        ? model.system_prompt
+        : null
+  return {
+    id: typeof rec.id === 'string' ? rec.id : null,
+    name: typeof rec.name === 'string' ? rec.name : null,
+    serverUrl,
+    firstMessagePreview: firstRaw ? clipText(firstRaw, 160) : null,
+    model: model
+      ? {
+          provider: typeof model.provider === 'string' ? model.provider : null,
+          model: typeof model.model === 'string' ? model.model : null,
+        }
+      : null,
+    systemPromptPreview: sysRaw ? clipText(sysRaw, 500) : null,
+    toolNames: toolNamesFromList(tools),
+    get_job_status: digestToolFromList(tools, 'get_job_status'),
+    find_customer: (() => {
+      const d = digestToolFromList(tools, 'find_customer')
+      if (!d) return null
+      return {
+        descriptionPreview: d.description ? clipText(d.description, 280) : null,
+        parametersRequired: d.parametersRequired,
+      }
+    })(),
+  }
+}
+
+async function fetchVapiPhoneNumbersForSync(vapiApiKey: string, syncedAssistantId: string) {
+  const res = await fetch('https://api.vapi.ai/phone-number?limit=100', {
+    headers: { Authorization: `Bearer ${vapiApiKey}` },
+  })
+  if (!res.ok) {
+    return {
+      ok: false as const,
+      httpStatus: res.status,
+      items: [] as Array<{
+        id: string | null
+        number: string | null
+        name: string | null
+        assistantId: string | null
+        squadId: string | null
+        workflowId: string | null
+        matchesSyncedAssistant: boolean
+      }>,
+    }
+  }
+  const raw = (await res.json()) as unknown
+  const list = Array.isArray(raw) ? raw : []
+  const items = list.map((entry) => {
+    const r = entry && typeof entry === 'object' ? (entry as Record<string, unknown>) : {}
+    const assistantId =
+      typeof r.assistantId === 'string'
+        ? r.assistantId
+        : typeof r.assistant_id === 'string'
+          ? r.assistant_id
+          : null
+    const squadId =
+      typeof r.squadId === 'string' ? r.squadId : typeof r.squad_id === 'string' ? r.squad_id : null
+    const workflowId =
+      typeof r.workflowId === 'string'
+        ? r.workflowId
+        : typeof r.workflow_id === 'string'
+          ? r.workflow_id
+          : null
+    return {
+      id: typeof r.id === 'string' ? r.id : null,
+      number: typeof r.number === 'string' ? r.number : null,
+      name: typeof r.name === 'string' ? r.name : null,
+      assistantId,
+      squadId,
+      workflowId,
+      matchesSyncedAssistant: Boolean(syncedAssistantId && assistantId === syncedAssistantId),
+    }
+  })
+  return { ok: true as const, httpStatus: res.status, items }
+}
+
 // This endpoint syncs the assistant configuration to Vapi
 export async function POST(request: NextRequest) {
   try {
@@ -235,6 +410,8 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    const appBase = process.env.NEXT_PUBLIC_APP_URL.replace(/\/$/, '')
+
     // Get FAQs for context
     const { data: faqs } = await serviceRole
       .from('faqs')
@@ -311,6 +488,7 @@ export async function POST(request: NextRequest) {
       },
       {
         type: 'function',
+        async: false,
         function: {
           name: 'get_job_status',
           description: `Order status. Call immediately when the user asks about order status; do not ask for name or phone first. Do not call find_customer first for this intent. organization_id and phone are optional — backend defaults to org ${organizationId} and extracts caller phone from the Vapi call payload. Optional: job_number, order_number. Do not use get_client_status.`,
@@ -331,6 +509,9 @@ export async function POST(request: NextRequest) {
             },
             required: [],
           },
+        },
+        server: {
+          url: `${appBase}/api/vapi/tools/get-job-status`,
         },
       },
       {
@@ -493,9 +674,32 @@ export async function POST(request: NextRequest) {
         model: 'nova-2',
         language: config.language,
       },
-      serverUrl: `${process.env.NEXT_PUBLIC_APP_URL}/api/voice/events?organization_id=${organizationId}`,
+      serverUrl: `${appBase}/api/voice/events?organization_id=${organizationId}`,
       serverUrlSecret: process.env.VAPI_WEBHOOK_SECRET,
     }
+
+    const prePatchGjs = digestToolFromList(assistantConfig.model.tools as unknown[], 'get_job_status')
+    const prePatchFind = digestToolFromList(assistantConfig.model.tools as unknown[], 'find_customer')
+    console.log('[vapi/sync-assistant] pre_patch_get_job_status_payload', {
+      'function.name': prePatchGjs?.functionName ?? null,
+      'function.description': prePatchGjs?.description
+        ? clipText(prePatchGjs.description, 320)
+        : null,
+      'function.parameters.required': prePatchGjs?.parametersRequired ?? null,
+      'properties.phone.description': prePatchGjs?.phoneDescription
+        ? clipText(prePatchGjs.phoneDescription, 200)
+        : null,
+      'properties.organization_id.description': prePatchGjs?.organizationIdDescription
+        ? clipText(prePatchGjs.organizationIdDescription, 200)
+        : null,
+      serverUrl: prePatchGjs?.serverUrl ?? null,
+    })
+    console.log('[vapi/sync-assistant] pre_patch_find_customer_payload', {
+      'function.description': prePatchFind?.description
+        ? clipText(prePatchFind.description, 280)
+        : null,
+      'function.parameters.required': prePatchFind?.parametersRequired ?? null,
+    })
 
     let response
     if (assistantId) {
@@ -570,10 +774,129 @@ export async function POST(request: NextRequest) {
         .eq('id', organizationId)
     }
 
-    return NextResponse.json({ 
-      success: true, 
-      assistantId: result.id,
-      message: assistantId ? 'Assistant updated' : 'Assistant created'
+    const resolvedAssistantId = (result?.id as string | undefined) || assistantId || ''
+
+    let postPatchGetStatus = 0
+    let postPatchFetched: unknown = null
+    if (resolvedAssistantId) {
+      const getRes = await fetch(`https://api.vapi.ai/assistant/${resolvedAssistantId}`, {
+        method: 'GET',
+        headers: {
+          Authorization: `Bearer ${vapiApiKey}`,
+        },
+      })
+      postPatchGetStatus = getRes.status
+      const getText = await getRes.text()
+      try {
+        postPatchFetched = getText ? JSON.parse(getText) : null
+      } catch {
+        postPatchFetched = { parseError: true, rawPreview: clipText(getText, 200) }
+      }
+      const summary = summarizeAssistantFromVapi(postPatchFetched)
+      console.log('[vapi/sync-assistant] post_patch_get_assistant', {
+        httpStatus: postPatchGetStatus,
+        ...summary,
+      })
+    } else {
+      console.warn('[vapi/sync-assistant] post_patch_get_skipped_no_assistant_id')
+    }
+
+    const phoneReport = await fetchVapiPhoneNumbersForSync(vapiApiKey, resolvedAssistantId)
+    console.log('[vapi/sync-assistant] vapi_phone_numbers', {
+      ok: phoneReport.ok,
+      httpStatus: phoneReport.httpStatus,
+      count: phoneReport.items.length,
+      matching_synced_assistant: phoneReport.items.filter((i) => i.matchesSyncedAssistant).length,
+      items: phoneReport.items.map((i) => ({
+        id: i.id,
+        number: i.number,
+        name: i.name,
+        assistantId: i.assistantId,
+        squadId: i.squadId,
+        workflowId: i.workflowId,
+        matchesSyncedAssistant: i.matchesSyncedAssistant,
+      })),
+    })
+
+    const postSummary = summarizeAssistantFromVapi(postPatchFetched)
+    const warnings: string[] = []
+    if (postPatchGetStatus !== 200) {
+      warnings.push(
+        `GET assistant después del PATCH devolvió HTTP ${postPatchGetStatus}; no se pudo verificar el schema en Vapi.`,
+      )
+    }
+    if (phoneReport.ok && resolvedAssistantId) {
+      const match = phoneReport.items.filter((i) => i.matchesSyncedAssistant)
+      if (match.length === 0) {
+        warnings.push(
+          'Ningún phone number en Vapi tiene assistantId igual al assistant sincronizado. Las llamadas pueden usar otro assistant o squad/workflow.',
+        )
+      }
+      const other = phoneReport.items.filter(
+        (i) => i.assistantId && i.assistantId !== resolvedAssistantId,
+      )
+      if (other.length > 0) {
+        warnings.push(
+          `${other.length} número(s) tienen otro assistantId; revisá la lista en la respuesta vapiVerification.phoneNumbers.`,
+        )
+      }
+    }
+    if (!phoneReport.ok) {
+      warnings.push(
+        `No se pudo listar phone-number en Vapi (HTTP ${phoneReport.httpStatus}). Verificá el número en el dashboard de Vapi.`,
+      )
+    }
+    if (
+      postSummary &&
+      typeof postSummary === 'object' &&
+      'get_job_status' in postSummary &&
+      postSummary.get_job_status &&
+      Array.isArray(postSummary.get_job_status.parametersRequired) &&
+      postSummary.get_job_status.parametersRequired.length > 0
+    ) {
+      warnings.push(
+        `Tras el PATCH, Vapi aún devuelve get_job_status.parameters.required = ${JSON.stringify(postSummary.get_job_status.parametersRequired)}.`,
+      )
+    }
+
+    return NextResponse.json({
+      success: true,
+      assistantId: resolvedAssistantId,
+      message: assistantId ? 'Assistant updated' : 'Assistant created',
+      vapiPublish: {
+        assistantId: resolvedAssistantId,
+        organizationId,
+        serverUrl: `${appBase}/api/voice/events?organization_id=${organizationId}`,
+        vapiEventsUrl: `${appBase}/api/vapi/events?organization_id=${organizationId}`,
+        toolCallsCompatUrl: `${appBase}/api/vapi/tool-calls?organization_id=${organizationId}`,
+        getJobStatusToolPostUrl: `${appBase}/api/vapi/tools/get-job-status`,
+        webhookSecretHeader: 'x-vapi-secret',
+        getJobStatusSchemaNote:
+          'En Vapi, get_job_status debe tener parameters.required = [] y puede llevar server.url al endpoint get-job-status (ya publicado en sync).',
+      },
+      vapiVerification: {
+        prePatchGetJobStatus: prePatchGjs
+          ? {
+              functionName: prePatchGjs.functionName,
+              descriptionPreview: prePatchGjs.description
+                ? clipText(prePatchGjs.description, 400)
+                : null,
+              parametersRequired: prePatchGjs.parametersRequired,
+              phoneDescriptionPreview: prePatchGjs.phoneDescription
+                ? clipText(prePatchGjs.phoneDescription, 220)
+                : null,
+              organizationIdDescriptionPreview: prePatchGjs.organizationIdDescription
+                ? clipText(prePatchGjs.organizationIdDescription, 220)
+                : null,
+              serverUrl: prePatchGjs.serverUrl,
+            }
+          : null,
+        postPatchGetHttpStatus: postPatchGetStatus,
+        postPatchAssistantSummary:
+          postPatchGetStatus === 200 ? summarizeAssistantFromVapi(postPatchFetched) : null,
+        phoneNumbers: phoneReport,
+        warnings,
+      },
     })
   } catch (error) {
     console.error('[v0] Sync assistant error (full):', error)

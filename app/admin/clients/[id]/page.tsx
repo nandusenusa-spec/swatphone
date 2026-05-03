@@ -72,6 +72,25 @@ function adminJsonHeaders(): HeadersInit {
   return getAdminAuthHeaders({ 'Content-Type': 'application/json' })
 }
 
+type VapiPublishPayload = {
+  assistantId: string
+  organizationId: string
+  serverUrl: string
+  vapiEventsUrl: string
+  toolCallsCompatUrl: string
+  getJobStatusToolPostUrl: string
+  webhookSecretHeader: string
+  getJobStatusSchemaNote: string
+}
+
+type VapiVerificationPayload = {
+  prePatchGetJobStatus: unknown
+  postPatchGetHttpStatus: number
+  postPatchAssistantSummary: unknown
+  phoneNumbers: unknown
+  warnings: string[]
+}
+
 export default function AdminClientDetailPage() {
   const params = useParams()
   const clientId = params.id as string
@@ -84,6 +103,8 @@ export default function AdminClientDetailPage() {
   const [loading, setLoading] = useState(true)
   const [saving, setSaving] = useState(false)
   const [syncingAssistant, setSyncingAssistant] = useState(false)
+  const [lastVapiPublish, setLastVapiPublish] = useState<VapiPublishPayload | null>(null)
+  const [lastVapiVerification, setLastVapiVerification] = useState<VapiVerificationPayload | null>(null)
   const [copied, setCopied] = useState(false)
   const [configBanner, setConfigBanner] = useState<null | { type: 'success' | 'error'; message: string }>(null)
 
@@ -662,7 +683,16 @@ export default function AdminClientDetailPage() {
         if (typeof window !== 'undefined') window.alert(msg)
         return
       }
-      const msg = 'Assistant sincronizado en proveedor de voz.'
+      if (json.vapiPublish && typeof json.vapiPublish === 'object') {
+        setLastVapiPublish(json.vapiPublish as VapiPublishPayload)
+      }
+      if (json.vapiVerification && typeof json.vapiVerification === 'object') {
+        setLastVapiVerification(json.vapiVerification as VapiVerificationPayload)
+      }
+      const pub = json.vapiPublish as { serverUrl?: string; assistantId?: string } | undefined
+      const msg = pub?.serverUrl
+        ? `Assistant sincronizado. ID: ${pub.assistantId || '—'}. Server URL publicada (copiá desde el panel de abajo si hace falta).`
+        : 'Assistant sincronizado en proveedor de voz.'
       setConfigBanner({ type: 'success', message: msg })
       if (typeof window !== 'undefined') window.alert(msg)
     } catch {
@@ -1425,9 +1455,66 @@ export default function AdminClientDetailPage() {
                   </Button>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Pega esta URL en el dashboard del proveedor - Assistant - Server URL
+                  Pega esta URL en el dashboard del proveedor - Assistant - Server URL (debe incluir{' '}
+                  <code className="text-xs">?organization_id=...</code>). Si ves 404 en tool-calls, revisá que el
+                  dominio sea el de este deploy y que no quede una ruta vieja en Vapi.
                 </p>
               </div>
+
+              {lastVapiPublish ? (
+                <div className="space-y-2 rounded-lg border border-border bg-muted/20 p-4">
+                  <h4 className="text-sm font-medium">Última publicación a Vapi (sync)</h4>
+                  <p className="text-xs text-muted-foreground">
+                    Assistant ID: <code className="text-xs">{lastVapiPublish.assistantId || '—'}</code> — debe coincidir
+                    con el assistant asignado al número en Vapi.
+                  </p>
+                  <div className="space-y-1 text-xs font-mono break-all">
+                    <div>
+                      <span className="text-muted-foreground">serverUrl: </span>
+                      {lastVapiPublish.serverUrl}
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">get_job_status POST: </span>
+                      {lastVapiPublish.getJobStatusToolPostUrl}
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">tool-calls (compat): </span>
+                      {lastVapiPublish.toolCallsCompatUrl}
+                    </div>
+                    <div>
+                      <span className="text-muted-foreground">Header: </span>
+                      {lastVapiPublish.webhookSecretHeader}
+                    </div>
+                  </div>
+                  <p className="text-xs text-muted-foreground">{lastVapiPublish.getJobStatusSchemaNote}</p>
+                </div>
+              ) : null}
+
+              {lastVapiVerification ? (
+                <div className="space-y-2 rounded-lg border border-amber-500/40 bg-amber-500/5 p-4">
+                  <h4 className="text-sm font-medium">Verificación Vapi (GET tras PATCH + teléfonos)</h4>
+                  {lastVapiVerification.warnings?.length ? (
+                    <ul className="list-disc space-y-1 pl-4 text-xs text-amber-200/90">
+                      {lastVapiVerification.warnings.map((w, i) => (
+                        <li key={`${i}-${w.slice(0, 48)}`}>{w}</li>
+                      ))}
+                    </ul>
+                  ) : (
+                    <p className="text-xs text-muted-foreground">Sin advertencias automáticas.</p>
+                  )}
+                  <p className="text-xs text-muted-foreground">
+                    GET assistant HTTP: {lastVapiVerification.postPatchGetHttpStatus}. Compará{' '}
+                    <code className="text-xs">postPatchAssistantSummary.get_job_status.parametersRequired</code> con{' '}
+                    <code className="text-xs">prePatchGetJobStatus.parametersRequired</code> en el JSON completo.
+                  </p>
+                  <details className="text-xs">
+                    <summary className="cursor-pointer text-muted-foreground">JSON vapiVerification</summary>
+                    <pre className="mt-2 max-h-64 overflow-auto rounded bg-muted/50 p-2 text-[11px] leading-snug">
+                      {JSON.stringify(lastVapiVerification, null, 2)}
+                    </pre>
+                  </details>
+                </div>
+              ) : null}
 
               <div className="rounded-lg border border-border p-4 space-y-3">
                 <h4 className="font-medium">Runtime de transferencia (multiempresa)</h4>
