@@ -1,6 +1,6 @@
 'use client'
 
-import { useEffect, useState } from 'react'
+import { useEffect, useState, type ReactNode } from 'react'
 import { useRouter, usePathname } from 'next/navigation'
 import Link from 'next/link'
 import { 
@@ -84,16 +84,21 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     router.push('/admin/login')
   }
 
+  // Tema oscuro solo en /admin; el resto de la app sigue en claro (:root).
+  const adminShell = (content: ReactNode) => (
+    <div className="dark min-h-screen bg-background text-foreground">{content}</div>
+  )
+
   // Show login page without layout
   if (pathname === '/admin/login') {
-    return <>{children}</>
+    return adminShell(children)
   }
 
   if (isAuthenticated === null) {
-    return (
-      <div className="flex items-center justify-center min-h-screen bg-background">
+    return adminShell(
+      <div className="flex items-center justify-center min-h-screen">
         <div className="animate-spin rounded-full h-12 w-12 border-b-2 border-primary"></div>
-      </div>
+      </div>,
     )
   }
 
@@ -106,10 +111,10 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
     { href: '/admin/settings', icon: Settings, label: 'Configuracion' },
   ]
 
-  return (
-    <div className="flex h-screen bg-background">
+  return adminShell(
+    <div className="flex h-screen min-h-0">
       {/* Sidebar */}
-      <aside className="w-64 border-r border-border bg-sidebar">
+      <aside className="w-64 border-r border-border bg-sidebar shrink-0">
         <div className="flex flex-col h-full">
           {/* Logo */}
           <div className="p-6 border-b border-sidebar-border">
@@ -160,11 +165,11 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
       </aside>
 
       {/* Main content */}
-      <main className="flex-1 overflow-auto">
+      <main className="flex-1 overflow-auto bg-background min-h-0">
         <div className="p-8">
           {children}
         </div>
       </main>
-    </div>
+    </div>,
   )
 }
