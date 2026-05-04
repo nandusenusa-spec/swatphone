@@ -108,7 +108,7 @@ export async function runPrepareWarmTransfer(input: {
   }
 
   const runtime = await getOrganizationRuntimeConfig(input.organizationId)
-  const intentCue = buildIntentCue(null, input.intent, input.shortSummary)
+  const intentCue = buildIntentCue(input.transferDepartment ?? null, input.intent, input.shortSummary)
   const resolved = resolveTransferTarget(runtime, {
     extension: input.transferExtension ?? null,
     department: input.transferDepartment ?? null,

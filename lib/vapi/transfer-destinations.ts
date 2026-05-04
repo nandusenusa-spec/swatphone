@@ -4,6 +4,9 @@ export type TransferDestination = {
   extension: string
   name: string
   phoneE164: string
+  /** Rol/cargo como en /dashboard/team (opcional). */
+  role?: string
+  department?: string
 }
 
 /** Slice mínimo de runtime para resolver destino (evita ciclo con runtime-config). */
@@ -51,8 +54,26 @@ export function parseTransferDestinations(raw: unknown): TransferDestination[] {
           : typeof o.phone === 'string'
             ? o.phone.trim()
             : ''
+    const role =
+      typeof o.role === 'string'
+        ? o.role.trim()
+        : typeof o.role_label === 'string'
+          ? o.role_label.trim()
+          : ''
+    const department =
+      typeof o.department === 'string'
+        ? o.department.trim()
+        : typeof o.dept === 'string'
+          ? o.dept.trim()
+          : ''
     if (!name || !phoneE164) continue
-    out.push({ extension, name, phoneE164 })
+    out.push({
+      extension,
+      name,
+      phoneE164,
+      ...(role ? { role } : {}),
+      ...(department ? { department } : {}),
+    })
   }
   return out
 }
@@ -153,9 +174,30 @@ export function resolveTransferTarget(
         raw_count: rawList.length,
         dropped_invalid_e164_or_name: dropped,
       })
+      console.info('[vapi/transfer-routing]', {
+        input: null,
+        matchedName: null,
+        matchedRole: null,
+        matchedDepartment: null,
+        transferExtension: null,
+        transferPhone: null,
+        found: false,
+        error: 'no_usable_destinations',
+      })
       return null
     }
     const owner = runtime.transferPolicy.callbackDefaultOwner || 'Operador'
+    console.info('[vapi/transfer-routing]', {
+      input: null,
+      matchedName: owner,
+      matchedRole: null,
+      matchedDepartment: null,
+      transferExtension: null,
+      transferPhone: legacy,
+      found: true,
+      error: null,
+      path: 'legacy_no_destinations',
+    })
     return { phoneE164: legacy, label: owner, extension: null }
   }
 
@@ -167,6 +209,17 @@ export function resolveTransferTarget(
         dropped_invalid_e164_or_name: dropped,
       })
     }
+    console.info('[vapi/transfer-routing]', {
+      input: null,
+      matchedName: d.name,
+      matchedRole: d.role ?? null,
+      matchedDepartment: d.department ?? null,
+      transferExtension: d.extension || null,
+      transferPhone: d.phoneE164.trim(),
+      found: true,
+      error: null,
+      path: 'single_destination',
+    })
     return {
       phoneE164: d.phoneE164.trim(),
       label: d.name,
@@ -176,43 +229,101 @@ export function resolveTransferTarget(
 
   const ext = typeof input.extension === 'string' ? input.extension.trim() : ''
 
-  if (ext) {
-    const hit = destinations.find((d) => d.extension === ext)
-    if (hit) {
-      return {
-        phoneE164: hit.phoneE164.trim(),
-        label: hit.name,
-        extension: hit.extension || null,
-      }
-    }
-  }
-
   const dept = typeof input.department === 'string' ? input.department.trim() : ''
   const cueExtra = typeof input.intentCue === 'string' ? input.intentCue.trim() : ''
   const nameBlob = [dept, cueExtra].filter(Boolean).join(' ').trim()
 
+  const logRoute = (
+    hit: ResolvedTransferTarget,
+    meta: Record<string, unknown>,
+    destMeta?: TransferDestination,
+  ) => {
+    console.info('[vapi/transfer-routing]', {
+      input: nameBlob || ext || null,
+      matchedName: destMeta?.name ?? hit.label,
+      matchedRole: destMeta?.role ?? null,
+      matchedDepartment: destMeta?.department ?? (dept || null),
+      transferExtension: destMeta?.extension ?? hit.extension,
+      transferPhone: hit.phoneE164,
+      found: true,
+      error: null as string | null,
+      ...meta,
+    })
+  }
+
+  if (ext) {
+    const hit = destinations.find((d) => d.extension === ext)
+    if (hit) {
+      const res = {
+        phoneE164: hit.phoneE164.trim(),
+        label: hit.name,
+        extension: hit.extension || null,
+      }
+      logRoute(res, { path: 'explicit_extension' }, hit)
+      return res
+    }
+  }
+
+  const inferredExt = nameBlob ? inferTransferExtensionFromKeywords(nameBlob) : null
+  const effectiveExt = inferredExt || ''
+  if (effectiveExt && (!ext || ext !== effectiveExt)) {
+    const hit = destinations.find((d) => d.extension === effectiveExt)
+    if (hit) {
+      const res = {
+        phoneE164: hit.phoneE164.trim(),
+        label: hit.name,
+        extension: hit.extension || null,
+      }
+      logRoute(res, { path: 'keyword_extension', inferred_extension: effectiveExt }, hit)
+      return res
+    }
+  }
+
   if (nameBlob) {
     const byName = matchDestinationByNameBlob(destinations, nameBlob)
-    if (byName) return byName
+    if (byName) {
+      const destMeta = destinations.find(
+        (d) => d.phoneE164.trim() === byName.phoneE164.trim() && d.name === byName.label,
+      )
+      logRoute(byName, { path: 'name_blob' }, destMeta)
+      return byName
+    }
   }
 
   const hadDisambiguation = Boolean(ext || nameBlob)
 
   if (legacy && !hadDisambiguation) {
     const owner = runtime.transferPolicy.callbackDefaultOwner || 'Operador'
-    return { phoneE164: legacy, label: owner, extension: null }
+    const res = { phoneE164: legacy, label: owner, extension: null }
+    console.info('[vapi/transfer-routing]', {
+      input: null,
+      matchedName: owner,
+      matchedRole: null,
+      matchedDepartment: null,
+      transferExtension: null,
+      transferPhone: legacy,
+      found: true,
+      error: null,
+      path: 'legacy_single_fallback',
+    })
+    return res
   }
 
   if (destinations.length > 1 && !legacy && !hadDisambiguation) {
-    const d0 = destinations[0]
-    console.warn('[vapi/transfer-destinations] resolveTransferTarget: no legacy/disambiguation; using first usable destination', {
-      default_label: d0.name,
+    console.warn('[vapi/transfer-destinations] resolveTransferTarget: needs_disambiguation', {
+      usable_count: destinations.length,
     })
-    return {
-      phoneE164: d0.phoneE164.trim(),
-      label: d0.name,
-      extension: d0.extension || null,
-    }
+    console.info('[vapi/transfer-routing]', {
+      input: null,
+      matchedName: null,
+      matchedRole: null,
+      matchedDepartment: dept || null,
+      transferExtension: null,
+      transferPhone: null,
+      found: false,
+      error: 'needs_disambiguation',
+    })
+    return null
   }
 
   console.warn('[vapi/transfer-destinations] resolveTransferTarget: unresolved', {
@@ -220,6 +331,16 @@ export function resolveTransferTarget(
     had_extension: Boolean(ext),
     had_name_blob: Boolean(nameBlob),
     has_legacy: Boolean(legacy),
+  })
+  console.info('[vapi/transfer-routing]', {
+    input: nameBlob || ext || null,
+    matchedName: null,
+    matchedRole: null,
+    matchedDepartment: dept || null,
+    transferExtension: null,
+    transferPhone: null,
+    found: false,
+    error: 'unresolved',
   })
   return null
 }
@@ -230,10 +351,29 @@ export { buildIntentCue, isPlausibleE164, usableDestinations }
 export function transferDestinationsSummary(destinations: TransferDestination[]): string {
   if (destinations.length === 0) return ''
   return destinations
-    .map((d) =>
-      d.extension
-        ? `interno ${d.extension} — ${d.name}`
-        : d.name,
-    )
+    .map((d) => {
+      const roleBit = d.role || d.department
+      const core = d.extension ? `interno ${d.extension} — ${d.name}` : d.name
+      return roleBit ? `${core} (${roleBit})` : core
+    })
     .join('; ')
+}
+
+/**
+ * Mapeo por palabras clave (área/persona) → interno. Solo si ese interno existe en destinos activos.
+ */
+export function inferTransferExtensionFromKeywords(blob: string): string | null {
+  const n = stripAccents(blob || '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!n) return null
+  if (/fernando|dise[nñ]ador\s+gr[aá]fico/.test(n)) return '105'
+  if (/\bcnc\b/.test(n) || /\bleandro\b/.test(n)) return '107'
+  if (/\brafael\b/.test(n)) return '106'
+  if (/producci[oó]n/.test(n)) return '106'
+  if (/\bram[oó]n\b|\bramon\b/.test(n)) return '100'
+  if (/administraci[oó]n/.test(n)) return '91'
+  if (/\bdise[nñ]o\b/.test(n) && !/graf/.test(n)) return '90'
+  return null
 }

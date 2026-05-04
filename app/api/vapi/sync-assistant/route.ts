@@ -876,6 +876,7 @@ export async function POST(request: NextRequest) {
      * Si el PATCH omite la clave, Vapi / Publish pueden dejar toolIds en null aunque haya `model.tools`.
      */
     let mergedModelToolIds: string[] = [...toolIdsFromEnv()]
+    let preGetAssistantPayload: Record<string, unknown> | null = null
     if (assistantId) {
       try {
         const preGetRes = await fetch(`https://api.vapi.ai/assistant/${assistantId}`, {
@@ -883,8 +884,8 @@ export async function POST(request: NextRequest) {
           headers: { Authorization: `Bearer ${vapiApiKey}` },
         })
         if (preGetRes.ok) {
-          const preJson = (await preGetRes.json()) as Record<string, unknown>
-          const fromApi = collectToolIdsFromAssistantGetPayload(preJson)
+          preGetAssistantPayload = (await preGetRes.json()) as Record<string, unknown>
+          const fromApi = collectToolIdsFromAssistantGetPayload(preGetAssistantPayload)
           mergedModelToolIds = [...new Set([...fromApi, ...mergedModelToolIds])]
         } else {
           console.warn('[vapi/sync-assistant] pre_patch_get_assistant_for_tool_ids_http', {
@@ -925,6 +926,20 @@ export async function POST(request: NextRequest) {
         typeof orgAiVoiceRow?.voice_id === 'string' ? orgAiVoiceRow.voice_id : null,
     })
     const transcribers = getTranscriberConfigForVapi()
+    const extractedFromVapi = preGetAssistantPayload
+      ? extractVoiceFromVapiAssistantPayload(preGetAssistantPayload)
+      : null
+    const forceVoiceConfig = process.env.FORCE_VAPI_VOICE_CONFIG === 'true'
+    console.log('[vapi/sync-assistant] preserved_voice_transcriber_config', {
+      voice_provider: extractedFromVapi?.voice_provider ?? null,
+      voice_id: extractedFromVapi?.voice_id ?? null,
+      voice_model: extractedFromVapi?.voice_model ?? null,
+      transcriber_provider: extractedFromVapi?.transcriber_provider ?? null,
+      transcriber_model: extractedFromVapi?.transcriber_model ?? null,
+      transcriber_language: extractedFromVapi?.transcriber_language ?? null,
+      force_voice_config: forceVoiceConfig,
+    })
+
     const firstMessageRaw =
       config.first_message ||
       (config as { greeting_message?: string | null }).greeting_message ||
@@ -947,36 +962,63 @@ export async function POST(request: NextRequest) {
       modelForVapi.toolIds = mergedModelToolIds
     }
 
-    const assistantConfig = {
-      name: config.name,
-      model: modelForVapi,
-      voice: {
-        provider: voiceResolved.voiceProvider,
-        voiceId: voiceResolved.voiceId,
-      },
-      firstMessage,
-      transcriber: {
-        provider: transcribers.provider,
-        model: transcribers.model,
-        language: transcribers.language,
-      },
-      serverUrl: `${appBase}/api/voice/events?organization_id=${organizationId}`,
-      serverUrlSecret: process.env.VAPI_WEBHOOK_SECRET,
+    let voicePayload: Record<string, unknown> = {
+      provider: voiceResolved.voiceProvider,
+      voiceId: voiceResolved.voiceId,
+    }
+    let transcriberPayload: Record<string, unknown> = {
+      provider: transcribers.provider,
+      model: transcribers.model,
+      language: transcribers.language,
     }
 
-    console.log('[vapi/sync-assistant] voice_transcriber_config', {
+    const canPreserveVoice =
+      !forceVoiceConfig &&
+      Boolean(extractedFromVapi?.voice_provider && extractedFromVapi?.voice_id)
+    if (canPreserveVoice && extractedFromVapi) {
+      voicePayload = {
+        provider: extractedFromVapi.voice_provider!,
+        voiceId: extractedFromVapi.voice_id!,
+      }
+      if (extractedFromVapi.voice_model) {
+        voicePayload.model = extractedFromVapi.voice_model
+      }
+    }
+
+    const canPreserveTranscriber =
+      !forceVoiceConfig && Boolean(extractedFromVapi?.transcriber_provider)
+    if (canPreserveTranscriber && extractedFromVapi) {
+      transcriberPayload = {
+        provider: extractedFromVapi.transcriber_provider!,
+        model: extractedFromVapi.transcriber_model || transcribers.model,
+        language: extractedFromVapi.transcriber_language || transcribers.language,
+      }
+    }
+
+    console.log('[vapi/sync-assistant] final_voice_transcriber_config', {
       organization_id: organizationId,
-      voice_provider: voiceResolved.voiceProvider,
-      voice_id: voiceResolved.voiceId,
-      voice_model: null,
-      transcriber_provider: transcribers.provider,
-      transcriber_model: transcribers.model,
-      transcriber_language: transcribers.language,
+      voice_provider: voicePayload.provider,
+      voice_id: voicePayload.voiceId,
+      voice_model: voicePayload.model ?? null,
+      transcriber_provider: transcriberPayload.provider,
+      transcriber_model: transcriberPayload.model,
+      transcriber_language: transcriberPayload.language,
+      preserved_from_get: canPreserveVoice || canPreserveTranscriber,
       source: voiceResolved.source,
       assistant_configs_voice_id: voiceResolved.assistantConfigVoiceId,
       organization_ai_voice_id: voiceResolved.organizationAiVoiceId,
       admin_source: voiceResolved.adminSource,
     })
+
+    const assistantConfig = {
+      name: config.name,
+      model: modelForVapi,
+      voice: voicePayload,
+      firstMessage,
+      transcriber: transcriberPayload,
+      serverUrl: `${appBase}/api/voice/events?organization_id=${organizationId}`,
+      serverUrlSecret: process.env.VAPI_WEBHOOK_SECRET,
+    }
 
     console.log('[vapi/sync-assistant] patch_payload_model_tool_preview', {
       model_tool_count: modelTools.length,

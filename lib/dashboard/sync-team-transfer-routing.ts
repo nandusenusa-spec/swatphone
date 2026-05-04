@@ -6,10 +6,21 @@ type TeamRow = {
   phone: string | null
   extension: string | null
   is_available: boolean
+  role?: string | null
+  department?: string | null
 }
 
-export function teamMembersToTransferDestinations(members: TeamRow[]) {
-  const out: { extension: string; name: string; phone_e164: string }[] = []
+/** Normalizado para `organization_routing` y para runtime Vapi (misma forma que parseTransferDestinations). */
+export type TeamTransferDestinationRow = {
+  extension: string
+  name: string
+  phone_e164: string
+  role?: string | null
+  department?: string | null
+}
+
+export function teamMembersToTransferDestinations(members: TeamRow[]): TeamTransferDestinationRow[] {
+  const out: TeamTransferDestinationRow[] = []
   for (const m of members) {
     if (!m.is_available) continue
     const name = typeof m.name === 'string' ? m.name.trim() : ''
@@ -17,10 +28,14 @@ export function teamMembersToTransferDestinations(members: TeamRow[]) {
     if (!name || !rawPhone) continue
     const phone_e164 = normalizePhone(rawPhone)
     if (!phone_e164) continue
+    const role = typeof m.role === 'string' ? m.role.trim() || null : null
+    const department = typeof m.department === 'string' ? m.department.trim() || null : null
     out.push({
       extension: typeof m.extension === 'string' ? m.extension.trim() : '',
       name,
       phone_e164,
+      ...(role ? { role } : {}),
+      ...(department ? { department } : {}),
     })
   }
   return out

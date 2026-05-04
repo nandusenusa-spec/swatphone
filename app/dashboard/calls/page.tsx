@@ -16,13 +16,30 @@ export default async function CallsPage() {
   const orgId = profile?.organization_id
 
   let calls: Record<string, unknown>[] = []
+  let metricsTotal = 0
+  let metricsInbound = 0
+  let metricsCompleted = 0
+  let metricsMissed = 0
   if (orgId) {
-    const res = await service
-      .from('call_logs')
-      .select('*')
-      .eq('organization_id', orgId)
-      .order('created_at', { ascending: false })
-      .limit(50)
+    const [res, totalCt, missedCt] = await Promise.all([
+      service
+        .from('call_logs')
+        .select('*')
+        .eq('organization_id', orgId)
+        .order('created_at', { ascending: false })
+        .limit(50),
+      service
+        .from('call_logs')
+        .select('*', { count: 'exact', head: true })
+        .eq('organization_id', orgId),
+      service
+        .from('call_logs')
+        .select('*', { count: 'exact', head: true })
+        .eq('organization_id', orgId)
+        .or(
+          'result.ilike.%miss%,result.ilike.%fail%,result.ilike.%no-answer%,result.ilike.%hang%,result.eq.spam_rejected',
+        ),
+    ])
     if (res.error) {
       console.error('[dashboard/calls-query]', {
         status: 'error',
@@ -35,6 +52,24 @@ export default async function CallsPage() {
       })
     }
     calls = (res.data || []) as Record<string, unknown>[]
+    metricsTotal = totalCt.count ?? 0
+    metricsInbound = metricsTotal
+    metricsMissed = missedCt.count ?? 0
+    metricsCompleted = Math.max(0, metricsTotal - metricsMissed)
+
+    console.info('[dashboard/calls-metrics]', {
+      organization_id: orgId,
+      total: metricsTotal,
+      inbound: metricsInbound,
+      completed: metricsCompleted,
+      missed: metricsMissed,
+      table: 'call_logs',
+      filtersUsed: {
+        organization_id: orgId,
+        completed_derived: 'total_minus_missed_bucket',
+        list_limit: 50,
+      },
+    })
   }
 
   const normalizedCalls = calls.map((c: Record<string, unknown>) => {
@@ -66,18 +101,11 @@ export default async function CallsPage() {
     }
   })
 
-  const totalCalls = normalizedCalls.length
-  const inboundCalls = normalizedCalls.length
-  const completedCalls = normalizedCalls.filter((c: any) => String(c.status).toLowerCase().includes('completed')).length
-  const missedCalls = normalizedCalls.filter((c: any) =>
-    ['failed', 'missed', 'no-answer'].some((v) => String(c.status).toLowerCase().includes(v)),
-  ).length
-
   const stats = [
-    { title: 'Total Llamadas', value: totalCalls || 0, icon: Phone },
-    { title: 'Entrantes', value: inboundCalls || 0, icon: PhoneIncoming },
-    { title: 'Completadas', value: completedCalls || 0, icon: PhoneOutgoing },
-    { title: 'Perdidas', value: missedCalls || 0, icon: PhoneMissed },
+    { title: 'Total Llamadas', value: metricsTotal || 0, icon: Phone },
+    { title: 'Entrantes', value: metricsInbound || 0, icon: PhoneIncoming },
+    { title: 'Completadas', value: metricsCompleted || 0, icon: PhoneOutgoing },
+    { title: 'Perdidas', value: metricsMissed || 0, icon: PhoneMissed },
   ]
 
   return (

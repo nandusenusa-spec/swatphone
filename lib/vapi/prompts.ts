@@ -156,7 +156,7 @@ function transferRoutingRules(destinations: TransferDestination[]): string[] {
   return [
     'Hay varias áreas/personas con transferencia. Lista interna (usala para enrutar según lo que diga el cliente):',
     list,
-    'Si el cliente no aclaró a quién llamar, preguntá una sola vez ofreciendo las opciones por nombre (y el interno si ayuda).',
+    'Si el cliente no aclaró a quién llamar, preguntá una sola vez: en español: «¿Querés hablar con Diseño, Administración, Producción, CNC o Ramón?»; en inglés: «Would you like Design, Administration, Production, CNC, or Ramon?» (adaptá la lista si algún nombre no está en la lista anterior).',
     'Confirmá el destino elegido antes de llamar herramientas.',
     'Cuando sepas el destino, en prepare_warm_transfer enviá obligatoriamente transfer_department (nombre del área o persona) o transfer_extension (número interno, ej. 90).',
     'Después de prepare_warm_transfer ok, llamá transfer_to_ramon.',

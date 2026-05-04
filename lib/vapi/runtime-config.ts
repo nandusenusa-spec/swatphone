@@ -1,3 +1,4 @@
+import { teamMembersToTransferDestinations } from '@/lib/dashboard/sync-team-transfer-routing'
 import { createServiceRoleClient } from '@/lib/supabase/service-role'
 import { buildSystemPrompt, sanitizeFaqTextForSync } from '@/lib/vapi/prompts'
 import { parseTransferDestinations, type TransferDestination } from '@/lib/vapi/transfer-destinations'
@@ -53,31 +54,49 @@ export async function getOrganizationRuntimeConfig(
   organizationId: string,
 ): Promise<VapiRuntimeConfig> {
   const supabase = createServiceRoleClient()
-  const [ai, routing, hours, catalog, orgRow, productsHead] = await Promise.all([
-    supabase.from('organization_ai_config').select('*').eq('organization_id', organizationId).maybeSingle(),
-    supabase.from('organization_routing').select('*').eq('organization_id', organizationId).maybeSingle(),
-    supabase
-      .from('organization_business_hours')
-      .select('*')
-      .eq('organization_id', organizationId)
-      .order('day_of_week', { ascending: true }),
-    supabase
-      .from('organization_catalog')
-      .select('*')
-      .eq('organization_id', organizationId),
-    supabase.from('organizations').select('name').eq('id', organizationId).maybeSingle(),
-    supabase
-      .from('products')
-      .select('id', { count: 'exact', head: true })
-      .eq('organization_id', organizationId)
-      .eq('is_active', true),
-  ])
+  const [ai, routing, hours, catalog, orgRow, productsHead, teamMembersRes, faqsHead, activeAssistantCfg] =
+    await Promise.all([
+      supabase.from('organization_ai_config').select('*').eq('organization_id', organizationId).maybeSingle(),
+      supabase.from('organization_routing').select('*').eq('organization_id', organizationId).maybeSingle(),
+      supabase
+        .from('organization_business_hours')
+        .select('*')
+        .eq('organization_id', organizationId)
+        .order('day_of_week', { ascending: true }),
+      supabase
+        .from('organization_catalog')
+        .select('*')
+        .eq('organization_id', organizationId),
+      supabase.from('organizations').select('name').eq('id', organizationId).maybeSingle(),
+      supabase
+        .from('products')
+        .select('id', { count: 'exact', head: true })
+        .eq('organization_id', organizationId)
+        .eq('is_active', true),
+      supabase.from('team_members').select('*').eq('organization_id', organizationId),
+      supabase
+        .from('faqs')
+        .select('id', { count: 'exact', head: true })
+        .eq('organization_id', organizationId)
+        .eq('is_active', true),
+      supabase
+        .from('assistant_configs')
+        .select('voice_id, voice_provider')
+        .eq('organization_id', organizationId)
+        .eq('is_active', true)
+        .order('updated_at', { ascending: false })
+        .limit(1)
+        .maybeSingle(),
+    ])
   if (ai.error) throw ai.error
   if (routing.error) throw routing.error
   if (hours.error) throw hours.error
   if (catalog.error) throw catalog.error
   if (orgRow.error && orgRow.error.code !== 'PGRST205') throw orgRow.error
   if (productsHead.error && productsHead.error.code !== 'PGRST205') throw productsHead.error
+  if (teamMembersRes.error && teamMembersRes.error.code !== 'PGRST205') throw teamMembersRes.error
+  if (faqsHead.error && faqsHead.error.code !== 'PGRST205') throw faqsHead.error
+  if (activeAssistantCfg.error && activeAssistantCfg.error.code !== 'PGRST205') throw activeAssistantCfg.error
 
   const aiRow = ai.data
   const routingRow = routing.data
@@ -85,7 +104,42 @@ export async function getOrganizationRuntimeConfig(
     organizationCatalogRowActive(r),
   )
   const businessRows = hours.data || []
-  const transferDestinations = parseTransferDestinations(routingRow?.transfer_destinations)
+
+  const teamRows = (teamMembersRes.data || []) as Record<string, unknown>[]
+  const fromTeamBuilt = teamMembersToTransferDestinations(
+    teamRows.map((r) => ({
+      name: String(r.name || ''),
+      phone: typeof r.phone === 'string' ? r.phone : null,
+      extension: typeof r.extension === 'string' ? r.extension : null,
+      is_available: r.is_available !== false,
+      role: typeof r.role === 'string' ? r.role : null,
+      department: typeof r.department === 'string' ? r.department : null,
+    })),
+  )
+  const fromTeam: TransferDestination[] = fromTeamBuilt.map((r) => ({
+    extension: r.extension,
+    name: r.name,
+    phoneE164: r.phone_e164,
+    ...(r.role ? { role: r.role } : {}),
+    ...(r.department ? { department: r.department } : {}),
+  }))
+  const fromRouting = parseTransferDestinations(routingRow?.transfer_destinations)
+  const transferDestinations = fromTeam.length > 0 ? fromTeam : fromRouting
+
+  const assistantCfgRow = activeAssistantCfg.data as { voice_id?: string | null; voice_provider?: string | null } | null
+  console.info('[runtime-config]', {
+    organization_id: organizationId,
+    teamCount: teamRows.length,
+    productCount: productsHead.count ?? 0,
+    faqCount: faqsHead.count ?? 0,
+    hasAssistantConfig: Boolean(aiRow),
+    hasVoiceConfig: Boolean(assistantCfgRow?.voice_id?.trim() || assistantCfgRow?.voice_provider?.trim()),
+    transferDestinations: transferDestinations.map((d) => ({
+      extension: d.extension || null,
+      name: d.name,
+      phone_suffix: d.phoneE164.length >= 4 ? d.phoneE164.slice(-4) : null,
+    })),
+  })
   const hasTransferPhone =
     transferDestinations.length > 0 ||
     !!routingRow?.ramon_transfer_number ||
