@@ -149,6 +149,7 @@ export default async function CallsPage() {
       typeof c.id === 'string' ? followByCallId.get(c.id) ?? null : null
     return {
       id: c.id,
+      vapi_call_id: typeof c.vapi_call_id === 'string' ? c.vapi_call_id : null,
       phone_number: phone,
       customer_name: customerName,
       intent,

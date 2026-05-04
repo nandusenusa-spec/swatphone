@@ -26,6 +26,7 @@ import { cn } from '@/lib/utils'
 
 interface Call {
   id: string
+  vapi_call_id?: string | null
   phone_number: string
   customer_name?: string | null
   intent?: string | null
@@ -280,6 +281,12 @@ export function CallsTable({ calls }: { calls: Call[] }) {
             </DialogDescription>
           </DialogHeader>
           <div className="space-y-4">
+            {selectedCall?.vapi_call_id && (
+              <div className="rounded-lg border p-3 text-sm font-mono text-xs break-all">
+                <span className="font-medium font-sans">ID llamada Vapi: </span>
+                {selectedCall.vapi_call_id}
+              </div>
+            )}
             {selectedCall?.intent && (
               <div className="rounded-lg border p-3 text-sm">
                 <span className="font-medium">Tema / intención: </span>

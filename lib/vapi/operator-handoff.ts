@@ -104,6 +104,21 @@ export async function runPrepareWarmTransfer(input: {
           ? 'empty_after_trim'
           : 'normalizePhone_returned_empty (revisa formato: necesita dígitos o + y E.164)',
     })
+    const intentCueEarly = buildIntentCue(null, input.intent, input.shortSummary)
+    console.info('[vapi/transfer-routing]', {
+      input:
+        [input.transferDepartment, intentCueEarly].filter(Boolean).join(' ').trim() ||
+        input.transferExtension ||
+        null,
+      matchedName: null,
+      matchedRole: null,
+      matchedDepartment: input.transferDepartment ?? null,
+      transferExtension: input.transferExtension ?? null,
+      transferPhone: null,
+      prepared: false,
+      transferred: false,
+      error: 'invalid_phone',
+    })
     return { error: 'invalid_phone' as const }
   }
 
@@ -152,6 +167,20 @@ export async function runPrepareWarmTransfer(input: {
       had_extension: Boolean(input.transferExtension?.trim()),
       had_department: Boolean(input.transferDepartment?.trim()),
       had_intent_cue: Boolean(intentCue.trim()),
+    })
+    console.info('[vapi/transfer-routing]', {
+      input:
+        [input.transferDepartment, intentCue].filter(Boolean).join(' ').trim() ||
+        input.transferExtension ||
+        null,
+      matchedName: null,
+      matchedRole: null,
+      matchedDepartment: input.transferDepartment ?? null,
+      transferExtension: input.transferExtension ?? null,
+      transferPhone: null,
+      prepared: false,
+      transferred: false,
+      error: 'transfer_target_unresolved',
     })
     return {
       error: 'transfer_target_unresolved' as const,

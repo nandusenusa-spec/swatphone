@@ -29,6 +29,7 @@ import {
   getSummaryFromPayload,
   getTopicFromPayload,
   getTranscriptFromPayload,
+  mergeVapiWebhookBodiesForExtraction,
 } from '@/lib/vapi/payload'
 import { flattenVapiServerEvent } from '@/lib/vapi/vapi-event-flatten'
 import { unknownCallerPlaceholderE164 } from '@/lib/vapi/vapi-unknown-caller'
@@ -134,11 +135,15 @@ function conciseDynamicGreeting(raw: string): string {
 
 export async function dispatchVapiEvent(input: {
   body: JsonRecord
+  /** JSON original del webhook (sin parse Zod) para fusionar transcript/messages anidados en message.* */
+  rawBody?: JsonRecord
   organizationId: string
   /** URL completa del POST (p. ej. request.url) para logs en Vercel */
   requestUrl?: string | null
 }) {
   const payload = flattenEvent(input.body)
+  const flatFromRaw = input.rawBody ? flattenEvent(input.rawBody) : input.body
+  const extractionMerged = mergeVapiWebhookBodiesForExtraction(flatFromRaw, payload)
   const type = str(payload, 'type')
   console.log('[vapi/dispatcher] event', {
     organization_id: input.organizationId,
@@ -149,34 +154,25 @@ export async function dispatchVapiEvent(input: {
 
   const vapiCallId = getCallId(payload)
   const phoneFromNested = getPhone(payload)
-  const phoneFromCallerPayload = getCallerPhoneFromPayload(payload)
-  const phoneFromRawBody = getCallerPhoneFromPayload(input.body)
-  const phone =
-    phoneFromNested || phoneFromCallerPayload || phoneFromRawBody || ''
+  const phoneFromMerged = getCallerPhoneFromPayload(extractionMerged)
+  const phone = phoneFromNested || phoneFromMerged || ''
   const phoneTrace = {
     from_getPhone: Boolean(phoneFromNested),
-    from_getCallerPhone_payload: Boolean(phoneFromCallerPayload),
-    from_getCallerPhone_raw_body: Boolean(phoneFromRawBody),
+    from_getCallerPhone_merged: Boolean(phoneFromMerged),
+    from_getCallerPhone_raw_body: Boolean(input.rawBody && getCallerPhoneFromPayload(flattenEvent(input.rawBody))),
   }
   const customerName = getCustomerName(payload)
   const summary =
-    getSummaryFromPayload(payload) ||
-    getSummaryFromPayload(input.body) ||
-    str(payload, 'summary')
-  const recordingUrl =
-    getRecordingUrlFromPayload(payload) || getRecordingUrlFromPayload(input.body)
-  const topic = getTopicFromPayload(payload) || getTopicFromPayload(input.body)
-  const sentiment = getSentimentFromPayload(payload) || getSentimentFromPayload(input.body)
-  const durationSeconds =
-    getDurationSecondsFromPayload(payload) ?? getDurationSecondsFromPayload(input.body)
+    getSummaryFromPayload(extractionMerged) || str(payload, 'summary')
+  const recordingUrl = getRecordingUrlFromPayload(extractionMerged)
+  const topic = getTopicFromPayload(extractionMerged)
+  const sentiment = getSentimentFromPayload(extractionMerged)
+  const durationSeconds = getDurationSecondsFromPayload(extractionMerged)
   const disposition = str(payload, 'disposition')
 
   const rawTranscript =
-    getTranscriptFromPayload(payload) ||
-    getTranscriptFromPayload(input.body) ||
-    str(payload, 'transcript')
-  const messagesFromPayload =
-    getMessagesFromPayload(payload) ?? getMessagesFromPayload(input.body)
+    getTranscriptFromPayload(extractionMerged) || str(payload, 'transcript')
+  const messagesFromPayload = getMessagesFromPayload(extractionMerged)
   const messagesCount = messagesFromPayload?.length ?? 0
   let transcriptFinal = (rawTranscript || '').trim()
   if (!transcriptFinal && messagesFromPayload?.length) {
@@ -589,9 +585,7 @@ export async function dispatchVapiEvent(input: {
 
   const ended = endedEvent(type)
   const er =
-    getEndedReasonFromPayload(payload) ||
-    getEndedReasonFromPayload(input.body) ||
-    str(payload, 'endedReason')
+    getEndedReasonFromPayload(extractionMerged) || str(payload, 'endedReason')
 
   if (ended) {
     console.log('[vapi/dispatcher] call-ended', {
@@ -609,13 +603,11 @@ export async function dispatchVapiEvent(input: {
   const heuristicCallback =
     ended && narrative.length >= 16 && textSuggestsPromisedCallback(narrative)
 
-  const t1 = getCallTimestampsFromPayload(payload)
-  const t2 = getCallTimestampsFromPayload(input.body)
-  const startedAtIso = t1.startedAt || t2.startedAt
-  const endedAtIso = t1.endedAt || t2.endedAt
-  const cost = getCostFromPayload(payload) ?? getCostFromPayload(input.body)
-  const analysisObj =
-    getAnalysisObjectFromPayload(payload) ?? getAnalysisObjectFromPayload(input.body)
+  const ts = getCallTimestampsFromPayload(extractionMerged)
+  const startedAtIso = ts.startedAt
+  const endedAtIso = ts.endedAt
+  const cost = getCostFromPayload(extractionMerged)
+  const analysisObj = getAnalysisObjectFromPayload(extractionMerged)
 
   const structuredExtras: Record<string, unknown> = {
     ...(Object.keys(extractionFromPayload).length > 0 ? extractionFromPayload : {}),
@@ -682,15 +674,12 @@ export async function dispatchVapiEvent(input: {
     }
     console.log('[vapi/call-outcome]', {
       callId: vapiCallId || null,
-      organization_id: input.organizationId,
       saved: true,
-      table: 'call_logs',
       transcriptLength: transcriptFinal.length,
       messagesCount,
-      summaryExists: Boolean((summary || '').trim()),
       recordingUrlExists: Boolean(recordingUrl),
       endedReason: er || null,
-      call_log_id: persisted.call_log_id,
+      table: 'call_logs',
       error: null,
     })
   } catch (e) {
@@ -698,14 +687,12 @@ export async function dispatchVapiEvent(input: {
     const errObj = e as { code?: string; details?: string; hint?: string }
     console.error('[vapi/call-outcome]', {
       callId: vapiCallId || null,
-      organization_id: input.organizationId,
       saved: false,
-      table: 'call_logs',
       transcriptLength: transcriptFinal.length,
       messagesCount,
-      summaryExists: Boolean((summary || '').trim()),
       recordingUrlExists: Boolean(recordingUrl),
       endedReason: er || null,
+      table: 'call_logs',
       error: msg.slice(0, 400),
       code: errObj?.code ?? null,
       details: errObj?.details ?? null,

@@ -4,6 +4,45 @@ function asRecord(value: unknown): AnyRecord | null {
   return value && typeof value === 'object' ? (value as AnyRecord) : null
 }
 
+/**
+ * Une el cuerpo JSON original (tras flatten) con el parseado por el handler para no perder
+ * transcript/messages/recording que Vapi anida en message.* o artifact.*.
+ */
+export function mergeVapiWebhookBodiesForExtraction(
+  flatFromRawRequest: unknown,
+  flatParsed: unknown,
+): Record<string, unknown> {
+  const r = asRecord(flatFromRawRequest)
+  const p = asRecord(flatParsed)
+  const base: AnyRecord = { ...(r || {}), ...(p || {}) }
+  const rc = asRecord(r?.call)
+  const pc = asRecord(p?.call)
+  if (rc || pc) {
+    base.call = { ...(rc || {}), ...(pc || {}) }
+  }
+  const ra = asRecord(r?.artifact)
+  const pa = asRecord(p?.artifact)
+  const rmsg = asRecord(r?.message)
+  const pmsg = asRecord(p?.message)
+  const rmsgArt = rmsg ? asRecord(rmsg.artifact) : null
+  const pmsgArt = pmsg ? asRecord(pmsg.artifact) : null
+  if (ra || pa || rmsgArt || pmsgArt) {
+    base.artifact = { ...(ra || {}), ...(pa || {}), ...(rmsgArt || {}), ...(pmsgArt || {}) }
+  }
+  const ran = asRecord(r?.analysis)
+  const pan = asRecord(p?.analysis)
+  const ranArt = ra ? asRecord(ra.analysis) : null
+  const panArt = pa ? asRecord(pa.analysis) : null
+  if (ran || pan || ranArt || panArt) {
+    base.analysis = { ...(ran || {}), ...(pan || {}), ...(ranArt || {}), ...(panArt || {}) }
+  }
+  const rm = r?.messages
+  const pm = p?.messages
+  if (Array.isArray(rm) && rm.length > 0) base.messages = rm
+  else if (Array.isArray(pm) && pm.length > 0) base.messages = pm
+  return base
+}
+
 function readString(source: AnyRecord | null, key: string): string | null {
   if (!source) return null
   const value = source[key]
@@ -51,17 +90,25 @@ function textFromMessageFragment(message: unknown): string {
   return ''
 }
 
+function normalizeRoleLabel(roleRaw: string): string {
+  const r = roleRaw.trim().toLowerCase()
+  if (r === 'bot' || r === 'assistant') return 'Assistant'
+  if (r === 'user' || r === 'customer' || r === 'caller') return 'User'
+  return roleRaw.trim() || 'unknown'
+}
+
 export function buildTranscriptFromMessages(messages: unknown): string | null {
   if (!Array.isArray(messages) || messages.length === 0) return null
   const lines = messages
     .map((message) => {
       const m = asRecord(message)
       if (!m) return null
-      const role =
+      const roleRaw =
         readString(m, 'role') ||
         readString(m, 'speaker') ||
         readString(m, 'speakerLabel') ||
         'unknown'
+      const role = normalizeRoleLabel(roleRaw)
       const content = textFromMessageFragment(message)
       return content.trim() ? `${role}: ${content.trim()}` : null
     })
@@ -97,6 +144,7 @@ export function getMessagesFromPayload(payload: unknown): unknown[] | null {
   const fromMessage = msg ? (asRecord(msg.artifact) || msg) : null
   const fromMessageCall = fromMessage ? asRecord(fromMessage.call) : null
   const candidates = [
+    msg?.messages,
     data.messages,
     call?.messages,
     art?.messages,
@@ -167,6 +215,7 @@ export function getRecordingUrlFromPayload(payload: unknown): string | null {
     readString(data, 'recording_url') ||
     readString(call, 'recordingUrl') ||
     readString(call, 'recording_url') ||
+    readString(call, 'stereoRecordingUrl') ||
     readString(monitor, 'recordingUrl') ||
     readString(art, 'recordingUrl') ||
     readString(art, 'recording_url') ||

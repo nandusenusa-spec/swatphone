@@ -3,7 +3,9 @@ import {
   getRecordingUrlFromPayload,
   getSummaryFromPayload,
   getTranscriptFromPayload,
+  mergeVapiWebhookBodiesForExtraction,
 } from '@/lib/vapi/payload'
+import { flattenVapiServerEvent } from '@/lib/vapi/vapi-event-flatten'
 
 type JsonRecord = Record<string, unknown>
 
@@ -44,11 +46,13 @@ export function logVapiEventRaw(input: {
     str(input.raw, 'type')
   const event = str(input.flat, 'event') || str(input.raw, 'event')
 
-  const compositeForPayload = input.raw as Record<string, unknown>
-  const hasTranscript = Boolean(getTranscriptFromPayload(compositeForPayload)?.trim())
-  const hasMessages = Boolean(getMessagesFromPayload(compositeForPayload)?.length)
-  const hasRecordingUrl = Boolean(getRecordingUrlFromPayload(compositeForPayload))
-  const hasSummary = Boolean(getSummaryFromPayload(compositeForPayload)?.trim())
+  const flatFromRaw = flattenVapiServerEvent(input.raw)
+  const merged = mergeVapiWebhookBodiesForExtraction(flatFromRaw, input.flat)
+  const hasTranscript = Boolean(getTranscriptFromPayload(merged)?.trim())
+  const hasMessages = Boolean(getMessagesFromPayload(merged)?.length)
+  const hasRecordingUrl = Boolean(getRecordingUrlFromPayload(merged))
+  const hasSummary = Boolean(getSummaryFromPayload(merged)?.trim())
+  const keys = topKeys(input.raw)
 
   const known = new Set([
     'tool-calls',
@@ -67,14 +71,23 @@ export function logVapiEventRaw(input: {
   ])
   const isKnown = known.has(messageType)
 
+  const callId =
+    str(call, 'id') || str(input.flat, 'callId') || str(input.flat, 'call_id') || ''
+
   console.log('[vapi/event/raw]', {
-    requestUrl: input.requestUrl,
-    organization_id: input.organizationId,
-    topLevelKeys: topKeys(input.raw),
     messageType,
     type: str(input.raw, 'type'),
+    callId,
+    hasTranscript,
+    hasMessages,
+    hasRecordingUrl,
+    keys,
+  })
+
+  console.log('[vapi/event/raw-detail]', {
+    requestUrl: input.requestUrl,
+    organization_id: input.organizationId,
     event,
-    callId: str(call, 'id') || str(input.flat, 'callId') || str(input.flat, 'call_id') || '',
     assistantId:
       str(call, 'assistantId') ||
       str(call, 'assistant_id') ||
@@ -83,9 +96,6 @@ export function logVapiEventRaw(input: {
       '',
     hasMessage: Boolean(msg),
     hasCall: Boolean(call),
-    hasTranscript,
-    hasMessages,
-    hasRecordingUrl,
     hasSummary,
     hasToolCalls: Boolean(toolCalls && toolCalls.length > 0),
   })

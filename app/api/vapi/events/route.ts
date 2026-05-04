@@ -61,6 +61,7 @@ export async function POST(request: NextRequest) {
     }
     const out = await dispatchVapiEvent({
       body: parsed as unknown as Record<string, unknown>,
+      rawBody: raw,
       organizationId,
       requestUrl: request.url,
     })
