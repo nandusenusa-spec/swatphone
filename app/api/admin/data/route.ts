@@ -1,3 +1,7 @@
+import {
+  rejectUnlessDemoBypassAdminDataGet,
+  rejectUnlessDemoBypassAdminDataPost,
+} from '@/lib/admin/demo-admin-data-auth'
 import { createServiceRoleClient } from '@/lib/supabase/service-role'
 import { syncTeamMembersFromTransferDestinations } from '@/lib/dashboard/sync-team-transfer-routing'
 import { NextRequest, NextResponse } from 'next/server'
@@ -218,7 +222,8 @@ async function verifyAdminToken(request: NextRequest): Promise<boolean> {
 
 export async function GET(request: NextRequest) {
   if (!(await verifyAdminToken(request))) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const denied = rejectUnlessDemoBypassAdminDataGet(request)
+    if (denied) return denied
   }
 
   const { searchParams } = new URL(request.url)
@@ -649,11 +654,12 @@ export async function GET(request: NextRequest) {
 }
 
 export async function POST(request: NextRequest) {
+  const body = await request.json().catch(() => ({}))
   if (!(await verifyAdminToken(request))) {
-    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+    const denied = await rejectUnlessDemoBypassAdminDataPost(body as Record<string, unknown>)
+    if (denied) return denied
   }
 
-  const body = await request.json()
   const { type, id, data } = body
 
   const supabase = createServiceRoleClient()
