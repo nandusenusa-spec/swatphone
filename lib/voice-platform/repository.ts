@@ -1,6 +1,8 @@
 import { randomUUID } from 'crypto'
 import type { PostgrestError } from '@supabase/supabase-js'
 import { createServiceRoleClient } from '@/lib/supabase/service-role'
+import type { LeadCommercialFields } from '@/lib/vapi/lead-classification'
+import { scoreHintFromCommercial } from '@/lib/vapi/lead-classification'
 import type { PriceLookupSearchMeta } from '@/lib/voice-platform/price-lookup-log'
 import { fieldsFromPostgrestError, logProductsPriceLookupError } from '@/lib/voice-platform/products-query-log'
 import { normalizePhone } from '@/lib/phone'
@@ -137,6 +139,8 @@ export async function upsertLeadByPhone(input: {
   email?: string | null
   company?: string | null
   notes?: string | null
+  commercialSnapshot?: Partial<LeadCommercialFields>
+  vapiCallId?: string | null
 }) {
   const supabase = createServiceRoleClient()
   const phone = normalizePhone(input.phone)
@@ -152,6 +156,36 @@ export async function upsertLeadByPhone(input: {
   const incomingCompany = norm(input.company)
   const incomingNotes = norm(input.notes)
 
+  const mergeLeadMetadata = (
+    existingRow: Record<string, unknown> | undefined,
+  ): Record<string, unknown> => {
+    const prev =
+      existingRow &&
+      typeof existingRow.metadata === 'object' &&
+      existingRow.metadata !== null &&
+      !Array.isArray(existingRow.metadata)
+        ? { ...(existingRow.metadata as Record<string, unknown>) }
+        : {}
+    let touched = false
+    if (input.commercialSnapshot && Object.keys(input.commercialSnapshot).length > 0) {
+      const prevComm =
+        prev.commercial && typeof prev.commercial === 'object' && !Array.isArray(prev.commercial)
+          ? (prev.commercial as Record<string, unknown>)
+          : {}
+      prev.commercial = { ...prevComm, ...input.commercialSnapshot }
+      touched = true
+    }
+    if (input.vapiCallId) {
+      prev.related_vapi_call_id = input.vapiCallId
+      prev.last_source = 'vapi_call'
+      touched = true
+    }
+    if (touched) prev.commercial_updated_at = new Date().toISOString()
+    return prev
+  }
+
+  const scoreBoost = scoreHintFromCommercial(input.commercialSnapshot)
+
   const { data: rows, error: findErr } = await supabase
     .from('leads')
     .select('*')
@@ -164,6 +198,7 @@ export async function upsertLeadByPhone(input: {
   const existing = rows?.[0]
 
   if (!existing) {
+    const metaRow = mergeLeadMetadata(undefined)
     const { data, error } = await supabase
       .from('leads')
       .insert({
@@ -175,7 +210,8 @@ export async function upsertLeadByPhone(input: {
         company: incomingCompany,
         notes: incomingNotes,
         status: 'new',
-        score: 0,
+        score: scoreBoost,
+        ...(Object.keys(metaRow).length > 0 ? { metadata: metaRow } : {}),
       })
       .select('*')
       .single()
@@ -191,7 +227,35 @@ export async function upsertLeadByPhone(input: {
   if (incomingEmail) patch.email = incomingEmail
   if (incomingCompany) patch.company = incomingCompany
   if (incomingNotes) patch.notes = incomingNotes
-  if (Object.keys(patch).length <= 1) return existing
+
+  const mergedMeta = mergeLeadMetadata(existing as Record<string, unknown>)
+  const prevMetaPlain =
+    existing &&
+    typeof (existing as Record<string, unknown>).metadata === 'object' &&
+    (existing as Record<string, unknown>).metadata !== null
+      ? JSON.stringify((existing as Record<string, unknown>).metadata)
+      : '{}'
+  const mergedMetaPlain = JSON.stringify(mergedMeta)
+  if (mergedMetaPlain !== prevMetaPlain && Object.keys(mergedMeta).length > 0) {
+    patch.metadata = mergedMeta
+  }
+
+  const prevScore = typeof existing.score === 'number' ? existing.score : Number(existing.score || 0)
+  if (scoreBoost > 0) {
+    patch.score = Math.max(prevScore, scoreBoost)
+  }
+
+  const metaChanged = mergedMetaPlain !== prevMetaPlain && Object.keys(mergedMeta).length > 0
+
+  const hasSubstantivePatch =
+    Boolean(incomingName) ||
+    Boolean(incomingEmail) ||
+    Boolean(incomingCompany) ||
+    Boolean(incomingNotes) ||
+    metaChanged ||
+    (scoreBoost > 0 && patch.score !== undefined)
+
+  if (!hasSubstantivePatch) return existing
 
   const { data, error } = await supabase
     .from('leads')

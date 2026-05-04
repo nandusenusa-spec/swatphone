@@ -40,6 +40,12 @@ interface Lead {
   company: string | null
   status: string
   score: number
+  /** Score efectivo para UI (clasificación / metadata si la columna score sigue en 0). */
+  display_score?: number
+  category?: string | null
+  priority?: string | null
+  summary?: string | null
+  next_action?: string | null
   score_reasons: string[]
   interests: string[]
   notes: string | null
@@ -76,6 +82,9 @@ export function LeadsTable({ leads, teamMembers }: { leads: Lead[]; teamMembers:
     router.refresh()
   }
 
+  const effScore = (lead: Lead) =>
+    typeof lead.display_score === 'number' ? lead.display_score : lead.score
+
   const getScoreColor = (score: number) => {
     if (score >= 70) return 'text-green-600'
     if (score >= 40) return 'text-yellow-600'
@@ -96,6 +105,9 @@ export function LeadsTable({ leads, teamMembers }: { leads: Lead[]; teamMembers:
         <TableHeader>
           <TableRow>
             <TableHead>Contacto</TableHead>
+            <TableHead>Categoría</TableHead>
+            <TableHead>Prioridad</TableHead>
+            <TableHead>Motivo / resumen</TableHead>
             <TableHead>Empresa</TableHead>
             <TableHead>Score</TableHead>
             <TableHead>Estado</TableHead>
@@ -113,6 +125,42 @@ export function LeadsTable({ leads, teamMembers }: { leads: Lead[]; teamMembers:
                   <p className="text-xs text-muted-foreground">{lead.phone}</p>
                 </div>
               </TableCell>
+              <TableCell>
+                {lead.category ? (
+                  <Badge variant="outline" className="font-normal">
+                    {lead.category}
+                  </Badge>
+                ) : (
+                  <span className="text-muted-foreground">—</span>
+                )}
+              </TableCell>
+              <TableCell>
+                {lead.priority ? (
+                  <Badge
+                    variant="secondary"
+                    className={cn(
+                      'font-normal',
+                      lead.priority === 'high' || lead.priority === 'urgent'
+                        ? 'border-amber-600/30 bg-amber-500/10 text-amber-900 dark:text-amber-100'
+                        : '',
+                    )}
+                  >
+                    {lead.priority}
+                  </Badge>
+                ) : (
+                  <span className="text-muted-foreground">—</span>
+                )}
+              </TableCell>
+              <TableCell className="max-w-[220px]">
+                <p className="line-clamp-2 text-sm text-muted-foreground">
+                  {lead.summary || lead.notes?.replace(/\[swat_commercial\][\s\S]*?\[\/swat_commercial\]/i, '').trim() || '—'}
+                </p>
+                {lead.next_action ? (
+                  <p className="mt-1 line-clamp-1 text-xs text-muted-foreground">
+                    <span className="font-medium text-foreground/80">Próximo paso:</span> {lead.next_action}
+                  </p>
+                ) : null}
+              </TableCell>
               <TableCell>{lead.company || '-'}</TableCell>
               <TableCell>
                 <div className="flex items-center gap-2">
@@ -120,14 +168,14 @@ export function LeadsTable({ leads, teamMembers }: { leads: Lead[]; teamMembers:
                     <div
                       className={cn(
                         'h-full rounded-full',
-                        lead.score >= 70 ? 'bg-green-500' :
-                        lead.score >= 40 ? 'bg-yellow-500' : 'bg-red-500'
+                        effScore(lead) >= 70 ? 'bg-green-500' :
+                        effScore(lead) >= 40 ? 'bg-yellow-500' : 'bg-red-500'
                       )}
-                      style={{ width: `${lead.score}%` }}
+                      style={{ width: `${effScore(lead)}%` }}
                     />
                   </div>
-                  <span className={cn('text-sm font-medium', getScoreColor(lead.score))}>
-                    {lead.score}%
+                  <span className={cn('text-sm font-medium', getScoreColor(effScore(lead)))}>
+                    {effScore(lead)}%
                   </span>
                 </div>
               </TableCell>
@@ -209,11 +257,40 @@ export function LeadsTable({ leads, teamMembers }: { leads: Lead[]; teamMembers:
                 </div>
                 <div>
                   <p className="text-sm text-muted-foreground">Score</p>
-                  <p className={cn('font-medium', getScoreColor(selectedLead.score))}>
-                    {selectedLead.score}%
+                  <p className={cn('font-medium', getScoreColor(effScore(selectedLead)))}>
+                    {effScore(selectedLead)}%
                   </p>
                 </div>
               </div>
+
+              {(selectedLead.category || selectedLead.priority || selectedLead.summary || selectedLead.next_action) && (
+                <div className="grid grid-cols-1 gap-2 rounded-md border p-3 text-sm">
+                  {selectedLead.category ? (
+                    <p>
+                      <span className="text-muted-foreground">Categoría: </span>
+                      {selectedLead.category}
+                    </p>
+                  ) : null}
+                  {selectedLead.priority ? (
+                    <p>
+                      <span className="text-muted-foreground">Prioridad: </span>
+                      {selectedLead.priority}
+                    </p>
+                  ) : null}
+                  {selectedLead.summary ? (
+                    <p>
+                      <span className="text-muted-foreground">Resumen: </span>
+                      {selectedLead.summary}
+                    </p>
+                  ) : null}
+                  {selectedLead.next_action ? (
+                    <p>
+                      <span className="text-muted-foreground">Próxima acción: </span>
+                      {selectedLead.next_action}
+                    </p>
+                  ) : null}
+                </div>
+              )}
 
               {selectedLead.interests && selectedLead.interests.length > 0 && (
                 <div>

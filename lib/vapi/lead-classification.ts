@@ -6,6 +6,47 @@
 export const SWAT_COMMERCIAL_BLOCK_START = '[swat_commercial]'
 export const SWAT_COMMERCIAL_BLOCK_END = '[/swat_commercial]'
 
+/** Parsea el bloque `[swat_commercial]` en campos para tabla/dashboard. */
+export function parseCommercialFieldsFromNotes(notes: string | null | undefined): Partial<LeadCommercialFields> | null {
+  if (!notes || typeof notes !== 'string') return null
+  const start = notes.indexOf(SWAT_COMMERCIAL_BLOCK_START)
+  const end = notes.indexOf(SWAT_COMMERCIAL_BLOCK_END)
+  if (start === -1 || end === -1 || end <= start) return null
+  const inner = notes.slice(start + SWAT_COMMERCIAL_BLOCK_START.length, end).trim()
+  if (!inner) return null
+  const out: Partial<LeadCommercialFields> = {}
+  for (const line of inner.split('\n')) {
+    const t = line.trim()
+    if (!t) continue
+    if (t === 'callback_required=true') {
+      out.callback_required = true
+      continue
+    }
+    const eq = t.indexOf('=')
+    if (eq === -1) continue
+    const key = t.slice(0, eq).trim().toLowerCase()
+    const val = t.slice(eq + 1).trim()
+    if (key === 'category') out.category = val
+    else if (key === 'intent') out.intent = val
+    else if (key === 'priority') out.priority = val
+    else if (key === 'estimated_value_level') out.estimated_value_level = val
+    else if (key === 'summary') out.summary = val
+    else if (key === 'next_action') out.next_action = val
+    else if (key === 'source') out.source = val
+  }
+  return Object.keys(out).length ? out : null
+}
+
+/** Score 0–100 para UI cuando la columna score sigue en 0 pero hay clasificación en notas. */
+export function scoreHintFromCommercial(c: Partial<LeadCommercialFields> | null | undefined): number {
+  if (!c?.priority && !c?.category) return 0
+  if (c.category === 'wrap' || c.priority === 'urgent') return 88
+  if (c.priority === 'high') return 72
+  if (c.priority === 'normal') return 48
+  if (c.priority === 'low') return 28
+  return 40
+}
+
 /** Extrae líneas clave del bloque comercial para mostrar en UI (sin el bloque completo). */
 export function extractSwatCommercialPreview(notes: string | null | undefined): string | null {
   if (!notes || typeof notes !== 'string') return null

@@ -2,7 +2,34 @@ import { createClient } from '@/lib/supabase/server'
 import { createServiceRoleClient } from '@/lib/supabase/service-role'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { LeadsTable } from '@/components/dashboard/leads-table'
-import { Users, UserCheck, UserX, Star } from 'lucide-react'
+import {
+  parseCommercialFieldsFromNotes,
+  scoreHintFromCommercial,
+} from '@/lib/vapi/lead-classification'
+import { Users, UserCheck, Star } from 'lucide-react'
+
+function commercialFromStoredLead(row: Record<string, unknown>) {
+  const meta = row.metadata as Record<string, unknown> | undefined
+  const fromMeta =
+    meta?.commercial &&
+    typeof meta.commercial === 'object' &&
+    meta.commercial !== null &&
+    !Array.isArray(meta.commercial)
+      ? (meta.commercial as Record<string, unknown>)
+      : {}
+  const fromNotes = parseCommercialFieldsFromNotes(typeof row.notes === 'string' ? row.notes : null) || {}
+  const merged = {
+    category: (fromNotes.category || (fromMeta.category as string | undefined)) as string | undefined,
+    intent: (fromNotes.intent || (fromMeta.intent as string | undefined)) as string | undefined,
+    priority: (fromNotes.priority || (fromMeta.priority as string | undefined)) as string | undefined,
+    estimated_value_level: (fromNotes.estimated_value_level ||
+      (fromMeta.estimated_value_level as string | undefined)) as string | undefined,
+    summary: (fromNotes.summary || (fromMeta.summary as string | undefined)) as string | undefined,
+    next_action: (fromNotes.next_action || (fromMeta.next_action as string | undefined)) as string | undefined,
+    source: (fromNotes.source || (fromMeta.source as string | undefined)) as string | undefined,
+  }
+  return merged
+}
 
 export default async function LeadsPage() {
   const supabase = await createClient()
@@ -24,7 +51,7 @@ export default async function LeadsPage() {
           .order('created_at', { ascending: false }),
         service
           .from('leads')
-          .select('id, name, phone, email, company, status, score, created_at')
+          .select('id, name, phone, email, company, status, score, created_at, notes, metadata')
           .eq('organization_id', orgId)
           .order('created_at', { ascending: false }),
         service
@@ -49,6 +76,11 @@ export default async function LeadsPage() {
     company: typeof c.company === 'string' ? c.company : null,
     status: 'new',
     score: 0,
+    display_score: 0,
+    category: null as string | null,
+    priority: null as string | null,
+    summary: null as string | null,
+    next_action: null as string | null,
     score_reasons: [] as string[],
     interests: [] as string[],
     notes: null as string | null,
@@ -56,20 +88,30 @@ export default async function LeadsPage() {
     team_members: null,
   }))
 
-  const fromLeads = crmLeads.map((c: Record<string, unknown>) => ({
-    id: String(c.id),
-    name: typeof c.name === 'string' ? c.name : null,
-    phone: String(c.phone || ''),
-    email: typeof c.email === 'string' ? c.email : null,
-    company: typeof c.company === 'string' ? c.company : null,
-    status: typeof c.status === 'string' ? c.status : 'new',
-    score: typeof c.score === 'number' ? c.score : 0,
-    score_reasons: [] as string[],
-    interests: [] as string[],
-    notes: null as string | null,
-    created_at: String(c.created_at || new Date().toISOString()),
-    team_members: null,
-  }))
+  const fromLeads = crmLeads.map((c: Record<string, unknown>) => {
+    const comm = commercialFromStoredLead(c)
+    const rawScore = typeof c.score === 'number' ? c.score : 0
+    const displayScore = Math.max(rawScore, scoreHintFromCommercial(comm))
+    return {
+      id: String(c.id),
+      name: typeof c.name === 'string' ? c.name : null,
+      phone: String(c.phone || ''),
+      email: typeof c.email === 'string' ? c.email : null,
+      company: typeof c.company === 'string' ? c.company : null,
+      status: typeof c.status === 'string' ? c.status : 'new',
+      score: rawScore,
+      display_score: displayScore,
+      category: comm.category ?? null,
+      priority: comm.priority ?? null,
+      summary: comm.summary ?? null,
+      next_action: comm.next_action ?? null,
+      score_reasons: [] as string[],
+      interests: [] as string[],
+      notes: typeof c.notes === 'string' ? c.notes : null,
+      created_at: String(c.created_at || new Date().toISOString()),
+      team_members: null,
+    }
+  })
 
   const existingPhones = new Set(
     [...fromLeads, ...fromCustomers]
@@ -89,6 +131,11 @@ export default async function LeadsPage() {
       company: null as string | null,
       status: 'new',
       score: 0,
+      display_score: 0,
+      category: null as string | null,
+      priority: null as string | null,
+      summary: typeof r.summary === 'string' ? r.summary : null,
+      next_action: null as string | null,
       score_reasons: [] as string[],
       interests: [] as string[],
       notes: typeof r.summary === 'string' ? r.summary : null,
@@ -102,9 +149,15 @@ export default async function LeadsPage() {
 
   const teamMembers: any[] = []
   const totalLeads = leads.length
-  const newLeads = leads.length
-  const qualifiedLeads = 0
-  const avgScore = 0
+  const newLeads = leads.filter((l) => l.status === 'new').length
+  const qualifiedLeads = leads.filter((l) => l.status === 'qualified').length
+  const avgScore =
+    leads.length > 0
+      ? Math.round(
+          leads.reduce((acc, l) => acc + (typeof l.display_score === 'number' ? l.display_score : l.score), 0) /
+            leads.length,
+        )
+      : 0
 
   const stats = [
     { title: 'Total Leads', value: totalLeads || 0, icon: Users },

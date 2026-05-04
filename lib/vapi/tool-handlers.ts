@@ -216,6 +216,8 @@ export async function executeToolHandler(
         email: typeof args.email === 'string' ? args.email : undefined,
         company: typeof args.company === 'string' ? args.company : undefined,
         notes: notesWithMeta || mergedNotes,
+        commercialSnapshot: commercial,
+        vapiCallId: context.vapiCallId ?? null,
       })
     }
     case 'prepare_warm_transfer': {

@@ -1,3 +1,4 @@
+import type { LeadCommercialFields } from '@/lib/vapi/lead-classification'
 import { normalizePhone } from '@/lib/phone'
 import { getOrganizationRuntimeConfig } from '@/lib/vapi/runtime-config'
 import { classifyCall } from '@/lib/voice-platform/classifier'
@@ -681,6 +682,9 @@ export async function runSaveLeadInfo(input: {
   email?: string
   company?: string
   notes?: string
+  /** Clasificación comercial (tabla `leads.metadata` + score sugerido). */
+  commercialSnapshot?: Partial<LeadCommercialFields>
+  vapiCallId?: string | null
 }): Promise<SaveLeadInfoSuccess | SaveLeadInfoFailure> {
   try {
     const customer = await upsertCustomerLeadInfo({
@@ -698,6 +702,8 @@ export async function runSaveLeadInfo(input: {
       email: input.email,
       company: input.company,
       notes: input.notes,
+      commercialSnapshot: input.commercialSnapshot,
+      vapiCallId: input.vapiCallId ?? null,
     })
 
     return {
