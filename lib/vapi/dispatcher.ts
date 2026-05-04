@@ -16,9 +16,14 @@ import {
   buildWarmTransferCallTool,
 } from '@/lib/vapi/warm-transfer-tool'
 import {
+  buildTranscriptFromMessages,
+  getAnalysisObjectFromPayload,
+  getCallTimestampsFromPayload,
   getCallerPhoneFromPayload,
+  getCostFromPayload,
   getDurationSecondsFromPayload,
   getEndedReasonFromPayload,
+  getMessagesFromPayload,
   getRecordingUrlFromPayload,
   getSentimentFromPayload,
   getSummaryFromPayload,
@@ -154,10 +159,6 @@ export async function dispatchVapiEvent(input: {
     from_getCallerPhone_raw_body: Boolean(phoneFromRawBody),
   }
   const customerName = getCustomerName(payload)
-  const transcript =
-    getTranscriptFromPayload(payload) ||
-    getTranscriptFromPayload(input.body) ||
-    str(payload, 'transcript')
   const summary =
     getSummaryFromPayload(payload) ||
     getSummaryFromPayload(input.body) ||
@@ -169,6 +170,18 @@ export async function dispatchVapiEvent(input: {
   const durationSeconds =
     getDurationSecondsFromPayload(payload) ?? getDurationSecondsFromPayload(input.body)
   const disposition = str(payload, 'disposition')
+
+  const rawTranscript =
+    getTranscriptFromPayload(payload) ||
+    getTranscriptFromPayload(input.body) ||
+    str(payload, 'transcript')
+  const messagesFromPayload =
+    getMessagesFromPayload(payload) ?? getMessagesFromPayload(input.body)
+  const messagesCount = messagesFromPayload?.length ?? 0
+  let transcriptFinal = (rawTranscript || '').trim()
+  if (!transcriptFinal && messagesFromPayload?.length) {
+    transcriptFinal = (buildTranscriptFromMessages(messagesFromPayload) || '').trim()
+  }
 
   let resolvedPhone = phone
   let phoneFromCallLogs = false
@@ -556,7 +569,7 @@ export async function dispatchVapiEvent(input: {
   const validation = shouldRejectByValidation({
     name: customerName,
     phone: resolvedPhone,
-    reason: `${summary} ${transcript}`.trim(),
+    reason: `${summary} ${transcriptFinal}`.trim(),
     jobNumber: str(payload, 'job_number') || str(payload, 'order_number'),
     attempts: Number(payload.attempts || 0) || runtime.spamPolicy.maxFailedAttempts - 1,
   })
@@ -592,9 +605,17 @@ export async function dispatchVapiEvent(input: {
   const extractionCallback =
     extractionFromPayload.callback_required === true ||
     extractionFromPayload.follow_up_required === true
-  const narrative = `${summary || ''} ${transcript || ''}`.trim()
+  const narrative = `${summary || ''} ${transcriptFinal || ''}`.trim()
   const heuristicCallback =
     ended && narrative.length >= 16 && textSuggestsPromisedCallback(narrative)
+
+  const t1 = getCallTimestampsFromPayload(payload)
+  const t2 = getCallTimestampsFromPayload(input.body)
+  const startedAtIso = t1.startedAt || t2.startedAt
+  const endedAtIso = t1.endedAt || t2.endedAt
+  const cost = getCostFromPayload(payload) ?? getCostFromPayload(input.body)
+  const analysisObj =
+    getAnalysisObjectFromPayload(payload) ?? getAnalysisObjectFromPayload(input.body)
 
   const structuredExtras: Record<string, unknown> = {
     ...(Object.keys(extractionFromPayload).length > 0 ? extractionFromPayload : {}),
@@ -603,6 +624,30 @@ export async function dispatchVapiEvent(input: {
     ...(topic ? { vapi_topic: topic } : {}),
     ...(sentiment ? { vapi_sentiment: sentiment } : {}),
     ...(er ? { vapi_ended_reason: er } : {}),
+    ...(typeof cost === 'number' && Number.isFinite(cost) ? { vapi_cost: cost } : {}),
+    ...(messagesCount > 0 ? { vapi_messages_count: messagesCount } : {}),
+    ...(startedAtIso ? { vapi_started_at: startedAtIso } : {}),
+    ...(endedAtIso ? { vapi_ended_at: endedAtIso } : {}),
+    ...(analysisObj && Object.keys(analysisObj).length > 0 ? { vapi_analysis: analysisObj } : {}),
+    ...(ended && vapiCallId
+      ? {
+          vapi_metadata: {
+            organization_id: input.organizationId,
+            webhook_message_type: type,
+            vapi_call_id: vapiCallId,
+            customer_number: resolvedPhone || null,
+            ended_reason: er || null,
+            has_transcript: Boolean(transcriptFinal.trim()),
+            messages_count: messagesCount,
+            has_summary: Boolean((summary || '').trim()),
+            has_recording_url: Boolean(recordingUrl),
+            started_at: startedAtIso,
+            ended_at: endedAtIso,
+            duration_seconds: typeof durationSeconds === 'number' ? durationSeconds : null,
+            cost: typeof cost === 'number' && Number.isFinite(cost) ? cost : null,
+          },
+        }
+      : {}),
   }
 
   let persisted: Awaited<ReturnType<typeof persistCallArtifacts>>
@@ -612,7 +657,7 @@ export async function dispatchVapiEvent(input: {
       vapiCallId: vapiCallId || undefined,
       phone: resolvedPhone,
       customerName: customerName || undefined,
-      transcript: transcript || undefined,
+      transcript: transcriptFinal || undefined,
       summary: summary || undefined,
       intent: str(payload, 'intent') || undefined,
       outcome: disposition || (ended ? er || 'resolved' : undefined),
@@ -621,16 +666,29 @@ export async function dispatchVapiEvent(input: {
       followUpDate: undefined,
       spamScore: undefined,
       ended,
+      vapiStartedAtIso: startedAtIso || undefined,
+      vapiEndedAtIso: ended ? endedAtIso || undefined : undefined,
       structuredExtractionFromEvent:
         Object.keys(structuredExtras).length > 0 ? structuredExtras : undefined,
     })
+    if (ended && !transcriptFinal.trim()) {
+      console.warn('[vapi/call-transcript-missing]', {
+        callId: vapiCallId || null,
+        hasMessages: messagesCount > 0,
+        hasTranscript: Boolean((rawTranscript || '').trim()),
+        hasSummary: Boolean((summary || '').trim()),
+        endedReason: er || null,
+      })
+    }
     console.log('[vapi/call-outcome]', {
       callId: vapiCallId || null,
       organization_id: input.organizationId,
       saved: true,
       table: 'call_logs',
-      transcriptLength: (transcript || '').length,
+      transcriptLength: transcriptFinal.length,
+      messagesCount,
       summaryExists: Boolean((summary || '').trim()),
+      recordingUrlExists: Boolean(recordingUrl),
       endedReason: er || null,
       call_log_id: persisted.call_log_id,
       error: null,
@@ -643,8 +701,10 @@ export async function dispatchVapiEvent(input: {
       organization_id: input.organizationId,
       saved: false,
       table: 'call_logs',
-      transcriptLength: (transcript || '').length,
+      transcriptLength: transcriptFinal.length,
+      messagesCount,
       summaryExists: Boolean((summary || '').trim()),
+      recordingUrlExists: Boolean(recordingUrl),
       endedReason: er || null,
       error: msg.slice(0, 400),
       code: errObj?.code ?? null,

@@ -450,6 +450,8 @@ export async function runSaveCallOutcome(input: {
   nextAction?: string
   structuredExtraction?: StructuredExtraction
   ended?: boolean
+  vapiStartedAtIso?: string
+  vapiEndedAtIso?: string
 }) {
   const classificationInput = classifyCall({
     text: `${input.summary || ''} ${input.transcript || ''}`.trim(),
@@ -479,6 +481,8 @@ export async function runSaveCallOutcome(input: {
     structuredExtraction: input.structuredExtraction,
     nextAction: input.nextAction,
     ended: input.ended,
+    vapiStartedAtIso: input.vapiStartedAtIso ?? undefined,
+    vapiEndedAtIso: input.vapiEndedAtIso ?? undefined,
   })
 
   if (input.ended) {

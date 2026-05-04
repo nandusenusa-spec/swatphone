@@ -1,5 +1,6 @@
 import { createClient } from '@/lib/supabase/server'
 import { createServiceRoleClient } from '@/lib/supabase/service-role'
+import { normalizePhone } from '@/lib/phone'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { CallsTable } from '@/components/dashboard/calls-table'
 import { Phone, PhoneIncoming, PhoneOutgoing, PhoneMissed } from 'lucide-react'
@@ -20,6 +21,14 @@ export default async function CallsPage() {
   let metricsInbound = 0
   let metricsCompleted = 0
   let metricsMissed = 0
+  let leadByNormPhone = new Map<
+    string,
+    { id: string; name: string | null; email: string | null; phone: string }
+  >()
+  let followByCallId = new Map<
+    string,
+    { id: string; title: string; status: string; call_log_id: string | null; due_at: string | null }
+  >()
   if (orgId) {
     const [res, totalCt, missedCt] = await Promise.all([
       service
@@ -52,6 +61,40 @@ export default async function CallsPage() {
       })
     }
     calls = (res.data || []) as Record<string, unknown>[]
+    const callIds = calls.map((c) => c.id).filter(Boolean) as string[]
+    const [{ data: leadsData }, followRes] = await Promise.all([
+      service.from('leads').select('id, name, email, phone').eq('organization_id', orgId).limit(500),
+      callIds.length
+        ? service
+            .from('follow_ups')
+            .select('id, title, status, call_log_id, due_at')
+            .eq('organization_id', orgId)
+            .in('call_log_id', callIds)
+        : Promise.resolve({ data: [] as Record<string, unknown>[] }),
+    ])
+    const leadsRows =
+      (leadsData || []) as { id: string; name: string | null; email: string | null; phone: string }[]
+    const followRows =
+      (followRes.data || []) as {
+        id: string
+        title: string
+        status: string
+        call_log_id: string | null
+        due_at: string | null
+      }[]
+    const phoneMap = new Map<string, (typeof leadsRows)[0]>()
+    for (const L of leadsRows) {
+      const n = normalizePhone(L.phone)
+      if (n && !phoneMap.has(n)) phoneMap.set(n, L)
+    }
+    leadByNormPhone = phoneMap
+    const fuMap = new Map<string, (typeof followRows)[0]>()
+    for (const f of followRows) {
+      if (f.call_log_id && !fuMap.has(f.call_log_id)) {
+        fuMap.set(f.call_log_id, f)
+      }
+    }
+    followByCallId = fuMap
     metricsTotal = totalCt.count ?? 0
     metricsInbound = metricsTotal
     metricsMissed = missedCt.count ?? 0
@@ -75,10 +118,35 @@ export default async function CallsPage() {
   const normalizedCalls = calls.map((c: Record<string, unknown>) => {
     const started = c.started_at ? new Date(String(c.started_at)).getTime() : 0
     const ended = c.ended_at ? new Date(String(c.ended_at)).getTime() : 0
-    const duration = started && ended && ended > started ? Math.round((ended - started) / 1000) : 0
     const phone = typeof c.phone === 'string' ? c.phone : ''
     const customerName = typeof c.customer_name === 'string' ? c.customer_name : null
     const intent = typeof c.intent === 'string' ? c.intent : null
+    const se =
+      c.structured_extraction &&
+      typeof c.structured_extraction === 'object' &&
+      !Array.isArray(c.structured_extraction)
+        ? (c.structured_extraction as Record<string, unknown>)
+        : {}
+    const recording_url =
+      (typeof se.vapi_recording_url === 'string' ? se.vapi_recording_url : null) ||
+      (typeof se.recording_url === 'string' ? se.recording_url : null)
+    const ended_reason =
+      (typeof se.vapi_ended_reason === 'string' ? se.vapi_ended_reason : null) ||
+      (typeof c.result === 'string' ? c.result : null) ||
+      (typeof c.outcome === 'string' ? c.outcome : null)
+    const sentiment =
+      typeof se.vapi_sentiment === 'string' ? se.vapi_sentiment : null
+    const vapiDur = typeof se.vapi_duration_seconds === 'number' ? se.vapi_duration_seconds : null
+    const duration =
+      vapiDur !== null && Number.isFinite(vapiDur) && vapiDur >= 0
+        ? Math.round(vapiDur)
+        : started && ended && ended > started
+          ? Math.round((ended - started) / 1000)
+          : 0
+    const norm = normalizePhone(phone)
+    const related_lead = norm ? leadByNormPhone.get(norm) ?? null : null
+    const related_follow_up =
+      typeof c.id === 'string' ? followByCallId.get(c.id) ?? null : null
     return {
       id: c.id,
       phone_number: phone,
@@ -90,13 +158,22 @@ export default async function CallsPage() {
         (typeof c.outcome === 'string' ? c.outcome : null) ||
         'completed',
       duration_seconds: duration,
-      recording_url: null,
+      recording_url,
       transcript: typeof c.transcript === 'string' ? c.transcript : null,
       summary: typeof c.summary === 'string' ? c.summary : null,
       next_action: typeof c.next_action === 'string' ? c.next_action : null,
-      sentiment: null,
+      sentiment,
+      ended_reason,
       created_at: String(c.created_at || new Date().toISOString()),
-      leads: null,
+      leads: related_lead
+        ? {
+            id: related_lead.id,
+            name: related_lead.name,
+            email: related_lead.email,
+            phone: related_lead.phone,
+          }
+        : null,
+      related_follow_up,
       team_members: null,
     }
   })

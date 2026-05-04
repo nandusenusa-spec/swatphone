@@ -1,6 +1,7 @@
 'use client'
 
 import { useState } from 'react'
+import Link from 'next/link'
 import {
   Table,
   TableBody,
@@ -19,7 +20,7 @@ import {
   DialogTitle,
 } from '@/components/ui/dialog'
 import { PhoneIncoming, PhoneOutgoing, Play, FileText, Download, Loader } from 'lucide-react'
-import { formatDistanceToNow, format } from 'date-fns'
+import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { cn } from '@/lib/utils'
 
@@ -36,11 +37,19 @@ interface Call {
   transcript: string | null
   summary: string | null
   sentiment: string | null
+  ended_reason?: string | null
   created_at: string
   leads: {
+    id?: string
     name: string | null
     email: string | null
     phone: string
+  } | null
+  related_follow_up?: {
+    id: string
+    title: string
+    status: string
+    due_at: string | null
   } | null
   team_members: {
     name: string
@@ -187,7 +196,10 @@ export function CallsTable({ calls }: { calls: Call[] }) {
                       </Button>
                     </>
                   )}
-                  {(call.transcript || call.summary) && (
+                  {(call.transcript ||
+                    call.summary ||
+                    call.recording_url ||
+                    call.ended_reason) && (
                     <Button
                       size="sm"
                       variant="ghost"
@@ -272,6 +284,47 @@ export function CallsTable({ calls }: { calls: Call[] }) {
               <div className="rounded-lg border p-3 text-sm">
                 <span className="font-medium">Tema / intención: </span>
                 {selectedCall.intent}
+              </div>
+            )}
+            {selectedCall?.ended_reason && (
+              <div className="rounded-lg border p-3 text-sm">
+                <span className="font-medium">Motivo de cierre: </span>
+                <span className="font-mono text-xs">{selectedCall.ended_reason}</span>
+              </div>
+            )}
+            {selectedCall?.recording_url && (
+              <div className="rounded-lg border p-3 text-sm">
+                <span className="font-medium">Grabación: </span>
+                <a
+                  href={selectedCall.recording_url}
+                  target="_blank"
+                  rel="noopener noreferrer"
+                  className="text-primary underline break-all"
+                >
+                  Abrir enlace
+                </a>
+              </div>
+            )}
+            {selectedCall?.leads && (
+              <div className="rounded-lg border p-3 text-sm">
+                <span className="font-medium">Lead relacionado: </span>
+                <Link href="/dashboard/leads" className="text-primary underline">
+                  {selectedCall.leads.name || selectedCall.leads.phone}
+                </Link>
+              </div>
+            )}
+            {selectedCall?.related_follow_up && (
+              <div className="rounded-lg border p-3 text-sm">
+                <span className="font-medium">Seguimiento: </span>
+                {selectedCall.related_follow_up.title}
+                <span className="text-muted-foreground">
+                  {' '}
+                  ({selectedCall.related_follow_up.status}
+                  {selectedCall.related_follow_up.due_at
+                    ? ` · ${format(new Date(selectedCall.related_follow_up.due_at), 'dd/MM/yyyy', { locale: es })}`
+                    : ''}
+                  )
+                </span>
               </div>
             )}
             {selectedCall?.next_action && (

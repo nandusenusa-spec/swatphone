@@ -1,3 +1,9 @@
+/**
+ * Vapi server URL / webhook (assistant.serverUrl) debe apuntar aquí, p. ej.:
+ * https://swatvoiceia.vercel.app/api/voice/events?organization_id=<ORG_UUID>
+ * (alias: /api/vapi/events). En Vapi: habilitar recording, transcript y eventos
+ * end-of-call-report según documentación del panel.
+ */
 import { NextRequest, NextResponse } from 'next/server'
 import { ZodError } from 'zod'
 import { VapiEventInputSchema } from '@/lib/schemas/vapi'

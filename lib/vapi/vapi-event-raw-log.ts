@@ -1,3 +1,10 @@
+import {
+  getMessagesFromPayload,
+  getRecordingUrlFromPayload,
+  getSummaryFromPayload,
+  getTranscriptFromPayload,
+} from '@/lib/vapi/payload'
+
 type JsonRecord = Record<string, unknown>
 
 function asRecord(value: unknown): JsonRecord | null {
@@ -31,8 +38,17 @@ export function logVapiEventRaw(input: {
       ? input.flat.toolCalls
       : null
 
-  const messageType = str(input.flat, 'type') || str(input.raw, 'type')
+  const messageType =
+    str(input.flat, 'type') ||
+    str(asRecord(input.raw.message), 'type') ||
+    str(input.raw, 'type')
   const event = str(input.flat, 'event') || str(input.raw, 'event')
+
+  const compositeForPayload = input.raw as Record<string, unknown>
+  const hasTranscript = Boolean(getTranscriptFromPayload(compositeForPayload)?.trim())
+  const hasMessages = Boolean(getMessagesFromPayload(compositeForPayload)?.length)
+  const hasRecordingUrl = Boolean(getRecordingUrlFromPayload(compositeForPayload))
+  const hasSummary = Boolean(getSummaryFromPayload(compositeForPayload)?.trim())
 
   const known = new Set([
     'tool-calls',
@@ -67,26 +83,27 @@ export function logVapiEventRaw(input: {
       '',
     hasMessage: Boolean(msg),
     hasCall: Boolean(call),
-    hasTranscript: Boolean(
-      typeof input.flat.transcript === 'string' ||
-        typeof input.raw.transcript === 'string' ||
-        (call && typeof (call as JsonRecord).transcript === 'string'),
-    ),
+    hasTranscript,
+    hasMessages,
+    hasRecordingUrl,
+    hasSummary,
     hasToolCalls: Boolean(toolCalls && toolCalls.length > 0),
   })
 
   if (messageType === 'tool-calls') {
     console.log('[vapi/event/detected]', { kind: 'tool-calls', count: toolCalls?.length ?? 0 })
-  } else if (messageType === 'end-of-call-report' || messageType === 'call-ended') {
-    console.log('[vapi/event/detected]', { kind: 'call-end', messageType })
+  } else if (messageType === 'end-of-call-report') {
+    console.log('[vapi/event/detected]', { kind: 'end-of-call-report' })
+  } else if (messageType === 'call-ended') {
+    console.log('[vapi/event/detected]', { kind: 'call-ended' })
   } else if (messageType === 'status-update') {
     console.log('[vapi/event/detected]', { kind: 'status-update' })
   } else if (messageType === 'transcript') {
     console.log('[vapi/event/detected]', { kind: 'transcript' })
   } else if (messageType === 'conversation-update') {
     console.log('[vapi/event/detected]', { kind: 'conversation-update' })
-  } else if (messageType === 'hang') {
-    console.log('[vapi/event/detected]', { kind: 'hang' })
+  } else if (messageType === 'hang' || messageType === 'hang-up') {
+    console.log('[vapi/event/detected]', { kind: 'hang', messageType })
   } else if (!isKnown && messageType) {
     console.warn('[vapi/event/unknown]', {
       keys: topKeys(input.flat, 60),

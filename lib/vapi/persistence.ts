@@ -8,7 +8,7 @@ import type { StructuredExtraction } from '@/lib/voice-platform/types'
 
 export async function persistCallArtifacts(input: {
   organizationId: string
-  vapiCallId: string
+  vapiCallId?: string
   phone: string
   customerName?: string
   transcript?: string
@@ -20,6 +20,8 @@ export async function persistCallArtifacts(input: {
   followUpDate?: string
   spamScore?: number
   ended?: boolean
+  vapiStartedAtIso?: string
+  vapiEndedAtIso?: string
   structuredExtractionFromEvent?: Record<string, unknown>
 }) {
   const base: StructuredExtraction = {
@@ -52,6 +54,8 @@ export async function persistCallArtifacts(input: {
     spamScore: input.spamScore,
     structuredExtraction: merged,
     ended: input.ended,
+    vapiStartedAtIso: input.vapiStartedAtIso,
+    vapiEndedAtIso: input.vapiEndedAtIso,
   })
 }
 

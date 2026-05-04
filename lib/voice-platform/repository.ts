@@ -927,6 +927,8 @@ export async function upsertCallLog(input: {
   structuredExtraction?: StructuredExtraction
   nextAction?: string | null
   ended?: boolean
+  vapiStartedAtIso?: string | null
+  vapiEndedAtIso?: string | null
 }) {
   const supabase = createServiceRoleClient()
   const phone = normalizePhone(input.phone)
@@ -939,6 +941,23 @@ export async function upsertCallLog(input: {
     !Array.isArray(input.structuredExtraction)
       ? (input.structuredExtraction as Record<string, unknown>)
       : {}
+
+  const startedAt =
+    typeof input.vapiStartedAtIso === 'string' && input.vapiStartedAtIso.trim()
+      ? input.vapiStartedAtIso.trim()
+      : null
+  const endedAt =
+    input.ended &&
+    typeof input.vapiEndedAtIso === 'string' &&
+    input.vapiEndedAtIso.trim()
+      ? input.vapiEndedAtIso.trim()
+      : input.ended
+        ? new Date().toISOString()
+        : null
+
+  const endedPatch =
+    input.ended && endedAt ? { ended_at: endedAt } : ({} as Record<string, unknown>)
+  const startedPatch = startedAt ? { started_at: startedAt } : ({} as Record<string, unknown>)
 
   const legacyPayload = {
     organization_id: input.organizationId,
@@ -959,8 +978,9 @@ export async function upsertCallLog(input: {
     summary: input.summary || null,
     structured_extraction: incomingStructured,
     next_action: input.nextAction || null,
-    ended_at: input.ended ? new Date().toISOString() : null,
     updated_at: new Date().toISOString(),
+    ...endedPatch,
+    ...startedPatch,
   }
 
   const minimalPayload = {
@@ -979,8 +999,9 @@ export async function upsertCallLog(input: {
     summary: input.summary || null,
     structured_extraction: incomingStructured,
     next_action: input.nextAction || null,
-    ended_at: input.ended ? new Date().toISOString() : null,
     updated_at: new Date().toISOString(),
+    ...endedPatch,
+    ...startedPatch,
   }
 
   if (input.vapiCallId) {
@@ -1028,7 +1049,7 @@ export async function upsertCallLog(input: {
     .from('call_logs')
     .insert({
       ...minimalPayload,
-      started_at: new Date().toISOString(),
+      started_at: startedAt || new Date().toISOString(),
       created_at: new Date().toISOString(),
     })
     .select('*')
@@ -1038,7 +1059,7 @@ export async function upsertCallLog(input: {
       .from('call_logs')
       .insert({
         ...legacyPayload,
-        started_at: new Date().toISOString(),
+        started_at: startedAt || new Date().toISOString(),
         created_at: new Date().toISOString(),
       })
       .select('*')

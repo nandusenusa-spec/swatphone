@@ -21,18 +21,56 @@ function readNumber(source: AnyRecord | null, key: string): number | null {
   return null
 }
 
-function buildTranscript(messages: unknown): string | null {
-  if (!Array.isArray(messages)) return null
+/** Extrae texto de un mensaje estilo OpenAI / Vapi (content string | parte[] | message). */
+function textFromMessageFragment(message: unknown): string {
+  const m = asRecord(message)
+  if (!m) return typeof message === 'string' ? message : ''
+  const direct =
+    readString(m, 'message') ||
+    readString(m, 'text') ||
+    readString(m, 'transcript') ||
+    ''
+  if (direct) return direct
+  const c = m.content
+  if (typeof c === 'string') return c.trim()
+  if (Array.isArray(c)) {
+    return c
+      .map((part) => {
+        const p = asRecord(part)
+        if (!p) return typeof part === 'string' ? part : ''
+        return (
+          readString(p, 'text') ||
+          readString(p, 'transcript') ||
+          readString(p, 'content') ||
+          ''
+        )
+      })
+      .filter(Boolean)
+      .join(' ')
+  }
+  return ''
+}
+
+export function buildTranscriptFromMessages(messages: unknown): string | null {
+  if (!Array.isArray(messages) || messages.length === 0) return null
   const lines = messages
     .map((message) => {
       const m = asRecord(message)
       if (!m) return null
-      const role = readString(m, 'role') || 'unknown'
-      const content = readString(m, 'content') || ''
-      return content ? `${role}: ${content}` : null
+      const role =
+        readString(m, 'role') ||
+        readString(m, 'speaker') ||
+        readString(m, 'speakerLabel') ||
+        'unknown'
+      const content = textFromMessageFragment(message)
+      return content.trim() ? `${role}: ${content.trim()}` : null
     })
     .filter((line): line is string => !!line)
   return lines.length > 0 ? lines.join('\n') : null
+}
+
+function buildTranscript(messages: unknown): string | null {
+  return buildTranscriptFromMessages(messages)
 }
 
 /** `artifact` puede venir en raíz o dentro de `message` (end-of-call-report). */
@@ -46,24 +84,74 @@ export function getArtifactFromPayload(payload: unknown): AnyRecord | null {
   return nested || null
 }
 
+/** Arrays de mensajes en payloads end-of-call-report / conversation. */
+export function getMessagesFromPayload(payload: unknown): unknown[] | null {
+  const data = asRecord(payload)
+  if (!data) return null
+  const call = asRecord(data.call)
+  const art = getArtifactFromPayload(data)
+  const artCall = art ? asRecord(art.call) : null
+  const analysis = asRecord(data.analysis)
+  const artAnalysis = art ? asRecord(art.analysis) : null
+  const msg = asRecord(data.message)
+  const fromMessage = msg ? (asRecord(msg.artifact) || msg) : null
+  const fromMessageCall = fromMessage ? asRecord(fromMessage.call) : null
+  const candidates = [
+    data.messages,
+    call?.messages,
+    art?.messages,
+    artCall?.messages,
+    analysis?.messages,
+    artAnalysis?.messages,
+    fromMessage?.messages,
+    fromMessageCall?.messages,
+  ]
+  for (const list of candidates) {
+    if (Array.isArray(list) && list.length > 0) return list
+  }
+  if (Array.isArray(data.openAiMessages) && data.openAiMessages.length > 0) {
+    return data.openAiMessages
+  }
+  if (call && Array.isArray(call.openAiMessages) && call.openAiMessages.length > 0) {
+    return call.openAiMessages
+  }
+  const oai = asRecord(data.openAiMessages) || (call ? asRecord(call.openAiMessages) : null)
+  if (oai && Array.isArray(oai.messages) && oai.messages.length > 0) return oai.messages
+  return null
+}
+
 export function getTranscriptFromPayload(payload: unknown): string | null {
   const data = asRecord(payload)
   if (!data) return null
   const call = asRecord(data.call)
   const art = getArtifactFromPayload(data)
   const artCall = art ? asRecord(art.call) : null
+  const analysis = asRecord(data.analysis)
+  const artAnalysis = art ? asRecord(art.analysis) : null
 
-  return (
+  const direct =
     readString(data, 'transcript') ||
     readString(call, 'transcript') ||
     readString(art, 'transcript') ||
+    readString(artCall, 'transcript') ||
     readString(art, 'combinedTranscript') ||
+    readString(analysis, 'transcript') ||
+    readString(artAnalysis, 'transcript')
+
+  if (direct) return direct
+
+  const fromMessages =
     buildTranscript(data.messages) ||
     buildTranscript(call?.messages) ||
     buildTranscript(art?.messages) ||
     buildTranscript(artCall?.messages) ||
-    null
-  )
+    buildTranscript(analysis?.messages) ||
+    buildTranscript(artAnalysis?.messages)
+
+  if (fromMessages) return fromMessages
+
+  const msgList = getMessagesFromPayload(payload)
+  return msgList ? buildTranscriptFromMessages(msgList) : null
 }
 
 export function getRecordingUrlFromPayload(payload: unknown): string | null {
@@ -245,4 +333,66 @@ export function getDurationSecondsFromPayload(payload: unknown): number | null {
     readNumber(artAnalysis, 'durationSeconds')
   if (duration === null) return null
   return duration < 0 ? 0 : Math.round(duration)
+}
+
+/** Coste en USD o unidades Vapi (número o en call.cost / analysis). */
+export function getCostFromPayload(payload: unknown): number | null {
+  const data = asRecord(payload)
+  if (!data) return null
+  const call = asRecord(data.call)
+  const analysis = asRecord(data.analysis)
+  const art = getArtifactFromPayload(data)
+  const artCall = art ? asRecord(art.call) : null
+  const artAnalysis = art ? asRecord(art.analysis) : null
+  const callCost = asRecord(call?.cost) || asRecord(artCall?.cost)
+  return (
+    readNumber(data, 'cost') ||
+    readNumber(call, 'cost') ||
+    readNumber(artCall, 'cost') ||
+    readNumber(callCost, 'total') ||
+    readNumber(callCost, 'amount') ||
+    readNumber(analysis, 'cost') ||
+    readNumber(artAnalysis, 'cost') ||
+    null
+  )
+}
+
+export function getCallTimestampsFromPayload(
+  payload: unknown
+): { startedAt: string | null; endedAt: string | null } {
+  const data = asRecord(payload)
+  if (!data) return { startedAt: null, endedAt: null }
+  const call = asRecord(data.call)
+  const art = getArtifactFromPayload(data)
+  const artCall = art ? asRecord(art.call) : null
+  const pick = (o: AnyRecord | null) => {
+    if (!o) return { s: null as string | null, e: null as string | null }
+    return {
+      s:
+        readString(o, 'startedAt') ||
+        readString(o, 'started_at') ||
+        readString(o, 'startTime') ||
+        null,
+      e: readString(o, 'endedAt') || readString(o, 'ended_at') || readString(o, 'endTime') || null,
+    }
+  }
+  const a = pick(call)
+  const b = pick(artCall)
+  const c = pick(data)
+  return {
+    startedAt: a.s || b.s || c.s,
+    endedAt: a.e || b.e || c.e,
+  }
+}
+
+/** Objeto `analysis` completo para metadata (Vapi end-of-call-report). */
+export function getAnalysisObjectFromPayload(payload: unknown): AnyRecord | null {
+  const data = asRecord(payload)
+  if (!data) return null
+  const art = getArtifactFromPayload(data)
+  const artAnalysis = art ? asRecord(art.analysis) : null
+  const direct = asRecord(data.analysis)
+  if (direct && Object.keys(direct).length > 0) return direct
+  if (artAnalysis && Object.keys(artAnalysis).length > 0) return artAnalysis
+  return null
 }
