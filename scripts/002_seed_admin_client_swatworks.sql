@@ -67,6 +67,7 @@ ON CONFLICT (id) DO UPDATE SET
   updated_at = NOW();
 
 -- Catálogo impresión (opcional): solo si existe public.clients (p. ej. scripts/003).
+-- Usamos EXECUTE para que PostgreSQL no analice "public.clients" si la tabla no existe.
 DO $$
 BEGIN
   IF EXISTS (
@@ -74,17 +75,17 @@ BEGIN
     FROM information_schema.tables
     WHERE table_schema = 'public'
       AND table_name = 'clients'
-  )
-     AND NOT EXISTS (
-       SELECT 1 FROM public.clients WHERE phone = '+15555550199'
-     ) THEN
-    INSERT INTO public.clients (organization_id, name, phone, company)
-    VALUES (
+  ) THEN
+    EXECUTE $ins$
+      INSERT INTO public.clients (organization_id, name, phone, company)
+      SELECT $1::uuid, $2, $3, $4
+      WHERE NOT EXISTS (SELECT 1 FROM public.clients c WHERE c.phone = $3)
+    $ins$
+    USING
       '9bb50e58-9ba6-4d54-8171-13922749f570'::uuid,
       'Cliente demo impresión',
       '+15555550199',
-      'SWATWORKS'
-    );
+      'SWATWORKS';
   END IF;
 END $$;
 
