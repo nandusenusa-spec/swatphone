@@ -108,7 +108,8 @@ export async function runPrepareWarmTransfer(input: {
   }
 
   const runtime = await getOrganizationRuntimeConfig(input.organizationId)
-  const intentCue = buildIntentCue(input.transferDepartment ?? null, input.intent, input.shortSummary)
+  /** `department` ya va aparte; el cue solo lleva intent + resumen (evita duplicar "Diseño" y romper matching). */
+  const intentCue = buildIntentCue(null, input.intent, input.shortSummary)
   const resolved = resolveTransferTarget(runtime, {
     extension: input.transferExtension ?? null,
     department: input.transferDepartment ?? null,
@@ -226,6 +227,22 @@ export async function runPrepareWarmTransfer(input: {
     call_id: input.vapiCallId || null,
     transfer_label: handoff.transfer_label,
     destination_suffix: resolved.phoneE164.length >= 4 ? resolved.phoneE164.slice(-4) : '****',
+  })
+
+  console.info('[vapi/transfer-routing]', {
+    input:
+      [input.transferDepartment, intentCue].filter(Boolean).join(' ').trim() ||
+      input.transferExtension ||
+      null,
+    matchedName: resolved.label,
+    matchedRole: null as string | null,
+    matchedDepartment: input.transferDepartment ?? null,
+    transferExtension: resolved.extension,
+    transferPhone: resolved.phoneE164,
+    found: true,
+    prepared: true,
+    transferred: false,
+    error: null as string | null,
   })
 
   return {

@@ -658,6 +658,8 @@ export type SaveLeadInfoSuccess = {
   ok: true
   saved: true
   lead_saved: boolean
+  /** Id del row en `leads` cuando existe. */
+  lead?: { id: string } | null
   customer: {
     id: string
     name: string | null
@@ -669,7 +671,7 @@ export type SaveLeadInfoSuccess = {
 
 export type SaveLeadInfoFailure = {
   ok: false
-  error: 'save_lead_failed'
+  error: 'save_lead_failed' | 'missing_name' | 'missing_need'
   primary_message_for_caller: string
   /** Código PostgREST / Supabase cuando existe (sin detalle sensible). */
   db_code?: string
@@ -710,6 +712,12 @@ export async function runSaveLeadInfo(input: {
       ok: true,
       saved: true,
       lead_saved: Boolean(lead),
+      lead:
+        lead && typeof (lead as { id?: unknown }).id === 'string'
+          ? { id: String((lead as { id: string }).id) }
+          : lead && (lead as { id?: unknown }).id != null
+            ? { id: String((lead as { id: string | number }).id) }
+            : null,
       customer: {
         id: customer.id,
         name: customer.name ?? null,

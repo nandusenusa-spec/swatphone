@@ -28,6 +28,21 @@ function normKey(s: string): string {
   return stripAccents(s).toLowerCase().replace(/\s+/g, ' ').trim()
 }
 
+/** Internos numéricos equivalentes (90 vs 090). */
+function canonicalExtensionDigits(ext: string): string {
+  const t = (ext || '').trim()
+  if (!/^\d+$/.test(t)) return t.toLowerCase()
+  return String(parseInt(t, 10))
+}
+
+function findDestinationByExtension(
+  destinations: TransferDestination[],
+  extRaw: string,
+): TransferDestination | undefined {
+  const want = canonicalExtensionDigits(extRaw)
+  return destinations.find((d) => canonicalExtensionDigits(d.extension || '') === want)
+}
+
 export function parseTransferDestinations(raw: unknown): TransferDestination[] {
   if (!Array.isArray(raw)) return []
   const out: TransferDestination[] = []
@@ -252,7 +267,7 @@ export function resolveTransferTarget(
   }
 
   if (ext) {
-    const hit = destinations.find((d) => d.extension === ext)
+    const hit = findDestinationByExtension(destinations, ext)
     if (hit) {
       const res = {
         phoneE164: hit.phoneE164.trim(),
@@ -266,8 +281,8 @@ export function resolveTransferTarget(
 
   const inferredExt = nameBlob ? inferTransferExtensionFromKeywords(nameBlob) : null
   const effectiveExt = inferredExt || ''
-  if (effectiveExt && (!ext || ext !== effectiveExt)) {
-    const hit = destinations.find((d) => d.extension === effectiveExt)
+  if (effectiveExt && (!ext || canonicalExtensionDigits(ext) !== canonicalExtensionDigits(effectiveExt))) {
+    const hit = findDestinationByExtension(destinations, effectiveExt)
     if (hit) {
       const res = {
         phoneE164: hit.phoneE164.trim(),
@@ -374,6 +389,8 @@ export function inferTransferExtensionFromKeywords(blob: string): string | null 
   if (/producci[oó]n/.test(n)) return '106'
   if (/\bram[oó]n\b|\bramon\b/.test(n)) return '100'
   if (/administraci[oó]n/.test(n)) return '91'
-  if (/\bdise[nñ]o\b/.test(n) && !/graf/.test(n)) return '90'
+  if (/\bdise[nñ]ador\b/.test(n)) return '105'
+  if (/\bdise[nñ]o\b/.test(n)) return '90'
+  if (/\bdesign\b/.test(n) && !/graphic/.test(n)) return '90'
   return null
 }

@@ -1,5 +1,6 @@
 import {
   runCreateAppointment,
+  runCreateFollowUp,
   runCreateWorkOrder,
   runFindCustomer,
   runGetJobStatus,
@@ -7,7 +8,7 @@ import {
   runMarkSpamCall,
   runSaveLeadInfo,
 } from '@/lib/voice-platform/service'
-import { getCallLogIdByVapiCallId } from '@/lib/voice-platform/repository'
+import { followUpCountForCallLog, getCallLogIdByVapiCallId } from '@/lib/voice-platform/repository'
 import {
   persistCallArtifacts,
   persistFollowUp,
@@ -19,10 +20,134 @@ import { prepareCommercialFollowUpFromArgs } from '@/lib/vapi/commercial-follow-
 import {
   buildCommercialMetaBlock,
   classificationSourceText,
+  defaultFollowUpDueIsoTomorrow,
   detectWrapIntent,
   parseModelLeadClassification,
   prependCommercialBlockToNotes,
+  type LeadCommercialFields,
 } from '@/lib/vapi/lead-classification'
+
+function leadFullNameValid(name: string | undefined): boolean {
+  if (!name?.trim()) return false
+  const parts = name.trim().split(/\s+/).filter((p) => p.length > 0)
+  return parts.length >= 2
+}
+
+async function tryAutoFollowUpAfterLeadSave(input: {
+  organizationId: string
+  phone: string
+  vapiCallId: string | null | undefined
+  toolCallId: string | null | undefined
+  leadId: string | null
+  commercial: Partial<LeadCommercialFields> & Record<string, unknown>
+  customerName: string | undefined
+  args: Record<string, unknown>
+}) {
+  const c = input.commercial
+  const needsHuman =
+    input.args.needs_human_follow_up === true ||
+    (typeof input.args.needs_human_follow_up === 'string' &&
+      input.args.needs_human_follow_up === 'true')
+
+  const shouldAuto =
+    c.category === 'wrap' ||
+    c.intent === 'quote_request' ||
+    c.callback_required === true ||
+    needsHuman
+
+  if (!shouldAuto) return
+
+  let callLogId: string | undefined =
+    input.vapiCallId && input.vapiCallId.trim()
+      ? (await getCallLogIdByVapiCallId(input.organizationId, input.vapiCallId)) || undefined
+      : undefined
+  if (callLogId) {
+    const n = await followUpCountForCallLog(callLogId)
+    if (n > 0) {
+      console.info('[vapi/follow-up]', {
+        source: 'auto_after_lead' as const,
+        toolCallId: input.toolCallId ?? null,
+        leadId: input.leadId,
+        organization_id: input.organizationId,
+        title: null,
+        category: c.category ?? null,
+        priority: null,
+        due_at: null,
+        callback_required: null,
+        created: false,
+        followUpId: null,
+        table: 'follow_ups',
+        error: 'already_exists_for_call_log',
+      })
+      return
+    }
+  }
+
+  const title =
+    c.category === 'wrap'
+      ? 'Llamar por cotización de wrap'
+      : 'Seguimiento: cotización o contacto solicitado'
+
+  const notes = [
+    input.customerName ? `Cliente: ${input.customerName}` : null,
+    `Tel: ${input.phone}`,
+    c.summary ? `Resumen: ${c.summary}` : null,
+    c.next_action ? `Próxima acción: ${c.next_action}` : null,
+    c.category ? `Categoría: ${c.category}` : null,
+    c.intent ? `Intent: ${c.intent}` : null,
+  ]
+    .filter(Boolean)
+    .join('\n')
+
+  const dueAt = defaultFollowUpDueIsoTomorrow()
+  const priority = c.category === 'wrap' ? 'high' : 'normal'
+
+  try {
+    const out = await runCreateFollowUp({
+      organizationId: input.organizationId,
+      callLogId,
+      phone: input.phone,
+      title,
+      notes,
+      dueAt,
+      priority,
+      callbackRequired: true,
+    })
+    const fu = out.follow_up as { id?: string } | undefined
+    console.info('[vapi/follow-up]', {
+      source: 'auto_after_lead' as const,
+      toolCallId: input.toolCallId ?? null,
+      leadId: input.leadId,
+      organization_id: input.organizationId,
+      title: title.slice(0, 120),
+      category: c.category ?? null,
+      priority,
+      due_at: dueAt,
+      callback_required: true,
+      created: true,
+      followUpId: fu?.id ?? null,
+      table: 'follow_ups',
+      error: null,
+    })
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    console.error('[vapi/follow-up]', {
+      source: 'auto_after_lead',
+      toolCallId: input.toolCallId ?? null,
+      leadId: input.leadId,
+      organization_id: input.organizationId,
+      title: title.slice(0, 120),
+      category: c.category ?? null,
+      priority,
+      due_at: dueAt,
+      callback_required: true,
+      created: false,
+      followUpId: null,
+      table: 'follow_ups',
+      error: msg.slice(0, 400),
+    })
+  }
+}
 
 type ToolContext = {
   organizationId: string
@@ -164,6 +289,46 @@ export async function executeToolHandler(
       ].filter(Boolean)
       const mergedNotes = noteParts.join('\n').trim() || undefined
 
+      const needPresent = Boolean(mergedNotes && mergedNotes.trim().length >= 3)
+      const namePresent = leadFullNameValid(mergedName)
+
+      if (!namePresent) {
+        console.info('[vapi/save-lead]', {
+          toolCallId: context.toolCallId ?? null,
+          organization_id: context.organizationId,
+          full_name_present: false,
+          phone_present: true,
+          need_present: needPresent,
+          saved: false,
+          leadId: null,
+          error: 'missing_name',
+        })
+        return {
+          ok: false as const,
+          error: 'missing_name' as const,
+          primary_message_for_caller: '¿Cuál es tu nombre y apellido?',
+        }
+      }
+
+      if (!needPresent) {
+        console.info('[vapi/save-lead]', {
+          toolCallId: context.toolCallId ?? null,
+          organization_id: context.organizationId,
+          full_name_present: true,
+          phone_present: true,
+          need_present: false,
+          saved: false,
+          leadId: null,
+          error: 'missing_need',
+        })
+        return {
+          ok: false as const,
+          error: 'missing_need' as const,
+          primary_message_for_caller:
+            '¿En qué podemos ayudarte o qué necesitás cotizar?',
+        }
+      }
+
       let commercial = parseModelLeadClassification(args)
       const sniff = classificationSourceText(noteParts)
       if (detectWrapIntent(sniff)) {
@@ -209,7 +374,7 @@ export async function executeToolHandler(
         wrap_sniff: detectWrapIntent(sniff),
       })
 
-      return runSaveLeadInfo({
+      const out = await runSaveLeadInfo({
         organizationId: context.organizationId,
         phone,
         name: mergedName,
@@ -219,6 +384,42 @@ export async function executeToolHandler(
         commercialSnapshot: commercial,
         vapiCallId: context.vapiCallId ?? null,
       })
+
+      if (out.ok) {
+        console.info('[vapi/save-lead]', {
+          toolCallId: context.toolCallId ?? null,
+          organization_id: context.organizationId,
+          full_name_present: true,
+          phone_present: true,
+          need_present: true,
+          saved: true,
+          leadId: out.lead?.id ?? null,
+          error: null,
+        })
+        await tryAutoFollowUpAfterLeadSave({
+          organizationId: context.organizationId,
+          phone,
+          vapiCallId: context.vapiCallId,
+          toolCallId: context.toolCallId ?? null,
+          leadId: out.lead?.id ?? null,
+          commercial,
+          customerName: mergedName,
+          args,
+        })
+      } else {
+        console.info('[vapi/save-lead]', {
+          toolCallId: context.toolCallId ?? null,
+          organization_id: context.organizationId,
+          full_name_present: true,
+          phone_present: true,
+          need_present: true,
+          saved: false,
+          leadId: null,
+          error: out.error,
+        })
+      }
+
+      return out
     }
     case 'prepare_warm_transfer': {
       const rawArgsPhone = typeof args.phone === 'string' ? args.phone : ''
@@ -287,14 +488,41 @@ export async function executeToolHandler(
           ? await getCallLogIdByVapiCallId(context.organizationId, context.vapiCallId)
           : null)
       if (!callLogId) {
+        console.info('[vapi/transfer-routing]', {
+          input: 'transfer_to_ramon',
+          matchedName: null,
+          matchedRole: null,
+          matchedDepartment: null,
+          transferExtension: null,
+          transferPhone: null,
+          found: true,
+          prepared: true,
+          transferred: true,
+          error: null,
+          note: 'native_transfer_no_call_log_row',
+        })
         return { ok: true, native_transfer: true }
       }
-      return persistTransfer({
+      const pt = await persistTransfer({
         organizationId: context.organizationId,
         callLogId,
         reason: String(args.reason || 'Transfer requested by caller'),
         urgent: Boolean(args.urgent),
       })
+      console.info('[vapi/transfer-routing]', {
+        input: 'transfer_to_ramon',
+        matchedName: null,
+        matchedRole: null,
+        matchedDepartment: null,
+        transferExtension: null,
+        transferPhone: null,
+        found: true,
+        prepared: true,
+        transferred: true,
+        error: null,
+        call_log_id: callLogId,
+      })
+      return pt
     }
     case 'save_call_outcome':
       if (!args.phone && !context.phone) return missing(['phone'])
@@ -367,6 +595,7 @@ export async function executeToolHandler(
         })
         const fu = out && typeof out === 'object' && 'follow_up' in out ? (out as { follow_up?: { id?: string } }).follow_up : null
         console.info('[vapi/follow-up]', {
+          source: 'tool' as const,
           toolCallId: context.toolCallId || null,
           callId: context.vapiCallId || null,
           organization_id: context.organizationId,
@@ -384,6 +613,7 @@ export async function executeToolHandler(
       } catch (e) {
         const msg = e instanceof Error ? e.message : String(e)
         console.error('[vapi/follow-up]', {
+          source: 'tool' as const,
           toolCallId: context.toolCallId || null,
           callId: context.vapiCallId || null,
           organization_id: context.organizationId,

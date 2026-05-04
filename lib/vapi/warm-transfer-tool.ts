@@ -15,7 +15,7 @@ export function buildPrepareWarmTransferServerTool(organizationId: string): Reco
     function: {
       name: 'prepare_warm_transfer',
       description:
-        'OBLIGATORIO antes de transfer_to_ramon: registra contexto para el operador y el destino de transferencia (interno/nombre de área). Si hay varias líneas en la empresa, incluí transfer_extension o transfer_department según lo que dijo el cliente. El servidor enriquece datos desde CRM si faltan. Después de éxito, llamá transfer_to_ramon.',
+        'OBLIGATORIO antes de transfer_to_ramon: registra contexto para el operador y el destino de transferencia. Pasá transfer_extension (interno, ej. 90 para Diseño, 91 Administración, 100 Ramón, 106 Producción/Rafael, 107 CNC/Leandro, 105 Fernando/diseño gráfico) y/o transfer_department con el nombre exacto del área (ej. "Diseño"). Si el cliente pidió "Diseño" o departamento de diseño (no diseñador gráfico personal), usá interno 90 además de transfer_department "Diseño". Después de respuesta ok, llamá transfer_to_ramon sin demora.',
       parameters: {
         type: 'object',
         properties: {
