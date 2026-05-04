@@ -126,6 +126,13 @@ export async function executeToolHandler(
       })
     }
     case 'save_lead_info': {
+      console.log('[vapi/tool-call]', {
+        callId: context.vapiCallId || null,
+        toolName: 'save_lead_info',
+        toolCallId: context.toolCallId || null,
+        organization_id: context.organizationId,
+        argKeys: Object.keys(args).slice(0, 32),
+      })
       console.info('[vapi/tool-call] save_lead_info', {
         organization_id: context.organizationId,
         vapi_call_id: context.vapiCallId || null,
@@ -314,13 +321,24 @@ export async function executeToolHandler(
         spamScore: typeof args.spam_score === 'number' ? args.spam_score : undefined,
       })
     case 'create_follow_up': {
+      console.log('[vapi/tool-call]', {
+        callId: context.vapiCallId || null,
+        toolName: 'create_follow_up',
+        toolCallId: context.toolCallId || null,
+        organization_id: context.organizationId,
+        argKeys: Object.keys(args).slice(0, 32),
+      })
       console.info('[vapi/tool-call] create_follow_up', {
         organization_id: context.organizationId,
         vapi_call_id: context.vapiCallId || null,
         title_preview: String(args.title ?? '').slice(0, 120),
         callback_required: Boolean(args.callback_required),
       })
-      if (!args.title) return missing(['title'])
+      if (!args.title)
+        return missing(
+          ['title'],
+          'Me falta un dato para registrar el seguimiento.',
+        )
       const prep = prepareCommercialFollowUpFromArgs(args)
 
       let callLogId: string | undefined =
@@ -348,6 +366,7 @@ export async function executeToolHandler(
         const fu = out && typeof out === 'object' && 'follow_up' in out ? (out as { follow_up?: { id?: string } }).follow_up : null
         console.info('[vapi/follow-up]', {
           toolCallId: context.toolCallId || null,
+          callId: context.vapiCallId || null,
           organization_id: context.organizationId,
           title: prep.title.slice(0, 120),
           category: prep.category,
@@ -356,6 +375,7 @@ export async function executeToolHandler(
           callback_required: prep.callbackRequired,
           created: true,
           followUpId: fu?.id ?? null,
+          table: 'follow_ups',
           error: null,
         })
         return out
@@ -363,6 +383,7 @@ export async function executeToolHandler(
         const msg = e instanceof Error ? e.message : String(e)
         console.error('[vapi/follow-up]', {
           toolCallId: context.toolCallId || null,
+          callId: context.vapiCallId || null,
           organization_id: context.organizationId,
           title: prep.title.slice(0, 120),
           category: prep.category,
@@ -371,6 +392,7 @@ export async function executeToolHandler(
           callback_required: prep.callbackRequired,
           created: false,
           followUpId: null,
+          table: 'follow_ups',
           error: msg.slice(0, 400),
         })
         return {

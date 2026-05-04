@@ -14,16 +14,44 @@ export default async function FollowUpsPage() {
     .maybeSingle()
 
   const orgId = profile?.organization_id
-  const followUps = orgId
-    ? (
-        await service
-          .from('follow_ups')
-          .select('id, title, notes, owner, status, due_at, priority, callback_required, customers(name, phone)')
-          .eq('organization_id', orgId)
-          .order('created_at', { ascending: false })
-          .limit(100)
-      ).data || []
-    : []
+  let followUps: Record<string, unknown>[] = []
+  if (orgId) {
+    const baseSelect =
+      'id, title, notes, owner, status, due_at, priority, callback_required, customers(name, phone)'
+    let res = await service
+      .from('follow_ups')
+      .select(baseSelect)
+      .eq('organization_id', orgId)
+      .order('created_at', { ascending: false })
+      .limit(100)
+    if (res.error) {
+      console.error('[dashboard/follow-ups-query]', {
+        status: 'error',
+        code: res.error.code,
+        message: res.error.message,
+        details: (res.error as { details?: string }).details ?? null,
+        hint: (res.error as { hint?: string }).hint ?? null,
+        table: 'follow_ups',
+        filtersUsed: { organization_id: orgId, limit: 100, order: 'created_at desc', embed: 'customers' },
+      })
+      res = await service
+        .from('follow_ups')
+        .select('id, title, notes, owner, status, due_at, priority, callback_required')
+        .eq('organization_id', orgId)
+        .order('created_at', { ascending: false })
+        .limit(100)
+      if (res.error) {
+        console.error('[dashboard/follow-ups-query]', {
+          status: 'error',
+          code: res.error.code,
+          message: res.error.message,
+          table: 'follow_ups',
+          filtersUsed: { organization_id: orgId, fallback_no_embed: true },
+        })
+      }
+    }
+    followUps = (res.data || []) as Record<string, unknown>[]
+  }
 
   return (
     <div className="space-y-6">

@@ -35,16 +35,33 @@ function buildTranscript(messages: unknown): string | null {
   return lines.length > 0 ? lines.join('\n') : null
 }
 
+/** `artifact` puede venir en raíz o dentro de `message` (end-of-call-report). */
+export function getArtifactFromPayload(payload: unknown): AnyRecord | null {
+  const data = asRecord(payload)
+  if (!data) return null
+  const root = asRecord(data.artifact)
+  if (root) return root
+  const msg = asRecord(data.message)
+  const nested = msg ? asRecord(msg.artifact) : null
+  return nested || null
+}
+
 export function getTranscriptFromPayload(payload: unknown): string | null {
   const data = asRecord(payload)
   if (!data) return null
   const call = asRecord(data.call)
+  const art = getArtifactFromPayload(data)
+  const artCall = art ? asRecord(art.call) : null
 
   return (
     readString(data, 'transcript') ||
     readString(call, 'transcript') ||
+    readString(art, 'transcript') ||
+    readString(art, 'combinedTranscript') ||
     buildTranscript(data.messages) ||
     buildTranscript(call?.messages) ||
+    buildTranscript(art?.messages) ||
+    buildTranscript(artCall?.messages) ||
     null
   )
 }
@@ -54,6 +71,8 @@ export function getRecordingUrlFromPayload(payload: unknown): string | null {
   if (!data) return null
   const call = asRecord(data.call)
   const monitor = asRecord(data.monitor)
+  const art = getArtifactFromPayload(data)
+  const artCall = art ? asRecord(art.call) : null
 
   return (
     readString(data, 'recordingUrl') ||
@@ -61,6 +80,10 @@ export function getRecordingUrlFromPayload(payload: unknown): string | null {
     readString(call, 'recordingUrl') ||
     readString(call, 'recording_url') ||
     readString(monitor, 'recordingUrl') ||
+    readString(art, 'recordingUrl') ||
+    readString(art, 'recording_url') ||
+    readString(artCall, 'recordingUrl') ||
+    readString(artCall, 'recording_url') ||
     null
   )
 }
@@ -84,7 +107,16 @@ export function getCallIdFromPayload(payload: unknown): string | null {
   const data = asRecord(payload)
   if (!data) return null
   const call = asRecord(data.call)
-  return readString(call, 'id') || readString(data, 'callId') || readString(data, 'call_id') || null
+  const art = getArtifactFromPayload(data)
+  const artCall = art ? asRecord(art.call) : null
+  return (
+    readString(call, 'id') ||
+    readString(artCall, 'id') ||
+    readString(data, 'callId') ||
+    readString(data, 'call_id') ||
+    readString(art, 'callId') ||
+    null
+  )
 }
 
 /** Lee número del llamante desde un objeto tipo `call` de Vapi (inbound, tool-calls, etc.). */
@@ -132,6 +164,10 @@ export function getCallerPhoneFromPayload(payload: unknown): string | null {
     readString(customerRoot, 'number') || readString(customerRoot, 'phone')
   if (fromCustomerRoot) return fromCustomerRoot
 
+  const art = getArtifactFromPayload(data)
+  const fromArtCall = getCallerPhoneFromCallLike(art ? asRecord(art.call) : null)
+  if (fromArtCall) return fromArtCall
+
   return readString(data, 'phoneNumber') || readString(data, 'phone') || null
 }
 
@@ -140,11 +176,55 @@ export function getSummaryFromPayload(payload: unknown): string | null {
   if (!data) return null
   const call = asRecord(data.call)
   const analysis = asRecord(data.analysis)
+  const art = getArtifactFromPayload(data)
+  const artAnalysis = art ? asRecord(art.analysis) : null
+  const artCall = art ? asRecord(art.call) : null
 
   return (
     readString(call, 'summary') ||
+    readString(artCall, 'summary') ||
     readString(data, 'summary') ||
     readString(analysis, 'summary') ||
+    readString(artAnalysis, 'summary') ||
+    readString(art, 'summary') ||
+    null
+  )
+}
+
+export function getTopicFromPayload(payload: unknown): string | null {
+  const data = asRecord(payload)
+  if (!data) return null
+  const analysis = asRecord(data.analysis)
+  const art = getArtifactFromPayload(data)
+  const artAnalysis = art ? asRecord(art.analysis) : null
+  return readString(analysis, 'topic') || readString(artAnalysis, 'topic') || readString(data, 'topic')
+}
+
+export function getSentimentFromPayload(payload: unknown): string | null {
+  const data = asRecord(payload)
+  if (!data) return null
+  const analysis = asRecord(data.analysis)
+  const art = getArtifactFromPayload(data)
+  const artAnalysis = art ? asRecord(art.analysis) : null
+  return (
+    readString(analysis, 'sentiment') ||
+    readString(artAnalysis, 'sentiment') ||
+    readString(data, 'sentiment') ||
+    null
+  )
+}
+
+export function getEndedReasonFromPayload(payload: unknown): string | null {
+  const data = asRecord(payload)
+  if (!data) return null
+  const call = asRecord(data.call)
+  const art = getArtifactFromPayload(data)
+  const artCall = art ? asRecord(art.call) : null
+  return (
+    readString(data, 'endedReason') ||
+    readString(call, 'endedReason') ||
+    readString(artCall, 'endedReason') ||
+    readString(art, 'endedReason') ||
     null
   )
 }
@@ -154,7 +234,15 @@ export function getDurationSecondsFromPayload(payload: unknown): number | null {
   if (!data) return null
   const call = asRecord(data.call)
   const analysis = asRecord(data.analysis)
-  const duration = readNumber(call, 'duration') || readNumber(data, 'duration') || readNumber(analysis, 'durationSeconds')
+  const art = getArtifactFromPayload(data)
+  const artCall = art ? asRecord(art.call) : null
+  const artAnalysis = art ? asRecord(art.analysis) : null
+  const duration =
+    readNumber(call, 'duration') ||
+    readNumber(artCall, 'duration') ||
+    readNumber(data, 'duration') ||
+    readNumber(analysis, 'durationSeconds') ||
+    readNumber(artAnalysis, 'durationSeconds')
   if (duration === null) return null
   return duration < 0 ? 0 : Math.round(duration)
 }

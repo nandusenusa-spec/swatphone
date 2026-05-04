@@ -1,17 +1,22 @@
 import { NextRequest, NextResponse } from 'next/server'
-import { createServerClient } from '@supabase/ssr'
 import {
   getAssistantIdFromPayload,
   getCallIdFromPayload,
   getCallerPhoneFromPayload,
   getDurationSecondsFromPayload,
+  getEndedReasonFromPayload,
   getRecordingUrlFromPayload,
+  getSentimentFromPayload,
   getSummaryFromPayload,
+  getTopicFromPayload,
   getTranscriptFromPayload,
 } from '@/lib/vapi/payload'
 import { timingSafeEqualUtf8 } from '@/lib/security/timing-safe'
 import { normalizePhone } from '@/lib/phone'
 import { createServiceRoleClient } from '@/lib/supabase/service-role'
+import { persistCallArtifacts } from '@/lib/vapi/persistence'
+import { flattenVapiServerEvent } from '@/lib/vapi/vapi-event-flatten'
+import { unknownCallerPlaceholderE164 } from '@/lib/vapi/vapi-unknown-caller'
 import {
   getClientStatusPayload,
   spokenJobLineFromStatusPayload,
@@ -40,18 +45,7 @@ import { getCallLogIdByVapiCallId } from '@/lib/voice-platform/repository'
 type JsonRecord = Record<string, unknown>
 
 function flattenVapiBody(body: JsonRecord): JsonRecord {
-  const msg = body.message
-  if (!msg || typeof msg !== 'object') return body
-  const m = msg as JsonRecord
-  const out: JsonRecord = { ...body, ...m }
-  if (m.call) out.call = m.call
-  return out
-}
-
-function toIsoOrNull(value: unknown): string | null {
-  if (typeof value !== 'string' || !value.trim()) return null
-  const date = new Date(value)
-  return Number.isNaN(date.getTime()) ? null : date.toISOString()
+  return flattenVapiServerEvent(body)
 }
 
 function asRecord(value: unknown): JsonRecord | null {
@@ -59,11 +53,7 @@ function asRecord(value: unknown): JsonRecord | null {
 }
 
 async function handleCallEnded(flat: JsonRecord) {
-  const supabase = createServerClient(
-    process.env.NEXT_PUBLIC_SUPABASE_URL!,
-    process.env.SUPABASE_SERVICE_ROLE_KEY!,
-    { cookies: { getAll: () => [], setAll: () => {} } },
-  )
+  const supabase = createServiceRoleClient()
 
   const assistantId = getAssistantIdFromPayload(flat)
   if (!assistantId) {
@@ -83,103 +73,80 @@ async function handleCallEnded(flat: JsonRecord) {
   }
 
   const rawPhone = getCallerPhoneFromPayload(flat)
-  const customerPhone = rawPhone ? normalizePhone(rawPhone) : null
+  let customerPhone = rawPhone ? normalizePhone(rawPhone) : ''
   if (!customerPhone) {
-    console.warn('[vapi:webhook] Missing caller phone (call end)', {
+    customerPhone = normalizePhone(unknownCallerPlaceholderE164())
+    console.warn('[vapi:webhook] Missing caller phone (call end); using placeholder for call_logs', {
       assistantId,
       organizationId: org.id,
     })
-    return
-  }
-
-  const { data: existingLead, error: leadLookupError } = await supabase
-    .from('leads')
-    .select('id')
-    .eq('organization_id', org.id)
-    .eq('phone', customerPhone)
-    .maybeSingle()
-
-  if (leadLookupError) {
-    console.error('[vapi:webhook] Failed lead lookup (call end)', {
-      organizationId: org.id,
-      phone: customerPhone,
-      error: leadLookupError,
-    })
-    return
-  }
-
-  let leadId: string
-  if (existingLead) {
-    leadId = existingLead.id
-  } else {
-    const { data: newLead, error: leadError } = await supabase
-      .from('leads')
-      .insert({
-        organization_id: org.id,
-        phone: customerPhone,
-        name: 'Unknown',
-        status: 'new',
-      })
-      .select('id')
-      .single()
-
-    if (leadError || !newLead) {
-      console.error('[vapi:webhook] Failed to create lead (call end)', {
-        organizationId: org.id,
-        phone: customerPhone,
-        error: leadError,
-      })
-      return
-    }
-    leadId = newLead.id
   }
 
   const call = asRecord(flat.call)
-  const metadata = {
-    startedAt: typeof call?.startedAt === 'string' ? call.startedAt : null,
-    endedAt: typeof call?.endedAt === 'string' ? call.endedAt : null,
-    orgId: typeof call?.orgId === 'string' ? call.orgId : null,
-    eventType: typeof flat.type === 'string' ? flat.type : null,
-  }
-
   const transcript = getTranscriptFromPayload(flat)
   const recordingUrl = getRecordingUrlFromPayload(flat)
   const summary = getSummaryFromPayload(flat)
-  const durationSeconds = getDurationSecondsFromPayload(flat) ?? 0
+  const durationSeconds = getDurationSecondsFromPayload(flat)
   const callId = getCallIdFromPayload(flat)
-  const startedAt = toIsoOrNull(metadata.startedAt)
-  const endedAt = toIsoOrNull(metadata.endedAt)
+  const endedReason = getEndedReasonFromPayload(flat)
+  const topic = getTopicFromPayload(flat)
+  const sentiment = getSentimentFromPayload(flat)
 
-  const { error: insertError } = await supabase.from('calls').insert({
-    organization_id: org.id,
-    lead_id: leadId,
-    vapi_call_id: callId,
-    phone_number: customerPhone,
-    duration_seconds: durationSeconds,
-    transcript: transcript || 'No transcript available',
-    recording_url: recordingUrl,
-    summary,
-    metadata,
-    direction: 'inbound',
-    status: 'completed',
-    started_at: startedAt || undefined,
-    ended_at: endedAt || undefined,
-  })
+  const structuredExtras: Record<string, unknown> = {
+    webhook_call_end: true,
+    ...(recordingUrl ? { vapi_recording_url: recordingUrl } : {}),
+    ...(typeof durationSeconds === 'number' ? { vapi_duration_seconds: durationSeconds } : {}),
+    ...(topic ? { vapi_topic: topic } : {}),
+    ...(sentiment ? { vapi_sentiment: sentiment } : {}),
+    ...(endedReason ? { vapi_ended_reason: endedReason } : {}),
+    ...(call
+      ? {
+          vapi_call_started_at: typeof call.startedAt === 'string' ? call.startedAt : null,
+          vapi_call_ended_at: typeof call.endedAt === 'string' ? call.endedAt : null,
+        }
+      : {}),
+  }
 
-  if (insertError) {
-    console.error('[vapi:webhook] Failed to insert call (call end)', {
+  try {
+    const persisted = await persistCallArtifacts({
       organizationId: org.id,
-      leadId,
-      callId,
-      error: insertError,
-    })
-  } else {
-    console.log('[vapi:webhook] Call stored (call end)', {
-      organizationId: org.id,
-      leadId,
-      callId,
+      vapiCallId: callId || undefined,
       phone: customerPhone,
-      durationSeconds,
+      transcript: transcript || undefined,
+      summary: summary || undefined,
+      outcome: endedReason || 'completed',
+      nextAction: 'Review call in dashboard',
+      ended: true,
+      structuredExtractionFromEvent: structuredExtras,
+    })
+    console.log('[vapi/call-outcome]', {
+      source: 'webhook',
+      callId: callId || null,
+      organization_id: org.id,
+      saved: true,
+      table: 'call_logs',
+      transcriptLength: (transcript || '').length,
+      summaryExists: Boolean((summary || '').trim()),
+      endedReason: endedReason || null,
+      call_log_id: persisted.call_log_id,
+      error: null,
+    })
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    const errObj = e as { code?: string; details?: string; hint?: string }
+    console.error('[vapi/call-outcome]', {
+      source: 'webhook',
+      callId: callId || null,
+      organization_id: org.id,
+      saved: false,
+      table: 'call_logs',
+      transcriptLength: (transcript || '').length,
+      summaryExists: Boolean((summary || '').trim()),
+      endedReason: endedReason || null,
+      error: msg.slice(0, 400),
+      code: errObj?.code ?? null,
+      details: errObj?.details ?? null,
+      hint: errObj?.hint ?? null,
     })
   }
 }
@@ -409,6 +376,14 @@ async function handleToolCalls(request: NextRequest, flat: JsonRecord, rawBody: 
       })
       const phoneRaw = phoneRes.phone
 
+      console.log('[vapi/tool-call]', {
+        callId: getCallIdFromPayload(flat) || null,
+        toolName: name,
+        toolCallId: toolCallId || null,
+        organization_id: orgId || null,
+        argKeys: Object.keys(args).slice(0, 32),
+      })
+
       let result = '{}'
       if (name === 'get_client_status' && phoneRaw && orgId) {
         const payload = await getClientStatusPayload(supabase, phoneRaw, orgId)
@@ -552,6 +527,7 @@ async function handleToolCalls(request: NextRequest, flat: JsonRecord, rawBody: 
           })
           console.info('[vapi/follow-up]', {
             toolCallId: toolCallId || null,
+            callId: getCallIdFromPayload(flat) || null,
             organization_id: orgId,
             title: prep.title.slice(0, 120),
             category: prep.category,
@@ -560,6 +536,7 @@ async function handleToolCalls(request: NextRequest, flat: JsonRecord, rawBody: 
             callback_required: prep.callbackRequired,
             created: true,
             followUpId: (out as { follow_up?: { id?: string } }).follow_up?.id ?? null,
+            table: 'follow_ups',
             error: null,
           })
           result = JSON.stringify(out)
@@ -631,7 +608,12 @@ export async function POST(request: NextRequest) {
       return handleToolCalls(request, flat, body)
     }
 
-    if (eventType === 'call-ended' || eventType === 'end-of-call-report') {
+    if (
+      eventType === 'call-ended' ||
+      eventType === 'end-of-call-report' ||
+      eventType === 'hang' ||
+      eventType === 'hang-up'
+    ) {
       await handleCallEnded(flat)
     }
 

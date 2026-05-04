@@ -3,20 +3,13 @@ import { ZodError } from 'zod'
 import { VapiEventInputSchema } from '@/lib/schemas/vapi'
 import { dispatchVapiEvent } from '@/lib/vapi/dispatcher'
 import { resolveOrganizationIdForVapiTools } from '@/lib/vapi/vapi-org-resolution'
-
-function flattenVapiEnvelope(body: Record<string, unknown>): Record<string, unknown> {
-  const msg = body.message
-  if (!msg || typeof msg !== 'object' || Array.isArray(msg)) return body
-  const m = msg as Record<string, unknown>
-  const out: Record<string, unknown> = { ...body, ...m }
-  if (m.call) out.call = m.call
-  return out
-}
+import { flattenVapiServerEvent } from '@/lib/vapi/vapi-event-flatten'
+import { logVapiEventRaw } from '@/lib/vapi/vapi-event-raw-log'
 
 export async function POST(request: NextRequest) {
   try {
     const raw = (await request.json()) as Record<string, unknown>
-    const body = flattenVapiEnvelope(raw)
+    const body = flattenVapiServerEvent(raw as Record<string, unknown>)
     const parsed = VapiEventInputSchema.parse(body)
     const messageType = typeof parsed.type === 'string' ? parsed.type : 'unknown'
     let organizationId =
@@ -42,6 +35,13 @@ export async function POST(request: NextRequest) {
         })
       }
     }
+
+    logVapiEventRaw({
+      requestUrl: request.url,
+      organizationId: organizationId || null,
+      raw,
+      flat: body,
+    })
 
     console.log('[vapi/events] request received', {
       url: request.url,

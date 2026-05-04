@@ -17,9 +17,16 @@ import {
 } from '@/lib/vapi/warm-transfer-tool'
 import {
   getCallerPhoneFromPayload,
+  getDurationSecondsFromPayload,
+  getEndedReasonFromPayload,
+  getRecordingUrlFromPayload,
+  getSentimentFromPayload,
   getSummaryFromPayload,
+  getTopicFromPayload,
   getTranscriptFromPayload,
 } from '@/lib/vapi/payload'
+import { flattenVapiServerEvent } from '@/lib/vapi/vapi-event-flatten'
+import { unknownCallerPlaceholderE164 } from '@/lib/vapi/vapi-unknown-caller'
 import { resolveTrustedCallerFirstName } from '@/lib/voice-platform/caller-identity'
 import { screenInboundAssistantRequest } from '@/lib/vapi/phone-screening'
 import { textSuggestsPromisedCallback } from '@/lib/voice-platform/callback-heuristic'
@@ -48,8 +55,7 @@ function prepareWarmTransferFailureCode(out: unknown): string | null {
 }
 
 function flattenEvent(body: JsonRecord): JsonRecord {
-  const msg = asRecord(body.message)
-  return { ...body, ...msg, call: msg.call || body.call }
+  return flattenVapiServerEvent(body)
 }
 
 function getToolCalls(payload: JsonRecord): JsonRecord[] {
@@ -108,13 +114,12 @@ function endedEvent(type: string): boolean {
     type === 'call-ended' ||
     type === 'end-of-call-report' ||
     type === 'call.ended' ||
-    type === 'conversation.ended'
+    type === 'conversation.ended' ||
+    type === 'hang' ||
+    type === 'hang-up'
   )
 }
 
-function endedReasonFromPayload(payload: JsonRecord): string {
-  return str(payload, 'endedReason') || str(asRecord(payload.call), 'endedReason')
-}
 
 function conciseDynamicGreeting(raw: string): string {
   const t = (raw || '').trim()
@@ -157,10 +162,26 @@ export async function dispatchVapiEvent(input: {
     getSummaryFromPayload(payload) ||
     getSummaryFromPayload(input.body) ||
     str(payload, 'summary')
+  const recordingUrl =
+    getRecordingUrlFromPayload(payload) || getRecordingUrlFromPayload(input.body)
+  const topic = getTopicFromPayload(payload) || getTopicFromPayload(input.body)
+  const sentiment = getSentimentFromPayload(payload) || getSentimentFromPayload(input.body)
+  const durationSeconds =
+    getDurationSecondsFromPayload(payload) ?? getDurationSecondsFromPayload(input.body)
   const disposition = str(payload, 'disposition')
 
   let resolvedPhone = phone
   let phoneFromCallLogs = false
+  const endedEarly = endedEvent(type)
+  if (!resolvedPhone && endedEarly && vapiCallId) {
+    resolvedPhone = unknownCallerPlaceholderE164()
+    console.warn('[vapi/dispatcher] missing_phone_using_placeholder', {
+      organization_id: input.organizationId,
+      call_id: vapiCallId,
+      placeholder_suffix: resolvedPhone.slice(-4),
+    })
+  }
+
   if (!resolvedPhone && vapiCallId) {
     const supabase = createServiceRoleClient()
     const { data: rows, error: callLogPhoneErr } = await supabase
@@ -393,6 +414,13 @@ export async function dispatchVapiEvent(input: {
         const toolCallId = str(tc, 'toolCallId') || str(tc, 'id')
         const name = parseToolName(tc)
         const args = parseToolArgs(tc)
+        console.log('[vapi/tool-call]', {
+          callId: vapiCallId || null,
+          toolName: name,
+          toolCallId: toolCallId || null,
+          organization_id: input.organizationId,
+          argKeys: Object.keys(args).slice(0, 32),
+        })
         logVapiToolCallReceived({
           requestUrl: input.requestUrl,
           toolCallId,
@@ -515,7 +543,15 @@ export async function dispatchVapiEvent(input: {
     return { results }
   }
 
-  if (!resolvedPhone) return { ok: true, skipped: true, reason: 'missing_phone' }
+  if (!resolvedPhone) {
+    console.log('[vapi/dispatcher] skip_persist_non_terminal', {
+      organization_id: input.organizationId,
+      message_type: type || 'unknown',
+      call_id: vapiCallId || null,
+      reason: 'missing_phone',
+    })
+    return { ok: true, skipped: true, reason: 'missing_phone' }
+  }
 
   const validation = shouldRejectByValidation({
     name: customerName,
@@ -539,14 +575,17 @@ export async function dispatchVapiEvent(input: {
   const extractionFromPayload = asRecord(payload.structured_extraction)
 
   const ended = endedEvent(type)
-  const er = endedReasonFromPayload(payload)
+  const er =
+    getEndedReasonFromPayload(payload) ||
+    getEndedReasonFromPayload(input.body) ||
+    str(payload, 'endedReason')
 
-  if (ended && er) {
+  if (ended) {
     console.log('[vapi/dispatcher] call-ended', {
       organization_id: input.organizationId,
       call_id: vapiCallId || null,
-      ended_reason: er,
-      warm_transfer_failure: isWarmTransferFailureEndedReason(er),
+      ended_reason: er || null,
+      warm_transfer_failure: er ? isWarmTransferFailureEndedReason(er) : false,
     })
   }
 
@@ -557,23 +596,67 @@ export async function dispatchVapiEvent(input: {
   const heuristicCallback =
     ended && narrative.length >= 16 && textSuggestsPromisedCallback(narrative)
 
-  const persisted = await persistCallArtifacts({
-    organizationId: input.organizationId,
-    vapiCallId,
-    phone: resolvedPhone,
-    customerName: customerName || undefined,
-    transcript: transcript || undefined,
-    summary: summary || undefined,
-    intent: str(payload, 'intent') || undefined,
-    outcome: disposition || (ended ? er || 'resolved' : undefined),
-    nextAction: ended ? 'Review call in dashboard' : 'Call in progress',
-    callbackRequired: extractionCallback || heuristicCallback,
-    followUpDate: undefined,
-    spamScore: undefined,
-    ended,
-    structuredExtractionFromEvent:
-      Object.keys(extractionFromPayload).length > 0 ? extractionFromPayload : undefined,
-  })
+  const structuredExtras: Record<string, unknown> = {
+    ...(Object.keys(extractionFromPayload).length > 0 ? extractionFromPayload : {}),
+    ...(recordingUrl ? { vapi_recording_url: recordingUrl } : {}),
+    ...(typeof durationSeconds === 'number' ? { vapi_duration_seconds: durationSeconds } : {}),
+    ...(topic ? { vapi_topic: topic } : {}),
+    ...(sentiment ? { vapi_sentiment: sentiment } : {}),
+    ...(er ? { vapi_ended_reason: er } : {}),
+  }
+
+  let persisted: Awaited<ReturnType<typeof persistCallArtifacts>>
+  try {
+    persisted = await persistCallArtifacts({
+      organizationId: input.organizationId,
+      vapiCallId: vapiCallId || undefined,
+      phone: resolvedPhone,
+      customerName: customerName || undefined,
+      transcript: transcript || undefined,
+      summary: summary || undefined,
+      intent: str(payload, 'intent') || undefined,
+      outcome: disposition || (ended ? er || 'resolved' : undefined),
+      nextAction: ended ? 'Review call in dashboard' : 'Call in progress',
+      callbackRequired: extractionCallback || heuristicCallback,
+      followUpDate: undefined,
+      spamScore: undefined,
+      ended,
+      structuredExtractionFromEvent:
+        Object.keys(structuredExtras).length > 0 ? structuredExtras : undefined,
+    })
+    console.log('[vapi/call-outcome]', {
+      callId: vapiCallId || null,
+      organization_id: input.organizationId,
+      saved: true,
+      table: 'call_logs',
+      transcriptLength: (transcript || '').length,
+      summaryExists: Boolean((summary || '').trim()),
+      endedReason: er || null,
+      call_log_id: persisted.call_log_id,
+      error: null,
+    })
+  } catch (e) {
+    const msg = e instanceof Error ? e.message : String(e)
+    const errObj = e as { code?: string; details?: string; hint?: string }
+    console.error('[vapi/call-outcome]', {
+      callId: vapiCallId || null,
+      organization_id: input.organizationId,
+      saved: false,
+      table: 'call_logs',
+      transcriptLength: (transcript || '').length,
+      summaryExists: Boolean((summary || '').trim()),
+      endedReason: er || null,
+      error: msg.slice(0, 400),
+      code: errObj?.code ?? null,
+      details: errObj?.details ?? null,
+      hint: errObj?.hint ?? null,
+    })
+    return {
+      ok: false,
+      event_type: type || 'unknown',
+      persist_error: msg,
+    }
+  }
 
   let followUpAfterFailedTransfer = false
   if (ended && er && vapiCallId) {

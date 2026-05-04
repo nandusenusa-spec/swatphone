@@ -15,16 +15,27 @@ export default async function CallsPage() {
 
   const orgId = profile?.organization_id
 
-  const calls = orgId
-    ? (
-        await service
-          .from('call_logs')
-          .select('*')
-          .eq('organization_id', orgId)
-          .order('created_at', { ascending: false })
-          .limit(50)
-      ).data || []
-    : []
+  let calls: Record<string, unknown>[] = []
+  if (orgId) {
+    const res = await service
+      .from('call_logs')
+      .select('*')
+      .eq('organization_id', orgId)
+      .order('created_at', { ascending: false })
+      .limit(50)
+    if (res.error) {
+      console.error('[dashboard/calls-query]', {
+        status: 'error',
+        code: res.error.code,
+        message: res.error.message,
+        details: (res.error as { details?: string }).details ?? null,
+        hint: (res.error as { hint?: string }).hint ?? null,
+        table: 'call_logs',
+        filtersUsed: { organization_id: orgId, limit: 50, order: 'created_at desc' },
+      })
+    }
+    calls = (res.data || []) as Record<string, unknown>[]
+  }
 
   const normalizedCalls = calls.map((c: Record<string, unknown>) => {
     const started = c.started_at ? new Date(String(c.started_at)).getTime() : 0
