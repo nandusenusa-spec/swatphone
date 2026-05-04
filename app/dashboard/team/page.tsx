@@ -1,32 +1,36 @@
-import { createClient } from '@/lib/supabase/server'
+import {
+  getDashboardDataClient,
+  requireDashboardOrganizationId,
+} from '@/lib/auth/dashboard-session'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { TeamTable } from '@/components/dashboard/team-table'
 import { AddTeamMemberDialog } from '@/components/dashboard/add-team-member-dialog'
 import { Users, UserCheck, Phone, Clock } from 'lucide-react'
 
 export default async function TeamPage() {
-  const supabase = await createClient()
-  
-  const { data: teamMembers } = await supabase
-    .from('team_members')
-    .select('*')
-    .order('created_at', { ascending: false })
-  
-  // Stats
-  const { count: totalMembers } = await supabase
-    .from('team_members')
-    .select('*', { count: 'exact', head: true })
-  
-  const { count: availableMembers } = await supabase
+  const orgId = await requireDashboardOrganizationId()
+  const { db, applyOrgFilter } = await getDashboardDataClient(orgId)
+
+  let membersQ = db.from('team_members').select('*').order('created_at', { ascending: false })
+  if (applyOrgFilter) membersQ = membersQ.eq('organization_id', orgId)
+  const { data: teamMembers } = await membersQ
+
+  let totalQ = db.from('team_members').select('*', { count: 'exact', head: true })
+  if (applyOrgFilter) totalQ = totalQ.eq('organization_id', orgId)
+  const { count: totalMembers } = await totalQ
+
+  let availQ = db
     .from('team_members')
     .select('*', { count: 'exact', head: true })
     .eq('is_available', true)
+  if (applyOrgFilter) availQ = availQ.eq('organization_id', orgId)
+  const { count: availableMembers } = await availQ
 
   const stats = [
     { title: 'Total Miembros', value: totalMembers || 0, icon: Users },
     { title: 'Disponibles', value: availableMembers || 0, icon: UserCheck },
-    { title: 'Con Telefono', value: teamMembers?.filter(m => m.phone).length || 0, icon: Phone },
-    { title: 'Con Extension', value: teamMembers?.filter(m => m.extension).length || 0, icon: Clock },
+    { title: 'Con Telefono', value: teamMembers?.filter((m) => m.phone).length || 0, icon: Phone },
+    { title: 'Con Extension', value: teamMembers?.filter((m) => m.extension).length || 0, icon: Clock },
   ]
 
   return (

@@ -1,4 +1,4 @@
-import { createClient } from '@/lib/supabase/server'
+import { requireDashboardOrganizationId } from '@/lib/auth/dashboard-session'
 import { createServiceRoleClient } from '@/lib/supabase/service-role'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { LeadsTable } from '@/components/dashboard/leads-table'
@@ -32,15 +32,8 @@ function commercialFromStoredLead(row: Record<string, unknown>) {
 }
 
 export default async function LeadsPage() {
-  const supabase = await createClient()
+  const orgId = await requireDashboardOrganizationId()
   const service = createServiceRoleClient()
-  const { data: authData } = await supabase.auth.getUser()
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('organization_id')
-    .eq('id', authData.user?.id || '')
-    .maybeSingle()
-  const orgId = profile?.organization_id
 
   const [customersRes, leadsRes, callLogsRes] = orgId
     ? await Promise.all([

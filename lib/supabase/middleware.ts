@@ -1,4 +1,5 @@
 import { createServerClient } from '@supabase/ssr'
+import { isDemoBypassAuth } from '@/lib/auth/demo-bypass'
 import { NextResponse, type NextRequest } from 'next/server'
 
 export async function updateSession(request: NextRequest) {
@@ -55,8 +56,12 @@ export async function updateSession(request: NextRequest) {
     data: { user },
   } = await supabase.auth.getUser()
 
-  // Protect dashboard routes
-  if (request.nextUrl.pathname.startsWith('/dashboard') && !user) {
+  // Protect dashboard routes (TEMP DEMO: allow without Supabase user when bypass is on)
+  if (
+    request.nextUrl.pathname.startsWith('/dashboard') &&
+    !user &&
+    !isDemoBypassAuth()
+  ) {
     const url = request.nextUrl.clone()
     url.pathname = '/auth/login'
     return NextResponse.redirect(url)

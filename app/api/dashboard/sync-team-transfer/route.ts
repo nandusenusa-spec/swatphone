@@ -1,27 +1,13 @@
 import { NextResponse } from 'next/server'
-import { createClient } from '@/lib/supabase/server'
+import { getDashboardOrganizationId } from '@/lib/auth/dashboard-session'
 import { createServiceRoleClient } from '@/lib/supabase/service-role'
 import { syncOrganizationRoutingFromTeam } from '@/lib/dashboard/sync-team-transfer-routing'
 
 export async function POST() {
   try {
-    const supabase = await createClient()
-    const {
-      data: { user },
-    } = await supabase.auth.getUser()
-    if (!user) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
-    }
-
-    const { data: profile, error: pErr } = await supabase
-      .from('profiles')
-      .select('organization_id')
-      .eq('id', user.id)
-      .maybeSingle()
-    if (pErr) throw pErr
-    const organizationId = profile?.organization_id
+    const organizationId = await getDashboardOrganizationId()
     if (!organizationId) {
-      return NextResponse.json({ error: 'No organization' }, { status: 400 })
+      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
     }
 
     const svc = createServiceRoleClient()

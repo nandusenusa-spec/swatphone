@@ -1,4 +1,4 @@
-import { createClient } from '@/lib/supabase/server'
+import { requireDashboardOrganizationId } from '@/lib/auth/dashboard-session'
 import { createServiceRoleClient } from '@/lib/supabase/service-role'
 import {
   countCallLogsMissedBucket,
@@ -11,15 +11,8 @@ import { CallsTable } from '@/components/dashboard/calls-table'
 import { Phone, PhoneIncoming, PhoneOutgoing, PhoneMissed } from 'lucide-react'
 
 export default async function CallsPage() {
-  const supabase = await createClient()
+  const orgId = await requireDashboardOrganizationId()
   const service = createServiceRoleClient()
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('organization_id')
-    .eq('id', (await supabase.auth.getUser()).data.user?.id || '')
-    .maybeSingle()
-
-  const orgId = profile?.organization_id
 
   let calls: Record<string, unknown>[] = []
   let metricsTotal = 0

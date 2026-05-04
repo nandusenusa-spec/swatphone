@@ -43,7 +43,13 @@ const secondaryNavigation = [
   { name: 'Configuracion', href: '/dashboard/settings', icon: Settings },
 ]
 
-export function DashboardSidebar({ profile }: { profile: Profile | null }) {
+export function DashboardSidebar({
+  profile,
+  demoMode = false,
+}: {
+  profile: Profile | null
+  demoMode?: boolean
+}) {
   const pathname = usePathname()
 
   return (
@@ -53,11 +59,16 @@ export function DashboardSidebar({ profile }: { profile: Profile | null }) {
         <div className="flex h-9 w-9 items-center justify-center rounded-lg bg-sidebar-primary">
           <MessageSquare className="h-5 w-5 text-sidebar-primary-foreground" />
         </div>
-        <div className="flex flex-col">
+        <div className="flex min-w-0 flex-col">
           <span className="text-sm font-semibold text-sidebar-foreground">SWAT-VoiceIA</span>
           <span className="text-xs text-sidebar-foreground/60">
             {profile?.organizations?.name || 'Mi Empresa'}
           </span>
+          {demoMode ? (
+            <span className="mt-1 inline-flex w-fit rounded border border-amber-500/35 bg-amber-500/10 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-amber-800 dark:text-amber-400">
+              Demo mode
+            </span>
+          ) : null}
         </div>
       </div>
 

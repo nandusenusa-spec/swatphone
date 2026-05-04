@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { DEMO_ORGANIZATION_ID, isDemoBypassAuth } from '@/lib/auth/demo-bypass'
 import { createClient } from '@/lib/supabase/server'
 import { createServiceRoleClient } from '@/lib/supabase/service-role'
 import { getOrganizationRuntimeConfig } from '@/lib/vapi/runtime-config'
@@ -489,6 +490,26 @@ export async function POST(request: NextRequest) {
       organizationId = String(profile?.organization_id || '')
       assistantId = (profile?.organizations?.vapi_assistant_id as string | null) || null
       vapiApiKey = normalizeVapiApiKey(profile?.organizations?.vapi_api_key)
+    } else if (isDemoBypassAuth()) {
+      // TEMP DEMO ONLY — disable after presentation. Fixed org; no Supabase Auth user.
+      const effectiveOrgId =
+        (typeof reqBody.organization_id === 'string' && reqBody.organization_id) ||
+        requestedOrgId ||
+        DEMO_ORGANIZATION_ID
+      if (effectiveOrgId !== DEMO_ORGANIZATION_ID) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      }
+      const { data: orgRow, error: orgErr } = await serviceRole
+        .from('organizations')
+        .select('id, vapi_api_key, vapi_assistant_id')
+        .eq('id', DEMO_ORGANIZATION_ID)
+        .maybeSingle()
+      if (orgErr || !orgRow) {
+        return NextResponse.json({ error: 'Organization not found' }, { status: 404 })
+      }
+      organizationId = String(orgRow.id)
+      assistantId = (orgRow.vapi_assistant_id as string | null) || null
+      vapiApiKey = normalizeVapiApiKey(orgRow.vapi_api_key as string | null)
     } else {
       const isAdmin = await verifyAdminToken(request)
       if (!isAdmin || !requestedOrgId) {

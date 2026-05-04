@@ -1,25 +1,30 @@
-import { createClient } from '@/lib/supabase/server'
+import {
+  getDashboardDataClient,
+  requireDashboardOrganizationId,
+} from '@/lib/auth/dashboard-session'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { FaqsList } from '@/components/dashboard/faqs-list'
 import { AddFaqDialog } from '@/components/dashboard/add-faq-dialog'
 import { HelpCircle, MessageSquare } from 'lucide-react'
 
 export default async function FaqsPage() {
-  const supabase = await createClient()
-  
-  const { data: faqs } = await supabase
-    .from('faqs')
-    .select('*')
-    .order('created_at', { ascending: false })
-  
-  const { count: totalFaqs } = await supabase
-    .from('faqs')
-    .select('*', { count: 'exact', head: true })
-  
-  const { count: activeFaqs } = await supabase
+  const orgId = await requireDashboardOrganizationId()
+  const { db, applyOrgFilter } = await getDashboardDataClient(orgId)
+
+  let faqsQ = db.from('faqs').select('*').order('created_at', { ascending: false })
+  if (applyOrgFilter) faqsQ = faqsQ.eq('organization_id', orgId)
+  const { data: faqs } = await faqsQ
+
+  let totalQ = db.from('faqs').select('*', { count: 'exact', head: true })
+  if (applyOrgFilter) totalQ = totalQ.eq('organization_id', orgId)
+  const { count: totalFaqs } = await totalQ
+
+  let activeQ = db
     .from('faqs')
     .select('*', { count: 'exact', head: true })
     .eq('is_active', true)
+  if (applyOrgFilter) activeQ = activeQ.eq('organization_id', orgId)
+  const { count: activeFaqs } = await activeQ
 
   return (
     <div className="space-y-6">

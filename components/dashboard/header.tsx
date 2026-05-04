@@ -25,11 +25,22 @@ interface Profile {
   } | null
 }
 
-export function DashboardHeader({ profile }: { profile: Profile | null }) {
+export function DashboardHeader({
+  profile,
+  demoMode = false,
+}: {
+  profile: Profile | null
+  demoMode?: boolean
+}) {
   const router = useRouter()
   const supabase = createClient()
 
   const handleSignOut = async () => {
+    if (demoMode) {
+      router.push('/dashboard')
+      router.refresh()
+      return
+    }
     await supabase.auth.signOut()
     router.push('/auth/login')
   }
@@ -38,9 +49,16 @@ export function DashboardHeader({ profile }: { profile: Profile | null }) {
     <header className="flex h-16 items-center justify-between border-b border-border bg-card px-6">
       {/* Organization name and search */}
       <div className="flex items-center gap-6">
-        <div>
-          <p className="text-xs text-muted-foreground">Panel de Control</p>
-          <h1 className="text-sm font-semibold">{profile?.organizations?.name || 'Mi Empresa'}</h1>
+        <div className="flex flex-wrap items-center gap-2">
+          <div>
+            <p className="text-xs text-muted-foreground">Panel de Control</p>
+            <h1 className="text-sm font-semibold">{profile?.organizations?.name || 'Mi Empresa'}</h1>
+          </div>
+          {demoMode ? (
+            <span className="rounded border border-amber-500/35 bg-amber-500/10 px-2 py-0.5 text-[11px] font-medium uppercase tracking-wide text-amber-800 dark:text-amber-400">
+              Demo mode
+            </span>
+          ) : null}
         </div>
         <div className="relative w-80">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />

@@ -1,35 +1,39 @@
-import { createClient } from '@/lib/supabase/server'
+import {
+  getDashboardDataClient,
+  requireDashboardOrganizationId,
+} from '@/lib/auth/dashboard-session'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { ProductsTable } from '@/components/dashboard/products-table'
 import { AddProductDialog } from '@/components/dashboard/add-product-dialog'
 import { Package, DollarSign, Tag, ToggleLeft } from 'lucide-react'
 
 export default async function ProductsPage() {
-  const supabase = await createClient()
-  
-  const { data: products } = await supabase
-    .from('products')
-    .select('*')
-    .order('created_at', { ascending: false })
-  
-  // Stats
-  const { count: totalProducts } = await supabase
-    .from('products')
-    .select('*', { count: 'exact', head: true })
-  
-  const { count: activeProducts } = await supabase
+  const orgId = await requireDashboardOrganizationId()
+  const { db, applyOrgFilter } = await getDashboardDataClient(orgId)
+
+  let listQ = db.from('products').select('*').order('created_at', { ascending: false })
+  if (applyOrgFilter) listQ = listQ.eq('organization_id', orgId)
+  const { data: products } = await listQ
+
+  let countAllQ = db.from('products').select('*', { count: 'exact', head: true })
+  if (applyOrgFilter) countAllQ = countAllQ.eq('organization_id', orgId)
+  const { count: totalProducts } = await countAllQ
+
+  let countActiveQ = db
     .from('products')
     .select('*', { count: 'exact', head: true })
     .eq('is_active', true)
-  
-  const { data: priceData } = await supabase
-    .from('products')
-    .select('price')
-    .not('price', 'is', null)
-  
-  const avgPrice = priceData && priceData.length > 0
-    ? Math.round(priceData.reduce((acc, p) => acc + (p.price || 0), 0) / priceData.length)
-    : 0
+  if (applyOrgFilter) countActiveQ = countActiveQ.eq('organization_id', orgId)
+  const { count: activeProducts } = await countActiveQ
+
+  let priceQ = db.from('products').select('price').not('price', 'is', null)
+  if (applyOrgFilter) priceQ = priceQ.eq('organization_id', orgId)
+  const { data: priceData } = await priceQ
+
+  const avgPrice =
+    priceData && priceData.length > 0
+      ? Math.round(priceData.reduce((acc, p) => acc + (p.price || 0), 0) / priceData.length)
+      : 0
 
   const stats = [
     { title: 'Total Productos', value: totalProducts || 0, icon: Package },

@@ -10,6 +10,9 @@
 # Tras el primer deploy, actualizá NEXT_PUBLIC_APP_URL con la URL final y redeploy.
 # =============================================================================
 
+# TEMP DEMO ONLY — dashboard CRM sin Supabase Auth (org fijo). Desactivá después de la demo.
+DEMO_BYPASS_AUTH=
+
 # --- App (público) ---
 NEXT_PUBLIC_APP_URL=https://TU-PROYECTO.vercel.app
 NEXT_PUBLIC_DEV_SUPABASE_REDIRECT_URL=

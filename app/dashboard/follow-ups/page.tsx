@@ -1,19 +1,11 @@
-import { createClient } from '@/lib/supabase/server'
+import { requireDashboardOrganizationId } from '@/lib/auth/dashboard-session'
 import { createServiceRoleClient } from '@/lib/supabase/service-role'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { FollowUpsClient } from '@/components/dashboard/follow-ups-client'
 
 export default async function FollowUpsPage() {
-  const supabase = await createClient()
+  const orgId = await requireDashboardOrganizationId()
   const service = createServiceRoleClient()
-  const { data: authData } = await supabase.auth.getUser()
-  const { data: profile } = await supabase
-    .from('profiles')
-    .select('organization_id')
-    .eq('id', authData.user?.id || '')
-    .maybeSingle()
-
-  const orgId = profile?.organization_id
   let followUps: Record<string, unknown>[] = []
   if (orgId) {
     const filtersBase = { organization_id: orgId, limit: 100, order: 'created_at desc' }
