@@ -49,11 +49,16 @@ async function tryAutoFollowUpAfterLeadSave(input: {
     (typeof input.args.needs_human_follow_up === 'string' &&
       input.args.needs_human_follow_up === 'true')
 
+  const transferFailed =
+    input.args.transfer_failed === true ||
+    (typeof input.args.transfer_failed === 'string' && input.args.transfer_failed === 'true')
+
   const shouldAuto =
     c.category === 'wrap' ||
     c.intent === 'quote_request' ||
     c.callback_required === true ||
-    needsHuman
+    needsHuman ||
+    transferFailed
 
   if (!shouldAuto) return
 
@@ -118,6 +123,7 @@ async function tryAutoFollowUpAfterLeadSave(input: {
       source: 'auto_after_lead' as const,
       toolCallId: input.toolCallId ?? null,
       leadId: input.leadId,
+      callLogId: callLogId ?? null,
       organization_id: input.organizationId,
       title: title.slice(0, 120),
       category: c.category ?? null,
@@ -135,6 +141,7 @@ async function tryAutoFollowUpAfterLeadSave(input: {
       source: 'auto_after_lead',
       toolCallId: input.toolCallId ?? null,
       leadId: input.leadId,
+      callLogId: callLogId ?? null,
       organization_id: input.organizationId,
       title: title.slice(0, 120),
       category: c.category ?? null,

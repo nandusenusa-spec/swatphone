@@ -1,5 +1,10 @@
 import { createClient } from '@/lib/supabase/server'
 import { createServiceRoleClient } from '@/lib/supabase/service-role'
+import {
+  countCallLogsMissedBucket,
+  countCallLogsTotal,
+  fetchDashboardCallLogs,
+} from '@/lib/dashboard/call-logs-queries'
 import { normalizePhone } from '@/lib/phone'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { CallsTable } from '@/components/dashboard/calls-table'
@@ -30,37 +35,12 @@ export default async function CallsPage() {
     { id: string; title: string; status: string; call_log_id: string | null; due_at: string | null }
   >()
   if (orgId) {
-    const [res, totalCt, missedCt] = await Promise.all([
-      service
-        .from('call_logs')
-        .select('*')
-        .eq('organization_id', orgId)
-        .order('created_at', { ascending: false })
-        .limit(50),
-      service
-        .from('call_logs')
-        .select('*', { count: 'exact', head: true })
-        .eq('organization_id', orgId),
-      service
-        .from('call_logs')
-        .select('*', { count: 'exact', head: true })
-        .eq('organization_id', orgId)
-        .or(
-          'result.ilike.%miss%,result.ilike.%fail%,result.ilike.%no-answer%,result.ilike.%hang%,result.eq.spam_rejected',
-        ),
+    const [listRes, totalCount, missedCount] = await Promise.all([
+      fetchDashboardCallLogs(service, orgId, 100),
+      countCallLogsTotal(service, orgId),
+      countCallLogsMissedBucket(service, orgId),
     ])
-    if (res.error) {
-      console.error('[dashboard/calls-query]', {
-        status: 'error',
-        code: res.error.code,
-        message: res.error.message,
-        details: (res.error as { details?: string }).details ?? null,
-        hint: (res.error as { hint?: string }).hint ?? null,
-        table: 'call_logs',
-        filtersUsed: { organization_id: orgId, limit: 50, order: 'created_at desc' },
-      })
-    }
-    calls = (res.data || []) as Record<string, unknown>[]
+    calls = listRes.rows as Record<string, unknown>[]
     const callIds = calls.map((c) => c.id).filter(Boolean) as string[]
     const [{ data: leadsData }, followRes] = await Promise.all([
       service.from('leads').select('id, name, email, phone').eq('organization_id', orgId).limit(500),
@@ -95,10 +75,10 @@ export default async function CallsPage() {
       }
     }
     followByCallId = fuMap
-    metricsTotal = totalCt.count ?? 0
-    metricsInbound = metricsTotal
-    metricsMissed = missedCt.count ?? 0
-    metricsCompleted = Math.max(0, metricsTotal - metricsMissed)
+    metricsTotal = totalCount
+    metricsInbound = totalCount
+    metricsMissed = missedCount
+    metricsCompleted = Math.max(0, totalCount - missedCount)
 
     console.info('[dashboard/calls-metrics]', {
       organization_id: orgId,
@@ -110,7 +90,7 @@ export default async function CallsPage() {
       filtersUsed: {
         organization_id: orgId,
         completed_derived: 'total_minus_missed_bucket',
-        list_limit: 50,
+        list_limit: 100,
       },
     })
   }

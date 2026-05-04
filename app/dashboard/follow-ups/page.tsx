@@ -16,41 +16,47 @@ export default async function FollowUpsPage() {
   const orgId = profile?.organization_id
   let followUps: Record<string, unknown>[] = []
   if (orgId) {
-    const baseSelect =
-      'id, title, notes, owner, status, due_at, priority, callback_required, customers(name, phone)'
-    let res = await service
-      .from('follow_ups')
-      .select(baseSelect)
-      .eq('organization_id', orgId)
-      .order('created_at', { ascending: false })
-      .limit(100)
-    if (res.error) {
-      console.error('[dashboard/follow-ups-query]', {
-        status: 'error',
-        code: res.error.code,
-        message: res.error.message,
-        details: (res.error as { details?: string }).details ?? null,
-        hint: (res.error as { hint?: string }).hint ?? null,
-        table: 'follow_ups',
-        filtersUsed: { organization_id: orgId, limit: 100, order: 'created_at desc', embed: 'customers' },
-      })
-      res = await service
+    const filtersBase = { organization_id: orgId, limit: 100, order: 'created_at desc' }
+    const attempts = [
+      'id, organization_id, title, notes, due_at, status, priority, category, callback_required, metadata, created_at, customer_id, call_log_id',
+      'id, title, notes, owner, status, due_at, priority, callback_required, created_at',
+      'id, title, notes, status, due_at, created_at',
+    ]
+    let lastError: { code?: string; message?: string } | null = null
+    for (const cols of attempts) {
+      const res = await service
         .from('follow_ups')
-        .select('id, title, notes, owner, status, due_at, priority, callback_required')
+        .select(cols)
         .eq('organization_id', orgId)
         .order('created_at', { ascending: false })
         .limit(100)
-      if (res.error) {
-        console.error('[dashboard/follow-ups-query]', {
-          status: 'error',
-          code: res.error.code,
-          message: res.error.message,
-          table: 'follow_ups',
-          filtersUsed: { organization_id: orgId, fallback_no_embed: true },
-        })
+      if (!res.error && res.data) {
+        followUps = res.data as Record<string, unknown>[]
+        lastError = null
+        break
       }
+      lastError = res.error ?? null
+      console.error('[dashboard/follow-ups-query]', {
+        status: 400,
+        code: res.error?.code ?? null,
+        message: res.error?.message ?? null,
+        details: (res.error as { details?: string } | undefined)?.details ?? null,
+        hint: (res.error as { hint?: string } | undefined)?.hint ?? null,
+        table: 'follow_ups',
+        filtersUsed: { ...filtersBase, attempted_select: cols },
+      })
     }
-    followUps = (res.data || []) as Record<string, unknown>[]
+    if (lastError && followUps.length === 0) {
+      console.error('[dashboard/follow-ups-query]', {
+        status: 'error',
+        code: lastError.code ?? null,
+        message: lastError.message ?? null,
+        details: null,
+        hint: null,
+        table: 'follow_ups',
+        filtersUsed: { ...filtersBase, note: 'all_select_attempts_failed' },
+      })
+    }
   }
 
   return (

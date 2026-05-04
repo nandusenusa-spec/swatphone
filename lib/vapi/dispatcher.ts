@@ -683,20 +683,26 @@ export async function dispatchVapiEvent(input: {
     }
     console.log('[vapi/call-outcome]', {
       callId: vapiCallId || null,
+      organization_id: input.organizationId,
       saved: true,
       table: 'call_logs',
       transcriptLength: transcriptFinal.length,
+      messagesCount,
       recordingUrlExists: Boolean(recordingUrl),
+      endedReason: er || null,
       error: null,
     })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
     console.error('[vapi/call-outcome]', {
       callId: vapiCallId || null,
+      organization_id: input.organizationId,
       saved: false,
       table: 'call_logs',
       transcriptLength: transcriptFinal.length,
+      messagesCount,
       recordingUrlExists: Boolean(recordingUrl),
+      endedReason: er || null,
       error: msg.slice(0, 400),
     })
     return {

@@ -11,12 +11,38 @@ import { dispatchVapiEvent } from '@/lib/vapi/dispatcher'
 import { resolveOrganizationIdForVapiTools } from '@/lib/vapi/vapi-org-resolution'
 import { flattenVapiServerEvent } from '@/lib/vapi/vapi-event-flatten'
 import { logVapiEventRaw } from '@/lib/vapi/vapi-event-raw-log'
+import {
+  getCallIdFromPayload,
+  getVapiMessageTypeFromPayload,
+  mergeVapiWebhookBodiesForExtraction,
+} from '@/lib/vapi/payload'
+import { insertVapiCallEventRaw } from '@/lib/voice-platform/vapi-raw-events'
 
 export async function POST(request: NextRequest) {
   try {
     const raw = (await request.json()) as Record<string, unknown>
     const body = flattenVapiServerEvent(raw as Record<string, unknown>)
     const orgFromQuery = request.nextUrl.searchParams.get('organization_id')
+    const mergedPreview = mergeVapiWebhookBodiesForExtraction(body, body)
+    const previewCallId = getCallIdFromPayload(mergedPreview) || null
+    const previewMsgType = getVapiMessageTypeFromPayload(mergedPreview) || null
+    const rawSaved = await insertVapiCallEventRaw({
+      organizationId: orgFromQuery,
+      vapiCallId: previewCallId,
+      messageType: previewMsgType,
+      eventType: typeof raw.event === 'string' ? raw.event : null,
+      payload: raw,
+    })
+    console.log('[vapi/raw-event-saved]', {
+      organization_id: orgFromQuery,
+      callId: previewCallId,
+      messageType: previewMsgType,
+      eventType: typeof raw.event === 'string' ? raw.event : null,
+      saved: Boolean(rawSaved.id),
+      rawEventId: rawSaved.id,
+      error: rawSaved.error,
+    })
+
     logVapiEventRaw({
       requestUrl: request.url,
       organizationId: orgFromQuery,

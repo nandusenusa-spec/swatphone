@@ -59,6 +59,10 @@ POSTGRES_URL_NON_POOLING=
 POSTGRES_PRISMA_URL=
 
 # --- Esta app ---
+# x-admin-secret en /api/admin/run-plan-b-migration y /api/admin/supabase-health
+ADMIN_SECRET=
+# Solo true temporalmente para POST run-plan-b-migration; luego false
+ALLOW_ADMIN_MIGRATIONS=
 ADMIN_TOKEN_SECRET=
 INTERNAL_API_KEY=
 # Opcional: si Vapi no manda organization_id en get_job_status, el endpoint usa este UUID (misma org que el número).

@@ -13,6 +13,7 @@ const baseSecurityHeaders = [
 ]
 
 const nextConfig = {
+  serverExternalPackages: ['pg'],
   allowedDevOrigins: ['lather-crisping-laborious.ngrok-free.dev'],
   typescript: {
     ignoreBuildErrors: true,
