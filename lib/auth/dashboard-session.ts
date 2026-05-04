@@ -98,7 +98,8 @@ export async function loadDashboardLayoutProfile(): Promise<{
     .single()
 
   if (!profile?.organization_id) {
-    redirect('/auth/login')
+    // Usuario en Auth sin fila en profiles o sin org: evita "login que vuelve al login" sin pista
+    redirect('/auth/login?reason=no_org')
   }
 
   const orgJoin = profile.organizations as

@@ -132,6 +132,8 @@ export default function AdminClientDetailPage() {
     note: string | null
     updated_at: string | null
   }>(null)
+  /** false = falta tabla organization_owner_credential_store; el email igual sale de perfiles. */
+  const [ownerCredentialStoreOk, setOwnerCredentialStoreOk] = useState(true)
   const [showStoredOwnerPassword, setShowStoredOwnerPassword] = useState(false)
   const [showEditOwnerPassword, setShowEditOwnerPassword] = useState(false)
   const [ownerPasswordDraft, setOwnerPasswordDraft] = useState('')
@@ -303,14 +305,24 @@ export default function AdminClientDetailPage() {
         cache: 'no-store',
       })
       const credJson = await credRes.json()
-      if (credRes.ok && credJson.data) {
-        setOwnerCredential({
-          owner_email: String(credJson.data.owner_email || ''),
-          password_plaintext: String(credJson.data.password_plaintext || ''),
-          note: credJson.data.note ?? null,
-          updated_at: credJson.data.updated_at ?? null,
-        })
+      if (credRes.ok) {
+        if (typeof credJson.credential_store_available === 'boolean') {
+          setOwnerCredentialStoreOk(credJson.credential_store_available)
+        } else {
+          setOwnerCredentialStoreOk(true)
+        }
+        if (credJson.data) {
+          setOwnerCredential({
+            owner_email: String(credJson.data.owner_email || ''),
+            password_plaintext: String(credJson.data.password_plaintext ?? ''),
+            note: credJson.data.note ?? null,
+            updated_at: credJson.data.updated_at ?? null,
+          })
+        } else {
+          setOwnerCredential(null)
+        }
       } else {
+        setOwnerCredentialStoreOk(true)
         setOwnerCredential(null)
       }
 
@@ -802,13 +814,18 @@ export default function AdminClientDetailPage() {
         headers: getAdminAuthHeaders(),
       })
       const credJson = await credRes.json()
-      if (credRes.ok && credJson.data) {
-        setOwnerCredential({
-          owner_email: String(credJson.data.owner_email || ''),
-          password_plaintext: String(credJson.data.password_plaintext || ''),
-          note: credJson.data.note ?? null,
-          updated_at: credJson.data.updated_at ?? null,
-        })
+      if (credRes.ok) {
+        if (typeof credJson.credential_store_available === 'boolean') {
+          setOwnerCredentialStoreOk(credJson.credential_store_available)
+        }
+        if (credJson.data) {
+          setOwnerCredential({
+            owner_email: String(credJson.data.owner_email || ''),
+            password_plaintext: String(credJson.data.password_plaintext ?? ''),
+            note: credJson.data.note ?? null,
+            updated_at: credJson.data.updated_at ?? null,
+          })
+        }
       }
       setConfigBanner({ type: 'success', message: 'Contraseña actualizada en Auth y en el registro interno.' })
     } catch (e) {
@@ -846,13 +863,18 @@ export default function AdminClientDetailPage() {
         headers: getAdminAuthHeaders(),
       })
       const credJson = await credRes.json()
-      if (credRes.ok && credJson.data) {
-        setOwnerCredential({
-          owner_email: String(credJson.data.owner_email || ''),
-          password_plaintext: String(credJson.data.password_plaintext || ''),
-          note: credJson.data.note ?? null,
-          updated_at: credJson.data.updated_at ?? null,
-        })
+      if (credRes.ok) {
+        if (typeof credJson.credential_store_available === 'boolean') {
+          setOwnerCredentialStoreOk(credJson.credential_store_available)
+        }
+        if (credJson.data) {
+          setOwnerCredential({
+            owner_email: String(credJson.data.owner_email || ''),
+            password_plaintext: String(credJson.data.password_plaintext ?? ''),
+            note: credJson.data.note ?? null,
+            updated_at: credJson.data.updated_at ?? null,
+          })
+        }
       }
       setConfigBanner({
         type: 'success',
@@ -913,12 +935,22 @@ export default function AdminClientDetailPage() {
             Acceso CRM (owner)
           </CardTitle>
           <CardDescription>
-            Registro interno en base de datos: última contraseña conocida (texto claro) para cuando el cliente la
-            olvida. Solo visible en este panel. Ejecutá el SQL <code className="text-xs">011_organization_owner_credential_store.sql</code> si
-            falla el guardado.
+            El email del owner se toma de <code className="text-xs">profiles</code> (y Auth) aunque no exista aún el
+            almacén de credenciales. El registro interno guarda la última contraseña en claro para recuperación; requiere
+            la tabla creada con <code className="text-xs">011_organization_owner_credential_store.sql</code>.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
+          {!ownerCredentialStoreOk ? (
+            <Alert variant="destructive">
+              <AlertTitle>Falta la tabla de credenciales en Supabase</AlertTitle>
+              <AlertDescription>
+                No se puede leer ni guardar la contraseña en claro hasta ejecutar{' '}
+                <code className="text-xs">011_organization_owner_credential_store.sql</code> en el SQL Editor. El email
+                arriba puede mostrarse igual desde perfiles.
+              </AlertDescription>
+            </Alert>
+          ) : null}
           {ownerCredential ? (
             <div className="space-y-3 rounded-md border bg-muted/30 p-4">
               <div className="space-y-1">

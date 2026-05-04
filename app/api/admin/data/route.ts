@@ -220,6 +220,47 @@ async function verifyAdminToken(request: NextRequest): Promise<boolean> {
   return !!data && data.length > 0
 }
 
+/** Email del owner desde profiles (+ Auth si falta columna email en profiles). */
+async function resolveOwnerEmailFromProfiles(
+  supabase: ReturnType<typeof createServiceRoleClient>,
+  organizationId: string,
+): Promise<{ owner_user_id: string; owner_email: string } | null> {
+  const prof = await supabase
+    .from('profiles')
+    .select('id, email')
+    .eq('organization_id', organizationId)
+    .eq('role', 'owner')
+    .limit(1)
+    .maybeSingle()
+
+  if (prof.error && isUnknownColumnError(prof.error)) {
+    const slim = await supabase
+      .from('profiles')
+      .select('id')
+      .eq('organization_id', organizationId)
+      .eq('role', 'owner')
+      .limit(1)
+      .maybeSingle()
+    if (slim.error) throw slim.error
+    if (!slim.data?.id) return null
+    const uid = slim.data.id as string
+    const u = await supabase.auth.admin.getUserById(uid)
+    return { owner_user_id: uid, owner_email: u.data.user?.email || '' }
+  }
+  if (prof.error) throw prof.error
+  if (!prof.data?.id) return null
+  const uid = prof.data.id as string
+  let em = typeof prof.data.email === 'string' ? prof.data.email : ''
+  if (!em) {
+    const u = await supabase.auth.admin.getUserById(uid)
+    em = u.data.user?.email || ''
+  }
+  return { owner_user_id: uid, owner_email: em }
+}
+
+const CREDENTIAL_STORE_MISSING_MSG =
+  'Falta la tabla organization_owner_credential_store en Supabase. Ejecutá scripts/011_organization_owner_credential_store.sql en el SQL Editor. El email del owner se sigue mostrando desde perfiles; la contraseña en claro no se guarda hasta crear la tabla.'
+
 export async function GET(request: NextRequest) {
   if (!(await verifyAdminToken(request))) {
     const denied = rejectUnlessDemoBypassAdminDataGet(request)
@@ -523,7 +564,7 @@ export async function GET(request: NextRequest) {
           : null
         return NextResponse.json({ data: config })
 
-      case 'owner_credential':
+      case 'owner_credential': {
         if (!id) return NextResponse.json({ error: 'Organization ID required' }, { status: 400 })
         const { data: ownerCred, error: ownerCredErr } = await supabase
           .from('organization_owner_credential_store')
@@ -532,11 +573,49 @@ export async function GET(request: NextRequest) {
           .maybeSingle()
         if (ownerCredErr) {
           if (isPostgrestMissingRelation(ownerCredErr)) {
-            return NextResponse.json({ data: null })
+            const fromProf = await resolveOwnerEmailFromProfiles(supabase, id)
+            if (!fromProf?.owner_email) {
+              return NextResponse.json({ data: null, credential_store_available: false })
+            }
+            return NextResponse.json({
+              data: {
+                owner_user_id: fromProf.owner_user_id,
+                owner_email: fromProf.owner_email,
+                password_plaintext: null as string | null,
+                note: null as string | null,
+                updated_at: null as string | null,
+              },
+              credential_store_available: false,
+            })
           }
           throw ownerCredErr
         }
-        return NextResponse.json({ data: ownerCred })
+        if (ownerCred) {
+          let email = String(ownerCred.owner_email || '')
+          if (!email) {
+            const fromProf = await resolveOwnerEmailFromProfiles(supabase, id)
+            if (fromProf?.owner_email) email = fromProf.owner_email
+          }
+          return NextResponse.json({
+            data: { ...ownerCred, owner_email: email },
+            credential_store_available: true,
+          })
+        }
+        const fromProf = await resolveOwnerEmailFromProfiles(supabase, id)
+        if (!fromProf?.owner_email) {
+          return NextResponse.json({ data: null, credential_store_available: true })
+        }
+        return NextResponse.json({
+          data: {
+            owner_user_id: fromProf.owner_user_id,
+            owner_email: fromProf.owner_email,
+            password_plaintext: null as string | null,
+            note: null as string | null,
+            updated_at: null as string | null,
+          },
+          credential_store_available: true,
+        })
+      }
 
       case 'phone_screening':
         if (!id) return NextResponse.json({ error: 'Organization ID required' }, { status: 400 })
@@ -889,7 +968,7 @@ export async function POST(request: NextRequest) {
           return NextResponse.json(
             {
               error: missingTable
-                ? 'Falta la tabla organization_owner_credential_store en Supabase. Ejecutá scripts/011_organization_owner_credential_store.sql en el SQL Editor y volvé a crear el cliente.'
+                ? `${CREDENTIAL_STORE_MISSING_MSG} Volvé a crear el cliente después.`
                 : friendly.message,
               error_code: missingTable ? 'credential_store_table_missing' : friendly.error_code,
             },
@@ -926,7 +1005,15 @@ export async function POST(request: NextRequest) {
           .select('owner_user_id, owner_email')
           .eq('organization_id', orgId)
           .maybeSingle()
-        if (exErr) throw exErr
+        if (exErr) {
+          if (isPostgrestMissingRelation(exErr)) {
+            return NextResponse.json(
+              { error: CREDENTIAL_STORE_MISSING_MSG, error_code: 'credential_store_table_missing' },
+              { status: 500 },
+            )
+          }
+          throw exErr
+        }
 
         let ownerUserId = existing?.owner_user_id as string | undefined
         let ownerEmail = (existing?.owner_email as string | undefined) || ''
@@ -964,7 +1051,15 @@ export async function POST(request: NextRequest) {
           },
           { onConflict: 'organization_id' },
         )
-        if (upErr) throw upErr
+        if (upErr) {
+          if (isPostgrestMissingRelation(upErr)) {
+            return NextResponse.json(
+              { error: CREDENTIAL_STORE_MISSING_MSG, error_code: 'credential_store_table_missing' },
+              { status: 500 },
+            )
+          }
+          throw upErr
+        }
         return NextResponse.json({ success: true })
       }
 
@@ -983,7 +1078,15 @@ export async function POST(request: NextRequest) {
           .select('owner_user_id, owner_email')
           .eq('organization_id', orgId)
           .maybeSingle()
-        if (exErr) throw exErr
+        if (exErr) {
+          if (isPostgrestMissingRelation(exErr)) {
+            return NextResponse.json(
+              { error: CREDENTIAL_STORE_MISSING_MSG, error_code: 'credential_store_table_missing' },
+              { status: 500 },
+            )
+          }
+          throw exErr
+        }
 
         let ownerUserId = existing?.owner_user_id as string | undefined
         let ownerEmail = (existing?.owner_email as string | undefined) || ''
@@ -1020,7 +1123,15 @@ export async function POST(request: NextRequest) {
           },
           { onConflict: 'organization_id' },
         )
-        if (upErr) throw upErr
+        if (upErr) {
+          if (isPostgrestMissingRelation(upErr)) {
+            return NextResponse.json(
+              { error: CREDENTIAL_STORE_MISSING_MSG, error_code: 'credential_store_table_missing' },
+              { status: 500 },
+            )
+          }
+          throw upErr
+        }
         return NextResponse.json({ success: true, data: { password_plaintext: newPass } })
       }
 

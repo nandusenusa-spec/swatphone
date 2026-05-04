@@ -12,15 +12,20 @@ import {
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import Link from 'next/link'
-import { useRouter } from 'next/navigation'
-import { useState } from 'react'
+import { useRouter, useSearchParams } from 'next/navigation'
+import { Suspense, useState } from 'react'
 
-export default function Page() {
+function LoginForm() {
   const [email, setEmail] = useState('')
   const [password, setPassword] = useState('')
   const [error, setError] = useState<string | null>(null)
   const [isLoading, setIsLoading] = useState(false)
   const router = useRouter()
+  const searchParams = useSearchParams()
+  const noOrgHint =
+    searchParams.get('reason') === 'no_org'
+      ? 'Tu sesión es válida, pero tu usuario no está vinculado a una organización en la base de datos. Pide a un admin que te dé acceso (fila en profiles con organization_id) o revisa el seed / SQL de tu entorno.'
+      : null
 
   const handleLogin = async (e: React.FormEvent) => {
     e.preventDefault()
@@ -39,6 +44,7 @@ export default function Page() {
         },
       })
       if (error) throw error
+      router.refresh()
       router.push('/dashboard')
     } catch (error: unknown) {
       setError(error instanceof Error ? error.message : 'An error occurred')
@@ -82,6 +88,11 @@ export default function Page() {
                       onChange={(e) => setPassword(e.target.value)}
                     />
                   </div>
+                  {noOrgHint && (
+                    <p className="rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-sm text-amber-900 dark:text-amber-100">
+                      {noOrgHint}
+                    </p>
+                  )}
                   {error && <p className="text-sm text-red-500">{error}</p>}
                   <Button type="submit" className="w-full" disabled={isLoading}>
                     {isLoading ? 'Logging in...' : 'Login'}
@@ -107,5 +118,19 @@ export default function Page() {
         </div>
       </div>
     </div>
+  )
+}
+
+export default function Page() {
+  return (
+    <Suspense
+      fallback={
+        <div className="flex min-h-svh w-full items-center justify-center p-6 text-sm text-muted-foreground">
+          Cargando…
+        </div>
+      }
+    >
+      <LoginForm />
+    </Suspense>
   )
 }
