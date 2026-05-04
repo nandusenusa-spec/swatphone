@@ -7,8 +7,12 @@
 -- - Usuario swat_admin ausente o contraseña desconocida
 --
 -- Después de ejecutar en Supabase SQL Editor:
---   Usuario: swat_admin
+--   Usuario: swat_admin (siempre minúsculas en DB; el API normaliza lo que escribís)
 --   Contraseña: ChangeMeAfterFirstLogin!
+--
+-- OJO: el ON CONFLICT DO UPDATE abajo VUELVE A PONER esa contraseña en cada ejecución.
+-- Si ya habías cambiado la clave del super admin, no re-ejecutes este script entero sin querer.
+-- (001_seed_swatworks usa DO NOTHING en admin_credentials y no resetea.)
 --
 -- Ejecutá NOTIFY al final si PostgREST cachea la función (opcional).
 -- ============================================================================

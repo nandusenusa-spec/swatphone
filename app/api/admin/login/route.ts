@@ -95,21 +95,29 @@ export async function POST(req: Request) {
       )
     }
 
-    const maybeBlocked = checkRateLimit(req, username)
+    const usernameInput = String(username).trim()
+    const usernameNorm = usernameInput.toLowerCase()
+
+    const maybeBlocked = checkRateLimit(req, usernameInput)
     if (maybeBlocked) return maybeBlocked
 
     const supabase = createServiceRoleClient()
+    // Misma lógica que verify_admin_password (lower/trim en SQL). Guardá usernames en minúsculas en admin_credentials.
 
     // Verify admin credentials
-    const { data: admin, error } = await supabase
+    const { data: adminRows, error } = await supabase
       .from('admin_credentials')
       .select('*')
-      .eq('username', username)
       .eq('is_active', true)
-      .single()
+      .limit(50)
+
+    const admin =
+      adminRows?.find(
+        (r) => String((r as { username?: string }).username || '').trim().toLowerCase() === usernameNorm,
+      ) ?? null
 
     if (error || !admin) {
-      const maybeBlockedNow = registerFailedAttempt(req, username)
+      const maybeBlockedNow = registerFailedAttempt(req, usernameInput)
       if (maybeBlockedNow) return maybeBlockedNow
       return NextResponse.json(
         { error: 'Invalid credentials' },
@@ -119,18 +127,20 @@ export async function POST(req: Request) {
 
     // Prefer RPC (pgcrypto). Si PostgREST falla al invocarla, bcryptjs valida el mismo hash bcrypt ($2a$/bf).
     const { data: rpcMatch, error: rpcErr } = await supabase.rpc('verify_admin_password', {
-      input_username: username,
+      input_username: usernameInput,
       input_password: password,
     })
 
-    let passwordMatch = Boolean(rpcMatch)
-    if (rpcErr) {
+    let passwordMatch = false
+    if (!rpcErr) {
+      passwordMatch = rpcMatch === true
+    } else {
       console.warn('[admin/login] verify_admin_password RPC unavailable; bcrypt fallback:', rpcErr.message)
       passwordMatch = await bcryptCompare(password, String(admin.password_hash || ''))
     }
 
     if (!passwordMatch) {
-      const maybeBlockedNow = registerFailedAttempt(req, username)
+      const maybeBlockedNow = registerFailedAttempt(req, usernameInput)
       if (maybeBlockedNow) return maybeBlockedNow
       return NextResponse.json(
         { error: 'Invalid credentials' },
@@ -138,7 +148,7 @@ export async function POST(req: Request) {
       )
     }
 
-    clearFailedAttempts(req, username)
+    clearFailedAttempts(req, usernameInput)
 
     // Create admin session token
     const payload = JSON.stringify(
