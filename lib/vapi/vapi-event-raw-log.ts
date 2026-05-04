@@ -1,8 +1,10 @@
 import {
+  getCallIdFromPayload,
   getMessagesFromPayload,
   getRecordingUrlFromPayload,
   getSummaryFromPayload,
   getTranscriptFromPayload,
+  getVapiMessageTypeFromPayload,
   mergeVapiWebhookBodiesForExtraction,
 } from '@/lib/vapi/payload'
 import { flattenVapiServerEvent } from '@/lib/vapi/vapi-event-flatten'
@@ -41,9 +43,8 @@ export function logVapiEventRaw(input: {
       : null
 
   const messageType =
-    str(input.flat, 'type') ||
-    str(asRecord(input.raw.message), 'type') ||
-    str(input.raw, 'type')
+    getVapiMessageTypeFromPayload(input.flat) ||
+    getVapiMessageTypeFromPayload(input.raw)
   const event = str(input.flat, 'event') || str(input.raw, 'event')
 
   const flatFromRaw = flattenVapiServerEvent(input.raw)
@@ -72,16 +73,20 @@ export function logVapiEventRaw(input: {
   const isKnown = known.has(messageType)
 
   const callId =
-    str(call, 'id') || str(input.flat, 'callId') || str(input.flat, 'call_id') || ''
+    getCallIdFromPayload(merged) ||
+    str(call, 'id') ||
+    str(input.flat, 'callId') ||
+    str(input.flat, 'call_id') ||
+    ''
 
   console.log('[vapi/event/raw]', {
     messageType,
     type: str(input.raw, 'type'),
     callId,
-    hasTranscript,
-    hasMessages,
-    hasRecordingUrl,
     keys,
+    hasMessages,
+    hasTranscript,
+    hasRecordingUrl,
   })
 
   console.log('[vapi/event/raw-detail]', {

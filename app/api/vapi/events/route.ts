@@ -16,11 +16,19 @@ export async function POST(request: NextRequest) {
   try {
     const raw = (await request.json()) as Record<string, unknown>
     const body = flattenVapiServerEvent(raw as Record<string, unknown>)
+    const orgFromQuery = request.nextUrl.searchParams.get('organization_id')
+    logVapiEventRaw({
+      requestUrl: request.url,
+      organizationId: orgFromQuery,
+      raw,
+      flat: body,
+    })
+
     const parsed = VapiEventInputSchema.parse(body)
     const messageType = typeof parsed.type === 'string' ? parsed.type : 'unknown'
     let organizationId =
       parsed.organization_id ||
-      request.nextUrl.searchParams.get('organization_id') ||
+      orgFromQuery ||
       ''
 
     if (!organizationId) {
@@ -41,13 +49,6 @@ export async function POST(request: NextRequest) {
         })
       }
     }
-
-    logVapiEventRaw({
-      requestUrl: request.url,
-      organizationId: organizationId || null,
-      raw,
-      flat: body,
-    })
 
     console.log('[vapi/events] request received', {
       url: request.url,

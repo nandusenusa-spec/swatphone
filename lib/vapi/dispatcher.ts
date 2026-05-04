@@ -29,6 +29,8 @@ import {
   getSummaryFromPayload,
   getTopicFromPayload,
   getTranscriptFromPayload,
+  getCallIdFromPayload,
+  getVapiMessageTypeFromPayload,
   mergeVapiWebhookBodiesForExtraction,
 } from '@/lib/vapi/payload'
 import { flattenVapiServerEvent } from '@/lib/vapi/vapi-event-flatten'
@@ -88,18 +90,6 @@ function parseToolArgs(toolCall: JsonRecord): JsonRecord {
   return raw && typeof raw === 'object' ? (raw as JsonRecord) : {}
 }
 
-function getCallId(payload: JsonRecord): string {
-  const call = asRecord(payload.call)
-  const artifact = asRecord(payload.artifact)
-  return (
-    str(call, 'id') ||
-    str(payload, 'callId') ||
-    str(payload, 'call_id') ||
-    str(payload, 'id') ||
-    str(artifact, 'callId')
-  )
-}
-
 function getPhone(payload: JsonRecord): string {
   const call = asRecord(payload.call)
   return (
@@ -144,15 +134,17 @@ export async function dispatchVapiEvent(input: {
   const payload = flattenEvent(input.body)
   const flatFromRaw = input.rawBody ? flattenEvent(input.rawBody) : input.body
   const extractionMerged = mergeVapiWebhookBodiesForExtraction(flatFromRaw, payload)
-  const type = str(payload, 'type')
+  const eventType =
+    getVapiMessageTypeFromPayload(extractionMerged) ||
+    getVapiMessageTypeFromPayload(payload) ||
+    str(payload, 'type')
+  const vapiCallId = getCallIdFromPayload(extractionMerged) || ''
   console.log('[vapi/dispatcher] event', {
     organization_id: input.organizationId,
-    message_type: type || 'unknown',
-    call_id: getCallId(payload) || null,
+    message_type: eventType || 'unknown',
+    call_id: vapiCallId || null,
   })
   const runtime = await getOrganizationRuntimeConfig(input.organizationId)
-
-  const vapiCallId = getCallId(payload)
   const phoneFromNested = getPhone(payload)
   const phoneFromMerged = getCallerPhoneFromPayload(extractionMerged)
   const phone = phoneFromNested || phoneFromMerged || ''
@@ -181,7 +173,7 @@ export async function dispatchVapiEvent(input: {
 
   let resolvedPhone = phone
   let phoneFromCallLogs = false
-  const endedEarly = endedEvent(type)
+  const endedEarly = endedEvent(eventType)
   if (!resolvedPhone && endedEarly && vapiCallId) {
     resolvedPhone = unknownCallerPlaceholderE164()
     console.warn('[vapi/dispatcher] missing_phone_using_placeholder', {
@@ -215,7 +207,24 @@ export async function dispatchVapiEvent(input: {
     }
   }
 
-  if (type === 'assistant-request') {
+  if (eventType === 'end-of-call-report' && !resolvedPhone.trim()) {
+    resolvedPhone = unknownCallerPlaceholderE164()
+    console.warn('[vapi/dispatcher] end_of_call_report_missing_phone_placeholder', {
+      organization_id: input.organizationId,
+      call_id: vapiCallId || null,
+    })
+  }
+
+  if (eventType === 'end-of-call-report') {
+    console.log('[vapi/end-of-call-report]', {
+      callId: vapiCallId || null,
+      organization_id: input.organizationId,
+      transcript_length_preview: transcriptFinal.length,
+      recording_url_present: Boolean(recordingUrl),
+    })
+  }
+
+  if (eventType === 'assistant-request') {
     console.log('[vapi/dispatcher] assistant-request', {
       organization_id: input.organizationId,
       call_id: vapiCallId || null,
@@ -299,7 +308,7 @@ export async function dispatchVapiEvent(input: {
     }
   }
 
-  if (type === 'status-update') {
+  if (eventType === 'status-update') {
     const st = str(payload, 'status')
     if (vapiCallId) {
       await onStatusUpdate({
@@ -312,7 +321,7 @@ export async function dispatchVapiEvent(input: {
     return { ok: true, event_type: 'status-update', status: st }
   }
 
-  if (type === 'transfer-update') {
+  if (eventType === 'transfer-update') {
     const dest = asRecord(payload.destination)
     const destNum = str(dest, 'number') || str(dest, 'phoneNumber') || ''
     console.log('[vapi/dispatcher] transfer-update', {
@@ -331,7 +340,7 @@ export async function dispatchVapiEvent(input: {
     return { ok: true, event_type: 'transfer-update' }
   }
 
-  if (type === 'transfer-destination-request') {
+  if (eventType === 'transfer-destination-request') {
     console.log('[vapi/dispatcher] transfer-destination-request', {
       organization_id: input.organizationId,
       call_id: vapiCallId || null,
@@ -388,7 +397,7 @@ export async function dispatchVapiEvent(input: {
     }
   }
 
-  if (type === 'tool-calls') {
+  if (eventType === 'tool-calls') {
     const calls = getToolCalls(payload)
     const toolNames = calls.map((tc) => parseToolName(tc)).filter(Boolean)
     /** Siempre permitidas: si no, allowed_tools en DB puede bloquear transfer aunque Vapi tenga la tool. */
@@ -555,7 +564,7 @@ export async function dispatchVapiEvent(input: {
   if (!resolvedPhone) {
     console.log('[vapi/dispatcher] skip_persist_non_terminal', {
       organization_id: input.organizationId,
-      message_type: type || 'unknown',
+      message_type: eventType || 'unknown',
       call_id: vapiCallId || null,
       reason: 'missing_phone',
     })
@@ -570,7 +579,7 @@ export async function dispatchVapiEvent(input: {
     attempts: Number(payload.attempts || 0) || runtime.spamPolicy.maxFailedAttempts - 1,
   })
 
-  if (validation.reject) {
+  if (eventType !== 'end-of-call-report' && validation.reject) {
     const spam = await persistSpamRejection({
       organizationId: input.organizationId,
       vapiCallId,
@@ -583,7 +592,7 @@ export async function dispatchVapiEvent(input: {
 
   const extractionFromPayload = asRecord(payload.structured_extraction)
 
-  const ended = endedEvent(type)
+  const ended = endedEvent(eventType)
   const er =
     getEndedReasonFromPayload(extractionMerged) || str(payload, 'endedReason')
 
@@ -625,7 +634,7 @@ export async function dispatchVapiEvent(input: {
       ? {
           vapi_metadata: {
             organization_id: input.organizationId,
-            webhook_message_type: type,
+            webhook_message_type: eventType,
             vapi_call_id: vapiCallId,
             customer_number: resolvedPhone || null,
             ended_reason: er || null,
@@ -675,32 +684,24 @@ export async function dispatchVapiEvent(input: {
     console.log('[vapi/call-outcome]', {
       callId: vapiCallId || null,
       saved: true,
-      transcriptLength: transcriptFinal.length,
-      messagesCount,
-      recordingUrlExists: Boolean(recordingUrl),
-      endedReason: er || null,
       table: 'call_logs',
+      transcriptLength: transcriptFinal.length,
+      recordingUrlExists: Boolean(recordingUrl),
       error: null,
     })
   } catch (e) {
     const msg = e instanceof Error ? e.message : String(e)
-    const errObj = e as { code?: string; details?: string; hint?: string }
     console.error('[vapi/call-outcome]', {
       callId: vapiCallId || null,
       saved: false,
-      transcriptLength: transcriptFinal.length,
-      messagesCount,
-      recordingUrlExists: Boolean(recordingUrl),
-      endedReason: er || null,
       table: 'call_logs',
+      transcriptLength: transcriptFinal.length,
+      recordingUrlExists: Boolean(recordingUrl),
       error: msg.slice(0, 400),
-      code: errObj?.code ?? null,
-      details: errObj?.details ?? null,
-      hint: errObj?.hint ?? null,
     })
     return {
       ok: false,
-      event_type: type || 'unknown',
+      event_type: eventType || 'unknown',
       persist_error: msg,
     }
   }
@@ -718,7 +719,7 @@ export async function dispatchVapiEvent(input: {
 
   return {
     ok: true,
-    event_type: type || 'unknown',
+    event_type: eventType || 'unknown',
     call_log_id: persisted.call_log_id,
     classification: persisted.classification,
     ended_reason: er || undefined,

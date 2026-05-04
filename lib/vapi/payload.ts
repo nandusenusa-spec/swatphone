@@ -246,13 +246,29 @@ export function getCallIdFromPayload(payload: unknown): string | null {
   const call = asRecord(data.call)
   const art = getArtifactFromPayload(data)
   const artCall = art ? asRecord(art.call) : null
+  const msg = asRecord(data.message)
+  const msgCall = msg ? asRecord(msg.call) : null
   return (
     readString(call, 'id') ||
+    readString(msgCall, 'id') ||
     readString(artCall, 'id') ||
     readString(data, 'callId') ||
     readString(data, 'call_id') ||
     readString(art, 'callId') ||
+    readString(msg, 'callId') ||
     null
+  )
+}
+
+/** Tipo de evento server (end-of-call-report, tool-calls, …) aunque venga anidado en message. */
+export function getVapiMessageTypeFromPayload(payload: unknown): string {
+  const data = asRecord(payload)
+  if (!data) return ''
+  const msg = asRecord(data.message)
+  return (
+    readString(data, 'type') ||
+    readString(msg, 'type') ||
+    ''
   )
 }
 
