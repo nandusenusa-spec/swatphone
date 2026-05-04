@@ -1,5 +1,6 @@
 import { createServiceRoleClient } from '@/lib/supabase/service-role'
 import { NextResponse } from 'next/server'
+import { compare as bcryptCompare } from 'bcryptjs'
 import { createHmac } from 'crypto'
 
 type LoginAttemptState = {
@@ -116,21 +117,16 @@ export async function POST(req: Request) {
       )
     }
 
-    // Verify password using pgcrypto (RPC + table admin_credentials; see scripts/003_admin_login_bootstrap.sql)
-    const { data: passwordMatch, error: rpcErr } = await supabase.rpc('verify_admin_password', {
+    // Prefer RPC (pgcrypto). Si PostgREST falla al invocarla, bcryptjs valida el mismo hash bcrypt ($2a$/bf).
+    const { data: rpcMatch, error: rpcErr } = await supabase.rpc('verify_admin_password', {
       input_username: username,
-      input_password: password
+      input_password: password,
     })
 
+    let passwordMatch = Boolean(rpcMatch)
     if (rpcErr) {
-      console.error('[admin/login] verify_admin_password RPC failed:', rpcErr)
-      return NextResponse.json(
-        {
-          error:
-            'Login de administrador no disponible: ejecutá scripts/003_admin_login_bootstrap.sql en Supabase SQL Editor (pgcrypto + función verify_admin_password).',
-        },
-        { status: 503 },
-      )
+      console.warn('[admin/login] verify_admin_password RPC unavailable; bcrypt fallback:', rpcErr.message)
+      passwordMatch = await bcryptCompare(password, String(admin.password_hash || ''))
     }
 
     if (!passwordMatch) {
