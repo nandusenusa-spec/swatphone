@@ -116,11 +116,22 @@ export async function POST(req: Request) {
       )
     }
 
-    // Verify password using pgcrypto
-    const { data: passwordMatch } = await supabase.rpc('verify_admin_password', {
+    // Verify password using pgcrypto (RPC + table admin_credentials; see scripts/003_admin_login_bootstrap.sql)
+    const { data: passwordMatch, error: rpcErr } = await supabase.rpc('verify_admin_password', {
       input_username: username,
       input_password: password
     })
+
+    if (rpcErr) {
+      console.error('[admin/login] verify_admin_password RPC failed:', rpcErr)
+      return NextResponse.json(
+        {
+          error:
+            'Login de administrador no disponible: ejecutá scripts/003_admin_login_bootstrap.sql en Supabase SQL Editor (pgcrypto + función verify_admin_password).',
+        },
+        { status: 503 },
+      )
+    }
 
     if (!passwordMatch) {
       const maybeBlockedNow = registerFailedAttempt(req, username)
