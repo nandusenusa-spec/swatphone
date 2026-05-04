@@ -16,7 +16,11 @@ import {
   getClientStatusPayload,
   spokenJobLineFromStatusPayload,
 } from '@/lib/print-shop/service'
-import { openAiVoiceIdForLlmPipeline } from '@/lib/vapi/openai-voice-for-pipeline'
+import {
+  getTranscriberConfigForVapi,
+  resolveOpenAiVoiceForOrganization,
+  resolveOpenAiVoiceForSync,
+} from '@/lib/vapi/voice-for-vapi'
 import { resolveTrustedCallerFirstName } from '@/lib/voice-platform/caller-identity'
 import { getOrganizationRuntimeConfig } from '@/lib/vapi/runtime-config'
 import { screenInboundAssistantRequest } from '@/lib/vapi/phone-screening'
@@ -180,7 +184,11 @@ async function handleCallEnded(flat: JsonRecord) {
   }
 }
 
-function defaultTransientAssistant(firstMessage: string) {
+function defaultTransientAssistant(
+  firstMessage: string,
+  voiceRes: { voiceProvider: string; voiceId: string },
+  trCfg: { provider: string; model: string; language: string },
+) {
   return {
     firstMessage,
     model: {
@@ -194,8 +202,8 @@ function defaultTransientAssistant(firstMessage: string) {
         },
       ],
     },
-    voice: { provider: 'openai', voiceId: openAiVoiceIdForLlmPipeline(null, 'nova') },
-    transcriber: { provider: 'deepgram', model: 'nova-2', language: 'es' },
+    voice: { provider: voiceRes.voiceProvider, voiceId: voiceRes.voiceId },
+    transcriber: { provider: trCfg.provider, model: trCfg.model, language: trCfg.language },
   }
 }
 
@@ -223,9 +231,20 @@ async function handleAssistantRequest(request: NextRequest, flat: JsonRecord, ra
 
   if (!phoneRaw?.trim()) {
     console.warn('[vapi:webhook] assistant-request: missing caller phone')
+    const trCfg = getTranscriberConfigForVapi()
+    const voiceRes =
+      orgId && orgId.trim()
+        ? await resolveOpenAiVoiceForOrganization(orgId)
+        : resolveOpenAiVoiceForSync({
+            organizationId: '',
+            assistantConfigVoiceId: null,
+            organizationAiVoiceId: null,
+          })
     return NextResponse.json({
       assistant: defaultTransientAssistant(
         'Hola, gracias por llamarnos. No pudimos identificar su número automáticamente.',
+        voiceRes,
+        trCfg,
       ),
     })
   }
@@ -301,8 +320,24 @@ async function handleAssistantRequest(request: NextRequest, flat: JsonRecord, ra
     hasJob: !!payload.found && !!payload.job,
   })
 
+  const trCfg = getTranscriberConfigForVapi()
+  const voiceRes =
+    orgId && orgId.trim()
+      ? await resolveOpenAiVoiceForOrganization(orgId)
+      : resolveOpenAiVoiceForSync({
+          organizationId: '',
+          assistantConfigVoiceId: null,
+          organizationAiVoiceId: null,
+        })
+  console.log('[vapi:webhook] assistant-request voice', {
+    organization_id: orgId || null,
+    voice_id: voiceRes.voiceId,
+    voice_source: voiceRes.source,
+    transcriber_language: trCfg.language,
+  })
+
   return NextResponse.json({
-    assistant: defaultTransientAssistant(firstMessage),
+    assistant: defaultTransientAssistant(firstMessage, voiceRes, trCfg),
   })
 }
 

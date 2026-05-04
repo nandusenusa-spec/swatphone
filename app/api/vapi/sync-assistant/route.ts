@@ -11,7 +11,11 @@ import {
   sanitizeAssistantBasePromptForSync,
   sanitizeFaqTextForSync,
 } from '@/lib/vapi/prompts'
-import { openAiVoiceIdForLlmPipeline } from '@/lib/vapi/openai-voice-for-pipeline'
+import {
+  extractVoiceFromVapiAssistantPayload,
+  getTranscriberConfigForVapi,
+  resolveOpenAiVoiceForSync,
+} from '@/lib/vapi/voice-for-vapi'
 import {
   buildPrepareWarmTransferServerTool,
   buildWarmTransferCallTool,
@@ -904,12 +908,23 @@ export async function POST(request: NextRequest) {
       })
     }
 
-    // Anthropic + pipeline estándar: voz OpenAI femenina por defecto (nova); coral es solo realtime.
-    const chosenVoiceProvider = 'openai'
-    const chosenVoiceId = openAiVoiceIdForLlmPipeline(
-      typeof config.voice_id === 'string' ? config.voice_id : null,
-      'nova',
-    )
+    const { data: orgAiVoiceRow, error: orgAiVoiceErr } = await serviceRole
+      .from('organization_ai_config')
+      .select('voice_id')
+      .eq('organization_id', organizationId)
+      .maybeSingle()
+    if (orgAiVoiceErr && orgAiVoiceErr.code !== 'PGRST116' && orgAiVoiceErr.code !== 'PGRST205') {
+      console.warn('[vapi/sync-assistant] organization_ai_config voice read', orgAiVoiceErr.message)
+    }
+
+    // Anthropic + pipeline estándar: voz OpenAI femenina (shimmer por defecto; alloy/onyx/etc. → fallback). coral = solo realtime (filtrado en openAiVoiceIdForLlmPipeline).
+    const voiceResolved = resolveOpenAiVoiceForSync({
+      organizationId,
+      assistantConfigVoiceId: typeof config.voice_id === 'string' ? config.voice_id : null,
+      organizationAiVoiceId:
+        typeof orgAiVoiceRow?.voice_id === 'string' ? orgAiVoiceRow.voice_id : null,
+    })
+    const transcribers = getTranscriberConfigForVapi()
     const firstMessageRaw =
       config.first_message ||
       (config as { greeting_message?: string | null }).greeting_message ||
@@ -936,15 +951,14 @@ export async function POST(request: NextRequest) {
       name: config.name,
       model: modelForVapi,
       voice: {
-        provider: chosenVoiceProvider,
-        voiceId: chosenVoiceId,
+        provider: voiceResolved.voiceProvider,
+        voiceId: voiceResolved.voiceId,
       },
       firstMessage,
       transcriber: {
-        provider: 'deepgram',
-        model: 'nova-2',
-        // Deepgram: `multi` = detección multilingüe (es/en en la misma llamada). Para solo ES/EN fijo, cambiar en Vapi o vía assistant_configs si más adante lo exponemos.
-        language: 'multi',
+        provider: transcribers.provider,
+        model: transcribers.model,
+        language: transcribers.language,
       },
       serverUrl: `${appBase}/api/voice/events?organization_id=${organizationId}`,
       serverUrlSecret: process.env.VAPI_WEBHOOK_SECRET,
@@ -952,11 +966,16 @@ export async function POST(request: NextRequest) {
 
     console.log('[vapi/sync-assistant] voice_transcriber_config', {
       organization_id: organizationId,
-      voice_provider: chosenVoiceProvider,
-      voice_id: chosenVoiceId,
-      transcriber_provider: 'deepgram',
-      transcriber_model: 'nova-2',
-      transcriber_language: 'multi',
+      voice_provider: voiceResolved.voiceProvider,
+      voice_id: voiceResolved.voiceId,
+      voice_model: null,
+      transcriber_provider: transcribers.provider,
+      transcriber_model: transcribers.model,
+      transcriber_language: transcribers.language,
+      source: voiceResolved.source,
+      assistant_configs_voice_id: voiceResolved.assistantConfigVoiceId,
+      organization_ai_voice_id: voiceResolved.organizationAiVoiceId,
+      admin_source: voiceResolved.adminSource,
     })
 
     console.log('[vapi/sync-assistant] patch_payload_model_tool_preview', {
@@ -1107,6 +1126,16 @@ export async function POST(request: NextRequest) {
         httpStatus: postPatchGetStatus,
         ...summary,
       })
+      const postGetVoice = extractVoiceFromVapiAssistantPayload(postPatchFetched)
+      console.log('[vapi/sync-assistant] post_patch_voice_from_vapi_get', {
+        httpStatus: postPatchGetStatus,
+        voice_provider: postGetVoice.voice_provider,
+        voice_id: postGetVoice.voice_id,
+        voice_model: postGetVoice.voice_model,
+        transcriber_provider: postGetVoice.transcriber_provider,
+        transcriber_model: postGetVoice.transcriber_model,
+        transcriber_language: postGetVoice.transcriber_language,
+      })
       const toolsAudit = postPatchAssistantToolsSummary(postPatchFetched, {
         transferToolsInPayload: persistentTransferTools.length > 0,
       })
@@ -1202,6 +1231,26 @@ export async function POST(request: NextRequest) {
         `GET assistant después del PATCH devolvió HTTP ${postPatchGetStatus}; no se pudo verificar el schema en Vapi.`,
       )
     }
+    const postGetVoiceForWarn = extractVoiceFromVapiAssistantPayload(postPatchFetched)
+    if (
+      postPatchGetStatus === 200 &&
+      voiceResolved.voiceId &&
+      postGetVoiceForWarn.voice_id &&
+      voiceResolved.voiceId.toLowerCase() !== postGetVoiceForWarn.voice_id.toLowerCase()
+    ) {
+      warnings.push(
+        `Voz: el PATCH envió voiceId=${voiceResolved.voiceId} pero el GET de Vapi devolvió voice_id=${postGetVoiceForWarn.voice_id}. En la UI de Vapi revisá la pestaña Voice y publicá hasta que coincida; no des por buena la voz hasta verificar.`,
+      )
+    }
+    if (
+      postPatchGetStatus === 200 &&
+      voiceResolved.voiceId &&
+      postGetVoiceForWarn.voice_id == null
+    ) {
+      warnings.push(
+        'Voz: el GET del assistant en Vapi no devolvió voice.voiceId; comprobá la pestaña Voice en el dashboard de Vapi.',
+      )
+    }
     if (phoneReport.ok && resolvedAssistantId) {
       const match = phoneReport.items.filter((i) => i.matchesSyncedAssistant)
       if (match.length === 0) {
@@ -1287,6 +1336,15 @@ export async function POST(request: NextRequest) {
         postPatchGetHttpStatus: postPatchGetStatus,
         postPatchAssistantSummary:
           postPatchGetStatus === 200 ? summarizeAssistantFromVapi(postPatchFetched) : null,
+        voice: {
+          patchPayload: {
+            voice_provider: voiceResolved.voiceProvider,
+            voice_id: voiceResolved.voiceId,
+            source: voiceResolved.source,
+            transcriber: transcribers,
+          },
+          vapiGet: postPatchGetStatus === 200 ? extractVoiceFromVapiAssistantPayload(postPatchFetched) : null,
+        },
         phoneNumbers: phoneReport,
         promptAudit: {
           verificationPhraseMarker: JOB_STATUS_SYNC_VERIFICATION_PHRASE,

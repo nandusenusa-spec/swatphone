@@ -3,7 +3,7 @@
 export const printShopAssistantConfig = {
   name: "SWATWORKS Voice Assistant",
   language: "en",
-  voice_id: "alloy",
+  voice_id: "shimmer",
   voice_provider: "openai",
   temperature: 0.15,
   max_tokens: 120,

@@ -2,7 +2,7 @@ import { createServiceRoleClient } from '@/lib/supabase/service-role'
 import { getOrganizationRuntimeConfig } from '@/lib/vapi/runtime-config'
 import { executeToolHandler } from '@/lib/vapi/tool-handlers'
 import { persistCallArtifacts, persistSpamRejection } from '@/lib/vapi/persistence'
-import { openAiVoiceIdForLlmPipeline } from '@/lib/vapi/openai-voice-for-pipeline'
+import { getTranscriberConfigForVapi, resolveOpenAiVoiceForOrganization } from '@/lib/vapi/voice-for-vapi'
 import { shouldRejectByValidation } from '@/lib/voice-platform/service'
 import {
   isWarmTransferFailureEndedReason,
@@ -246,12 +246,25 @@ export async function dispatchVapiEvent(input: {
       greeting_name: greetingName,
     })
 
+    const voiceRes = await resolveOpenAiVoiceForOrganization(input.organizationId)
+    const trCfg = getTranscriberConfigForVapi()
+    console.log('[vapi/dispatcher] assistant-request voice', {
+      organization_id: input.organizationId,
+      voice_id: voiceRes.voiceId,
+      voice_source: voiceRes.source,
+      transcriber_language: trCfg.language,
+    })
+
     return {
       assistant: {
         firstMessage,
         model,
-        voice: { provider: 'openai', voiceId: openAiVoiceIdForLlmPipeline(null, 'nova') },
-        transcriber: { provider: 'deepgram', model: 'nova-2', language: 'es' },
+        voice: { provider: voiceRes.voiceProvider, voiceId: voiceRes.voiceId },
+        transcriber: {
+          provider: trCfg.provider,
+          model: trCfg.model,
+          language: trCfg.language,
+        },
       },
     }
   }

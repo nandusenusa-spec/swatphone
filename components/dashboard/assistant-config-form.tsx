@@ -33,9 +33,9 @@ interface AssistantConfig {
 }
 
 const voices = [
+  { id: 'shimmer', name: 'Shimmer (femenina, recomendada)', provider: 'openai' },
+  { id: 'nova', name: 'Nova (femenina)', provider: 'openai' },
   { id: 'alloy', name: 'Alloy', provider: 'openai' },
-  { id: 'nova', name: 'Nova', provider: 'openai' },
-  { id: 'shimmer', name: 'Shimmer', provider: 'openai' },
   { id: 'echo', name: 'Echo', provider: 'openai' },
   { id: 'onyx', name: 'Onyx', provider: 'openai' },
   { id: 'fable', name: 'Fable', provider: 'openai' },
@@ -58,7 +58,7 @@ export function AssistantConfigForm({ config }: { config: AssistantConfig | null
     name: config?.name || 'Asistente Principal',
     system_prompt: config?.system_prompt || '',
     first_message: config?.first_message || 'Hola, gracias por llamar. En que puedo ayudarte?',
-    voice_id: config?.voice_id || 'alloy',
+    voice_id: config?.voice_id || 'shimmer',
     language: config?.language || 'es',
     temperature: config?.temperature || 0.7,
     transfer_enabled: config?.transfer_enabled ?? true,
@@ -149,6 +149,11 @@ export function AssistantConfigForm({ config }: { config: AssistantConfig | null
               ))}
             </SelectContent>
           </Select>
+          <p className="text-xs text-muted-foreground">
+            El sync puede sustituir voces en lista de bloqueo (p. ej. alloy) por la fallback femenina del
+            servidor. Para ignorar por completo la voz guardada en una org: variable{' '}
+            <code className="text-[11px]">VAPI_VOICE_IGNORE_ADMIN_ORG_IDS</code> (UUIDs separados por coma).
+          </p>
         </div>
 
         <div className="space-y-2">
