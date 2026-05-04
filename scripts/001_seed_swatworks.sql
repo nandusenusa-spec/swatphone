@@ -15,19 +15,36 @@
 
 BEGIN;
 
-INSERT INTO public.organizations (id, name, slug, timezone, active)
+INSERT INTO public.organizations (
+  id,
+  name,
+  slug,
+  timezone,
+  active,
+  vapi_assistant_id,
+  settings
+)
 VALUES (
   '9bb50e58-9ba6-4d54-8171-13922749f570'::uuid,
   'SWATWORKS',
   'swatworks',
   'America/New_York',
-  TRUE
+  TRUE,
+  'e9a5d0a4-44a5-4b7f-90df-35a5d50d181d',
+  jsonb_build_object(
+    'business_name', 'SWATWORKS',
+    'company_name', 'SWATWORKS',
+    'status', 'active',
+    'metadata', '{}'::jsonb
+  )
 )
 ON CONFLICT (id) DO UPDATE SET
   name = EXCLUDED.name,
   slug = EXCLUDED.slug,
   timezone = COALESCE(EXCLUDED.timezone, organizations.timezone),
-  active = COALESCE(EXCLUDED.active, organizations.active);
+  active = COALESCE(EXCLUDED.active, organizations.active),
+  vapi_assistant_id = COALESCE(EXCLUDED.vapi_assistant_id, organizations.vapi_assistant_id),
+  settings = COALESCE(organizations.settings, '{}'::jsonb) || COALESCE(EXCLUDED.settings, '{}'::jsonb);
 
 INSERT INTO public.organization_ai_config (
   organization_id,
