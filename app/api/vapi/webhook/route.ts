@@ -454,7 +454,7 @@ async function handleToolCalls(request: NextRequest, flat: JsonRecord, rawBody: 
           result = JSON.stringify({
             ok: false,
             error: 'missing_required_fields',
-            missing_fields,
+            missing_fields: missingFields,
             primary_message_for_caller: 'Me falta un dato para registrar tu solicitud.',
           })
         } else {

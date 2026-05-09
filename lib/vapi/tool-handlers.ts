@@ -1,3 +1,4 @@
+import { classifyLeadTemperature, notifyLeadTelegram } from '@/lib/notifications/telegram'
 import {
   runCreateAppointment,
   runCreateFollowUp,
@@ -402,6 +403,23 @@ export async function executeToolHandler(
           saved: true,
           leadId: out.lead?.id ?? null,
           error: null,
+        })
+        void notifyLeadTelegram({
+          temperature: classifyLeadTemperature({
+            customerName: mergedName, phone,
+            email: typeof args.email==='string'?args.email:null,
+            need: mergedNotes||'',
+            priceRequested: commercial.intent==='quote_request',
+            dateNeeded: typeof args.date_needed==='string'?args.date_needed:null,
+          }),
+          customerName: mergedName||'Sin nombre', phone,
+          email: typeof args.email==='string'?args.email:null,
+          need: mergedNotes||'',
+          priceRequested: commercial.intent==='quote_request',
+          dateNeeded: typeof args.date_needed==='string'?args.date_needed:null,
+          category: commercial.category||null,
+          summary: commercial.summary||null,
+          nextAction: commercial.next_action||null,
         })
         await tryAutoFollowUpAfterLeadSave({
           organizationId: context.organizationId,
