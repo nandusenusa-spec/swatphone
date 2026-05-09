@@ -9,10 +9,15 @@ next.user-config.*
 # Secrets & environment (never commit real values)
 .env
 .env.local
+.env.backup
+.env.demo
 .env.production
 .env*.local
 .env.*
 !.env.example
+!.env.local.example
+!.env.backup.example
+!.env.demo.example
 # Copia local rellenada desde vercel-env.template (no commitear)
 vercel-env.local
 
@@ -26,3 +31,9 @@ build/
 # Tooling / OS
 .DS_Store
 .vercel/
+
+# DB backups locales (pueden contener datos sensibles)
+backups/*.sql
+backups/*.dump
+backups/*.tar
+!backups/.gitkeep

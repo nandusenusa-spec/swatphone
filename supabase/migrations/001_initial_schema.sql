@@ -1,15 +1,11 @@
 -- ============================================================================
--- 000_rebuild_supabase_schema.sql
--- Base vacía / reconstrucción: esquema alineado con lib/voice-platform y
--- lib/vapi/runtime-config (sin tocar código de la app).
--- Ejecutar en Supabase SQL Editor como un solo script (o psql).
--- Orden: extensiones → tablas core → voice platform → runtime → extras → RLS.
---
--- Versión partida para migraciones CLI: supabase/migrations/001_initial_schema.sql
--- + 002_rls_policies.sql (mantener ambos en sync al editar este archivo).
+-- 001_initial_schema.sql — baseline DDL (SWAT-VoiceIA)
 -- ============================================================================
-
-BEGIN;
+-- Origen: scripts/000_rebuild_supabase_schema.sql (líneas posteriores a BEGIN;
+-- anteriores a COMMIT; sin RLS).
+-- Mantener sincronizado con 000 al cambiar tablas/funciones/triggers base.
+-- Los índices CREATE INDEX están aquí (no en 003).
+-- ============================================================================
 
 CREATE EXTENSION IF NOT EXISTS "uuid-ossp";
 CREATE EXTENSION IF NOT EXISTS "pgcrypto";
@@ -625,56 +621,3 @@ DROP TRIGGER IF EXISTS update_organization_catalog_updated_at ON public.organiza
 CREATE TRIGGER update_organization_catalog_updated_at
 BEFORE UPDATE ON public.organization_catalog
 FOR EACH ROW EXECUTE FUNCTION public.update_updated_at_column();
-
-COMMIT;
-
--- ---------------------------------------------------------------------------
--- RLS tenant (dashboard auth): políticas mínimas para call_logs, customers, follow_ups
--- ---------------------------------------------------------------------------
-ALTER TABLE public.call_logs ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.customers ENABLE ROW LEVEL SECURITY;
-ALTER TABLE public.follow_ups ENABLE ROW LEVEL SECURITY;
-
-DROP POLICY IF EXISTS call_logs_select_tenant ON public.call_logs;
-CREATE POLICY call_logs_select_tenant ON public.call_logs
-  FOR SELECT USING (
-    organization_id IN (SELECT organization_id FROM public.profiles WHERE id = auth.uid())
-  );
-
-DROP POLICY IF EXISTS customers_select_tenant ON public.customers;
-CREATE POLICY customers_select_tenant ON public.customers
-  FOR SELECT USING (
-    organization_id IN (SELECT organization_id FROM public.profiles WHERE id = auth.uid())
-  );
-
-DROP POLICY IF EXISTS customers_insert_tenant ON public.customers;
-CREATE POLICY customers_insert_tenant ON public.customers
-  FOR INSERT WITH CHECK (
-    organization_id IN (SELECT organization_id FROM public.profiles WHERE id = auth.uid())
-  );
-
-DROP POLICY IF EXISTS customers_update_tenant ON public.customers;
-CREATE POLICY customers_update_tenant ON public.customers
-  FOR UPDATE USING (
-    organization_id IN (SELECT organization_id FROM public.profiles WHERE id = auth.uid())
-  );
-
-DROP POLICY IF EXISTS follow_ups_select_tenant ON public.follow_ups;
-CREATE POLICY follow_ups_select_tenant ON public.follow_ups
-  FOR SELECT USING (
-    organization_id IN (SELECT organization_id FROM public.profiles WHERE id = auth.uid())
-  );
-
-DROP POLICY IF EXISTS follow_ups_insert_tenant ON public.follow_ups;
-CREATE POLICY follow_ups_insert_tenant ON public.follow_ups
-  FOR INSERT WITH CHECK (
-    organization_id IN (SELECT organization_id FROM public.profiles WHERE id = auth.uid())
-  );
-
-DROP POLICY IF EXISTS follow_ups_update_tenant ON public.follow_ups;
-CREATE POLICY follow_ups_update_tenant ON public.follow_ups
-  FOR UPDATE USING (
-    organization_id IN (SELECT organization_id FROM public.profiles WHERE id = auth.uid())
-  );
-
-NOTIFY pgrst, 'reload schema';
