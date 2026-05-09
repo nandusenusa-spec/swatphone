@@ -1491,16 +1491,16 @@ export default function AdminClientDetailPage() {
                 <p className="text-xs text-muted-foreground">
                   Pega esta URL en el dashboard del proveedor - Assistant - Server URL (debe incluir{' '}
                   <code className="text-xs">?organization_id=...</code>). Si ves 404 en tool-calls, revisá que el
-                  dominio sea el de este deploy y que no quede una ruta vieja en Vapi.
+                  dominio sea el de este deploy y que no quede una ruta vieja en ALOHA.
                 </p>
               </div>
 
               {lastVapiPublish ? (
                 <div className="space-y-2 rounded-lg border border-border bg-muted/20 p-4">
-                  <h4 className="text-sm font-medium">Última publicación a Vapi (sync)</h4>
+                  <h4 className="text-sm font-medium">Última publicación ALOHA (sync)</h4>
                   <p className="text-xs text-muted-foreground">
                     Assistant ID: <code className="text-xs">{lastVapiPublish.assistantId || '—'}</code> — debe coincidir
-                    con el assistant asignado al número en Vapi.
+                    con el assistant asignado al número en ALOHA.
                   </p>
                   <div className="space-y-1 text-xs font-mono break-all">
                     <div>
@@ -1533,7 +1533,7 @@ export default function AdminClientDetailPage() {
 
               {lastVapiVerification ? (
                 <div className="space-y-2 rounded-lg border border-amber-500/40 bg-amber-500/5 p-4">
-                  <h4 className="text-sm font-medium">Verificación Vapi (GET tras PATCH + teléfonos)</h4>
+                  <h4 className="text-sm font-medium">Verificación ALOHA (GET tras PATCH + teléfonos)</h4>
                   {lastVapiVerification.warnings?.length ? (
                     <ul className="list-disc space-y-1 pl-4 text-xs text-amber-200/90">
                       {lastVapiVerification.warnings.map((w, i) => (
@@ -1696,10 +1696,10 @@ export default function AdminClientDetailPage() {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <PhoneOff className="h-5 w-5" />
-                Screening de llamadas (Vapi)
+                Screening de llamadas (ALOHA)
               </CardTitle>
               <CardDescription>
-                Números bloqueados o con score alto no reciben assistant: Vapi reproduce un mensaje breve y corta (ver{' '}
+                Números bloqueados o con score alto no reciben assistant: ALOHA reproduce un mensaje breve y corta (ver{' '}
                 <a
                   className="underline"
                   href="https://docs.vapi.ai/server-url/spam-call-rejection"
@@ -1791,7 +1791,7 @@ export default function AdminClientDetailPage() {
               <CardDescription>
                 Este campo es el <strong>prefijo base</strong> guardado en <code className="text-xs">assistant_configs.system_prompt</code>
                 (y se replica en <code className="text-xs">organization_ai_config</code> al guardar). No muestra el prompt completo que
-                recibe Vapi: al sincronizar, el backend concatena después las <strong>reglas operativas</strong> desde{' '}
+                recibe ALOHA: al sincronizar, el backend concatena después las <strong>reglas operativas</strong> desde{' '}
                 <code className="text-xs">lib/vapi/prompts.ts</code>, datos de runtime (catálogo, transferencias, etc.) y, en sync, las
                 FAQs. Si lo dejás vacío, se usa un texto base por defecto en servidor antes de esas reglas. Usá el botón para generar
                 solo esta parte automáticamente.
@@ -1806,7 +1806,7 @@ export default function AdminClientDetailPage() {
               <div className="space-y-2">
                 <Label htmlFor="admin-system-prompt-base">Prompt base (personalizado)</Label>
                 <p id="admin-system-prompt-base-hint" className="text-xs text-muted-foreground">
-                  No es el prompt efectivo enviado a Vapi: siempre se combina con reglas del código al hacer sync. Vacío = texto base
+                  No es el prompt efectivo enviado a ALOHA: siempre se combina con reglas del código al hacer sync. Vacío = texto base
                   por defecto en el servidor + esas reglas.
                 </p>
                 <Textarea

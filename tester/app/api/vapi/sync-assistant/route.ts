@@ -22,10 +22,10 @@ function buildVapiAuthErrorMessage(vapiMessage?: string): string {
     lower.includes('unauthorized')
 
   if (indicatesKeyTypeMismatch) {
-    return 'Vapi rejected the API key. This endpoint requires a Vapi Private/Server API key (not a public/client key). Update it in Settings > Vapi API Key.'
+    return 'El sistema de voz rechazó la API key. Se requiere una API key privada/servidor. Actualizala en Configuración.'
   }
 
-  return 'Vapi API request failed. Verify the saved Vapi Private/Server API key and try again.'
+  return 'Error en el sistema de voz. Verificá la API key guardada e intentá de nuevo.'
 }
 
 // This endpoint syncs the assistant configuration to Vapi
@@ -48,7 +48,7 @@ export async function POST(request: NextRequest) {
     const vapiApiKey = normalizeVapiApiKey(profile?.organizations?.vapi_api_key)
     if (!vapiApiKey) {
       return NextResponse.json(
-        { error: 'Vapi Private/Server API key is not configured' },
+        { error: 'API key del sistema de voz no configurada' },
         { status: 400 }
       )
     }
@@ -57,7 +57,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           error:
-            'Invalid Vapi key format. Use a Vapi Private/Server API key (secret key), not a public/client key.',
+            'Formato de API key inválido. Usá una API key privada/servidor (no la pública).',
         },
         { status: 400 }
       )

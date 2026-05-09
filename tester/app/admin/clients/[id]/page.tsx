@@ -191,14 +191,14 @@ export default function AdminClientDetailPage() {
           </p>
         </div>
         <Badge variant={vapiAssistantId ? 'default' : 'secondary'}>
-          {vapiAssistantId ? 'Vapi Configurado' : 'Pendiente Config'}
+          {vapiAssistantId ? 'ALOHA Configurado' : 'Pendiente Config'}
         </Badge>
       </div>
 
       <Tabs defaultValue="info" className="space-y-4">
         <TabsList>
           <TabsTrigger value="info">Info del Cliente</TabsTrigger>
-          <TabsTrigger value="vapi">Configurar Vapi</TabsTrigger>
+          <TabsTrigger value="vapi">Configurar ALOHA</TabsTrigger>
           <TabsTrigger value="prompts">Prompts</TabsTrigger>
         </TabsList>
 
@@ -292,15 +292,15 @@ export default function AdminClientDetailPage() {
             <CardHeader>
               <CardTitle className="flex items-center gap-2">
                 <Settings className="h-5 w-5" />
-                Conexion con Vapi
+                Conexión con ALOHA
               </CardTitle>
               <CardDescription>
-                Configura la API Key, Assistant ID y numero de Vapi para este cliente
+                Configura la API Key, Assistant ID y número de ALOHA para este cliente
               </CardDescription>
             </CardHeader>
             <CardContent className="space-y-4">
               <div className="space-y-2">
-                <Label>Vapi Private/Server API Key</Label>
+                <Label>ALOHA Private/Server API Key</Label>
                 <Input
                   type="password"
                   value={vapiApiKey}
@@ -308,21 +308,21 @@ export default function AdminClientDetailPage() {
                   placeholder="Usa la key privada/servidor (no publica/client)"
                 />
                 <p className="text-xs text-muted-foreground">
-                  Esta integracion usa endpoints de servidor de Vapi y requiere una Private/Server API key.
+                  Esta integración usa endpoints de servidor de ALOHA y requiere una Private/Server API key.
                 </p>
               </div>
 
               <div className="space-y-2">
-                <Label>Vapi Assistant ID</Label>
+                <Label>ALOHA Assistant ID</Label>
                 <Input
                   value={vapiAssistantId}
                   onChange={(e) => setVapiAssistantId(e.target.value)}
-                  placeholder="ID del assistant creado en Vapi"
+                  placeholder="ID del assistant creado en ALOHA"
                 />
               </div>
 
               <div className="space-y-2">
-                <Label>Numero de Telefono Vapi</Label>
+                <Label>Número de Teléfono ALOHA</Label>
                 <Input
                   value={vapiPhoneNumber}
                   onChange={(e) => setVapiPhoneNumber(e.target.value)}
@@ -331,7 +331,7 @@ export default function AdminClientDetailPage() {
               </div>
 
               <div className="space-y-2">
-                <Label>Webhook URL (copiar a Vapi)</Label>
+                <Label>Webhook URL (copiar a ALOHA)</Label>
                 <div className="flex gap-2">
                   <Input
                     readOnly
@@ -342,7 +342,7 @@ export default function AdminClientDetailPage() {
                   </Button>
                 </div>
                 <p className="text-xs text-muted-foreground">
-                  Pega esta URL en Vapi Dashboard - Assistant - Server URL
+                  Pega esta URL en ALOHA Dashboard - Assistant - Server URL
                 </p>
               </div>
 
@@ -357,7 +357,7 @@ export default function AdminClientDetailPage() {
         <TabsContent value="prompts" className="space-y-4">
           <Card>
             <CardHeader>
-              <CardTitle>System Prompt para Vapi</CardTitle>
+              <CardTitle>System Prompt para ALOHA</CardTitle>
               <CardDescription>
                 El prompt que define como se comporta el bot. Usa el boton para generar uno automatico basado en los datos del cliente.
               </CardDescription>

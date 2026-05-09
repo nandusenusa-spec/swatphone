@@ -98,7 +98,7 @@ export function VapiSettingsForm({ organization }: { organization: Organization 
       {/* Form fields */}
       <div className="space-y-4">
         <div className="space-y-2">
-          <Label htmlFor="vapi_api_key">Vapi Private/Server API Key</Label>
+          <Label htmlFor="vapi_api_key">ALOHA Private/Server API Key</Label>
           <Input
             id="vapi_api_key"
             type="password"
@@ -107,7 +107,7 @@ export function VapiSettingsForm({ organization }: { organization: Organization 
             placeholder="Pega aqui tu key privada/servidor"
           />
           <p className="text-xs text-muted-foreground">
-            Usa la key privada/servidor de Vapi (no la publica/client). Obtenla desde{' '}
+            Usa la key privada/servidor de ALOHA (no la publica/client). Obtenla desde{' '}
             <a
               href="https://dashboard.vapi.ai/api-keys"
               target="_blank"
@@ -129,7 +129,7 @@ export function VapiSettingsForm({ organization }: { organization: Organization 
             placeholder="xxxxxxxx-xxxx-xxxx-xxxx-xxxxxxxxxxxx"
           />
           <p className="text-xs text-muted-foreground">
-            Se generara automaticamente al crear el asistente en Vapi
+            Se generara automaticamente al crear el asistente en ALOHA
           </p>
         </div>
 
@@ -142,7 +142,7 @@ export function VapiSettingsForm({ organization }: { organization: Organization 
             placeholder="+1234567890"
           />
           <p className="text-xs text-muted-foreground">
-            Numero asignado desde Vapi para recibir llamadas
+            Numero asignado desde ALOHA para recibir llamadas
           </p>
         </div>
       </div>

@@ -54,10 +54,10 @@ function buildVapiAuthErrorMessage(vapiMessage?: unknown): string {
     lower.includes('unauthorized')
 
   if (indicatesKeyTypeMismatch) {
-    return 'Vapi rejected the API key. This endpoint requires a Vapi Private/Server API key (not a public/client key). Update it in Settings > Vapi API Key.'
+    return 'El sistema de voz rechazó la API key. Se requiere una API key privada/servidor. Actualizala en Configuración.'
   }
 
-  return 'Vapi API request failed. Verify the saved Vapi Private/Server API key and try again.'
+  return 'Error en el sistema de voz. Verificá la API key guardada e intentá de nuevo.'
 }
 
 function serializeSyncAssistantCatchError(error: unknown): string {
@@ -530,7 +530,7 @@ export async function POST(request: NextRequest) {
 
     if (!vapiApiKey) {
       return NextResponse.json(
-        { error: 'Vapi Private/Server API key is not configured' },
+        { error: 'API key del sistema de voz no configurada' },
         { status: 400 }
       )
     }
@@ -539,7 +539,7 @@ export async function POST(request: NextRequest) {
       return NextResponse.json(
         {
           error:
-            'Invalid Vapi key format. Use a Vapi Private/Server API key (secret key), not a public/client key.',
+            'Formato de API key inválido. Usá una API key privada/servidor (no la pública).',
         },
         { status: 400 }
       )
@@ -1146,7 +1146,7 @@ export async function POST(request: NextRequest) {
             : JSON.stringify(result.message)
       const detail =
         raw && !baseMsg.includes(raw.slice(0, 80))
-          ? ` Detalle Vapi: ${raw.slice(0, 400)}${raw.length > 400 ? '…' : ''}`
+          ? ` Detalle del sistema de voz: ${raw.slice(0, 400)}${raw.length > 400 ? '…' : ''}`
           : ''
       return NextResponse.json(
         {
@@ -1291,7 +1291,7 @@ export async function POST(request: NextRequest) {
     }
     if (postPatchGetStatus !== 200) {
       warnings.push(
-        `GET assistant después del PATCH devolvió HTTP ${postPatchGetStatus}; no se pudo verificar el schema en Vapi.`,
+        `GET assistant después del PATCH devolvió HTTP ${postPatchGetStatus}; no se pudo verificar el schema en el sistema de voz.`,
       )
     }
     const postGetVoiceForWarn = extractVoiceFromVapiAssistantPayload(postPatchFetched)
@@ -1302,7 +1302,7 @@ export async function POST(request: NextRequest) {
       voiceResolved.voiceId.toLowerCase() !== postGetVoiceForWarn.voice_id.toLowerCase()
     ) {
       warnings.push(
-        `Voz: el PATCH envió voiceId=${voiceResolved.voiceId} pero el GET de Vapi devolvió voice_id=${postGetVoiceForWarn.voice_id}. En la UI de Vapi revisá la pestaña Voice y publicá hasta que coincida; no des por buena la voz hasta verificar.`,
+        `Voz: el PATCH envió voiceId=${voiceResolved.voiceId} pero el GET del sistema de voz devolvió voice_id=${postGetVoiceForWarn.voice_id}. En la UI del sistema de voz revisá la pestaña Voice y publicá hasta que coincida; no des por buena la voz hasta verificar.`,
       )
     }
     if (
@@ -1311,14 +1311,14 @@ export async function POST(request: NextRequest) {
       postGetVoiceForWarn.voice_id == null
     ) {
       warnings.push(
-        'Voz: el GET del assistant en Vapi no devolvió voice.voiceId; comprobá la pestaña Voice en el dashboard de Vapi.',
+        'Voz: el GET del assistant en el sistema de voz no devolvió voice.voiceId; comprobá la pestaña Voice en el dashboard del sistema de voz.',
       )
     }
     if (phoneReport.ok && resolvedAssistantId) {
       const match = phoneReport.items.filter((i) => i.matchesSyncedAssistant)
       if (match.length === 0) {
         warnings.push(
-          'Ningún phone number en Vapi tiene assistantId igual al assistant sincronizado. Las llamadas pueden usar otro assistant o squad/workflow.',
+          'Ningún phone number en el sistema de voz tiene assistantId igual al assistant sincronizado. Las llamadas pueden usar otro assistant o squad/workflow.',
         )
       }
       const other = phoneReport.items.filter(
@@ -1332,7 +1332,7 @@ export async function POST(request: NextRequest) {
     }
     if (!phoneReport.ok) {
       warnings.push(
-        `No se pudo listar phone-number en Vapi (HTTP ${phoneReport.httpStatus}). Verificá el número en el dashboard de Vapi.`,
+        `No se pudo listar phone-number en el sistema de voz (HTTP ${phoneReport.httpStatus}). Verificá el número en el dashboard del sistema de voz.`,
       )
     }
     if (
@@ -1344,18 +1344,18 @@ export async function POST(request: NextRequest) {
       postSummary.get_job_status.parametersRequired.length > 0
     ) {
       warnings.push(
-        `Tras el PATCH, Vapi aún devuelve get_job_status.parameters.required = ${JSON.stringify(postSummary.get_job_status.parametersRequired)}.`,
+        `Tras el PATCH, el sistema de voz aún devuelve get_job_status.parameters.required = ${JSON.stringify(postSummary.get_job_status.parametersRequired)}.`,
       )
     }
     if (postPatchGetStatus === 200 && promptAuditAfterGet) {
       if (!promptAuditAfterGet.hasVerificationPhrase) {
         warnings.push(
-          'El GET del assistant en Vapi no devuelve el system prompt con la frase de verificación nueva. Posibles causas: caché en la UI de Vapi, cambios sin publicar (botón Publish), o el GET no refleja el último PATCH.',
+          'El GET del assistant en el sistema de voz no devuelve el system prompt con la frase de verificación nueva. Posibles causas: caché en la UI del sistema de voz, cambios sin publicar (botón Publish), o el GET no refleja el último PATCH.',
         )
       }
       if (promptAuditAfterGet.forbiddenHits.length > 0) {
         warnings.push(
-          `El system prompt que devuelve Vapi (GET) aún contiene: ${promptAuditAfterGet.forbiddenHits.join(', ')}.`,
+          `El system prompt que devuelve el sistema de voz (GET) aún contiene: ${promptAuditAfterGet.forbiddenHits.join(', ')}.`,
         )
       }
     }
@@ -1373,9 +1373,9 @@ export async function POST(request: NextRequest) {
         getJobStatusToolPostUrl: `${appBase}/api/vapi/tools/get-job-status`,
         webhookSecretHeader: 'x-vapi-secret',
         getJobStatusSchemaNote:
-          'En Vapi, get_job_status debe tener parameters.required = [] y puede llevar server.url al endpoint get-job-status (ya publicado en sync).',
+          'En el sistema de voz, get_job_status debe tener parameters.required = [] y puede llevar server.url al endpoint get-job-status (ya publicado en sync).',
         vapiDashboardNotes: [
-          'Si el dashboard muestra un borrador o el botón Publish sigue activo tras el sync: el PATCH por API actualiza el recurso del assistant, pero la UI de Vapi puede exigir “Publicar” para que la vista y las pruebas reflejen exactamente lo guardado.',
+          'Si el dashboard muestra un borrador o el botón Publish sigue activo tras el sync: el PATCH por API actualiza el recurso del assistant, pero la UI del sistema de voz puede exigir “Publicar” para que la vista y las pruebas reflejen exactamente lo guardado.',
           'Si tool-calls devuelve 404: en Vercel filtrá logs por path del POST; comprobá GET https://TU_DOMINIO/api/vapi/tool-calls (debe devolver JSON ok) y que Server URL use el mismo dominio que este deploy.',
         ],
       },

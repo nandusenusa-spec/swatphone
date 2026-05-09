@@ -110,7 +110,7 @@ export default function AdminDashboardPage() {
               <span className="text-green-600">Connected</span>
             </p>
             <p className="flex justify-between">
-              <span className="text-muted-foreground">Vapi Integration:</span>
+              <span className="text-muted-foreground">Integración de Voz:</span>
               <span className="text-yellow-600">Pending Config</span>
             </p>
           </div>

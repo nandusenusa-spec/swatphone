@@ -153,7 +153,7 @@ export default function AnalyticsPage() {
               <p className="text-xs text-muted-foreground">{stats.totalClients} clientes x $1,000/mes</p>
             </div>
             <div className="p-4 border rounded-lg">
-              <p className="text-sm text-muted-foreground">Costo Vapi (estimado)</p>
+              <p className="text-sm text-muted-foreground">Costo ALOHA (estimado)</p>
               <p className="text-3xl font-bold text-destructive">${Math.round(stats.totalMinutes * 0.25)}</p>
               <p className="text-xs text-muted-foreground">{stats.totalMinutes} min x $0.25/min</p>
             </div>

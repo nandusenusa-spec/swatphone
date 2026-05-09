@@ -61,7 +61,7 @@ export default function AdminClientsPage() {
 
             <div className="grid grid-cols-3 gap-4 text-sm">
               <div>
-                <p className="text-muted-foreground">Vapi API Key</p>
+                <p className="text-muted-foreground">ALOHA API Key</p>
                 <p className="font-mono">{client.vapi_api_key ? '✓ Configurada' : '✗ No configurada'}</p>
               </div>
               <div>

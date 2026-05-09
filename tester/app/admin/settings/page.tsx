@@ -31,15 +31,15 @@ export default function AdminSettingsPage() {
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
               <Key className="h-5 w-5" />
-              Configuracion de Vapi
+              Configuración de Voz
             </CardTitle>
             <CardDescription>
-              Configuracion global de Vapi para la plataforma
+              Configuración de voz para la plataforma
             </CardDescription>
           </CardHeader>
           <CardContent className="space-y-4">
             <div className="space-y-2">
-              <Label htmlFor="vapi-key">API Key de Vapi (Global)</Label>
+              <Label htmlFor="vapi-key">API Key de ALOHA (Global)</Label>
               <Input
                 id="vapi-key"
                 type="password"
@@ -58,7 +58,7 @@ export default function AdminSettingsPage() {
                 className="bg-muted"
               />
               <p className="text-xs text-muted-foreground">
-                Esta URL se configura automaticamente en cada asistente de Vapi
+                Esta URL se configura automaticamente en cada asistente de ALOHA
               </p>
             </div>
           </CardContent>

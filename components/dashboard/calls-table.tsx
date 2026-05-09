@@ -283,7 +283,7 @@ export function CallsTable({ calls }: { calls: Call[] }) {
           <div className="space-y-4">
             {selectedCall?.vapi_call_id && (
               <div className="rounded-lg border p-3 text-sm font-mono text-xs break-all">
-                <span className="font-medium font-sans">ID llamada Vapi: </span>
+                <span className="font-medium font-sans">ID llamada: </span>
                 {selectedCall.vapi_call_id}
               </div>
             )}
