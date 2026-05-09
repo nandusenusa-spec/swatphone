@@ -102,7 +102,6 @@ export async function POST(req: Request) {
     if (maybeBlocked) return maybeBlocked
 
     const supabase = createServiceRoleClient()
-    // Misma lógica que verify_admin_password (lower/trim en SQL). Guardá usernames en minúsculas en admin_credentials.
 
     // Verify admin credentials
     const { data: adminRows, error } = await supabase
@@ -125,19 +124,7 @@ export async function POST(req: Request) {
       )
     }
 
-    // Prefer RPC (pgcrypto). Si PostgREST falla al invocarla, bcryptjs valida el mismo hash bcrypt ($2a$/bf).
-    const { data: rpcMatch, error: rpcErr } = await supabase.rpc('verify_admin_password', {
-      input_username: usernameInput,
-      input_password: password,
-    })
-
-    let passwordMatch = false
-    if (!rpcErr) {
-      passwordMatch = rpcMatch === true
-    } else {
-      console.warn('[admin/login] verify_admin_password RPC unavailable; bcrypt fallback:', rpcErr.message)
-      passwordMatch = await bcryptCompare(password, String(admin.password_hash || ''))
-    }
+    const passwordMatch = await bcryptCompare(password, String((admin as { password_hash?: string }).password_hash || ''))
 
     if (!passwordMatch) {
       const maybeBlockedNow = registerFailedAttempt(req, usernameInput)

@@ -178,18 +178,21 @@ REGLAS ESTRICTAS:
 - NUNCA repitas datos que el cliente ya confirmó
 - NUNCA vuelvas a pedir datos que ya tenés
 
-FLUJO OBLIGATORIO:
-1. Saludá (ya hecho en el primer mensaje)
-2. Pedí nombre completo (una sola vez)
+FLUJO OBLIGATORIO (en este orden):
+1. Saludo (ya hecho en el primer mensaje)
+2. Pedí NOMBRE Y APELLIDO — ambas partes son obligatorias. Si solo dan el nombre, pedí el apellido antes de continuar.
 3. Pedí teléfono si no tenés Caller ID (una sola vez)
 4. Pedí email (una sola vez)
-5. Preguntá qué necesita (una sola vez)
-6. Llamá save_lead_info con todos los datos
-7. Confirmá: Perfecto [nombre], registré tu consulta, te contactamos pronto.
-8. Despedite y colgá.
+5. Preguntá por el trabajo a cotizar: tipo de impresión o servicio, tamaño, cantidad y cuándo lo necesita. Una pregunta por turno.
+6. Confirmá los datos en una oración: "Entonces: [nombre completo], [email/teléfono], necesitás [resumen del trabajo]. ¿Correcto?"
+7. Solo después de que el cliente confirme → llamá save_lead_info
+8. Si save_lead_info retorna ok:true → decí "Perfecto [nombre], quedó registrado, te contactamos pronto." y despedite
+9. Si save_lead_info retorna ok:false → preguntá exactamente lo que dice primary_message_for_caller, luego volvé a llamar save_lead_info con los datos completos
 
-NUNCA vuelvas al paso 2 después del paso 6.
-Si save_lead_info retorna ok:true, ejecutá paso 7 y 8 inmediatamente y terminá la llamada.`,
+CRÍTICO para save_lead_info:
+- full_name DEBE tener nombre Y apellido (mínimo 2 palabras). Si solo tenés el primer nombre, NO llames al tool aún.
+- need debe describir el trabajo con suficiente detalle (tipo + descripción breve)
+- Usá notes para detalles: tamaño, cantidad, material, plazo requerido`,
         },
       ],
       tools: [
@@ -203,7 +206,7 @@ Si save_lead_info retorna ok:true, ejecutá paso 7 y 8 inmediatamente y terminá
               properties: {
                 full_name: {
                   type: 'string',
-                  description: 'Nombre y apellido completo del cliente',
+                  description: 'Nombre y apellido completo del cliente (obligatorio: mínimo 2 palabras)',
                 },
                 phone: {
                   type: 'string',
@@ -215,11 +218,15 @@ Si save_lead_info retorna ok:true, ejecutá paso 7 y 8 inmediatamente y terminá
                 },
                 need: {
                   type: 'string',
-                  description: 'Qué necesita o quiere cotizar el cliente',
+                  description: 'Tipo de trabajo a cotizar (ej: "500 tarjetas personales" o "banner vinílico 2x1m")',
                 },
                 notes: {
                   type: 'string',
-                  description: 'Notas adicionales sobre la consulta',
+                  description: 'Detalles del trabajo: tamaño, cantidad, material, plazo de entrega requerido',
+                },
+                date_needed: {
+                  type: 'string',
+                  description: 'Fecha aproximada en que necesita el trabajo (si la mencionó)',
                 },
               },
               required: ['full_name', 'need'],
