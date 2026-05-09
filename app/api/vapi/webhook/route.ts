@@ -151,26 +151,88 @@ async function handleCallEnded(flat: JsonRecord) {
   }
 }
 
+// ─────────────────────────────────────────────────────────────
+// FIX: se agregó orgName, tools de save_lead_info, system prompt
+// correcto para captura de leads, y se corrigió el encoding.
+// ─────────────────────────────────────────────────────────────
 function defaultTransientAssistant(
   firstMessage: string,
   voiceRes: { voiceProvider: string; voiceId: string },
   trCfg: { provider: string; model: string; language: string },
+  orgName = 'SWATWORKS',
 ) {
   return {
     firstMessage,
     model: {
       provider: 'anthropic',
       model: 'claude-haiku-4-5-20251001',
+      maxTokens: 80,
       messages: [
         {
           role: 'system',
-          content:
-            'El estado del pedido ya se comunicó en el primer mensaje. Responde solo preguntas breves de seguimiento. No inventes datos.',
+          content: `Sos la recepcionista de ${orgName}. Bilingüe español/inglés. Detectá el idioma del cliente y respondé siempre en ese idioma.
+
+REGLAS ESTRICTAS:
+- Respuestas MUY cortas, una oración por turno
+- Una pregunta por turno, nunca dos
+- NUNCA repitas datos que el cliente ya confirmó
+- NUNCA vuelvas a pedir datos que ya tenés
+
+FLUJO OBLIGATORIO:
+1. Saludá (ya hecho en el primer mensaje)
+2. Pedí nombre completo (una sola vez)
+3. Pedí teléfono si no tenés Caller ID (una sola vez)
+4. Pedí email (una sola vez)
+5. Preguntá qué necesita (una sola vez)
+6. Llamá save_lead_info con todos los datos
+7. Confirmá: Perfecto [nombre], registré tu consulta, te contactamos pronto.
+8. Despedite y colgá.
+
+NUNCA vuelvas al paso 2 después del paso 6.
+Si save_lead_info retorna ok:true, ejecutá paso 7 y 8 inmediatamente y terminá la llamada.`,
+        },
+      ],
+      tools: [
+        {
+          type: 'function',
+          function: {
+            name: 'save_lead_info',
+            description: 'Guarda los datos del cliente interesado en los servicios de la empresa',
+            parameters: {
+              type: 'object',
+              properties: {
+                full_name: {
+                  type: 'string',
+                  description: 'Nombre y apellido completo del cliente',
+                },
+                phone: {
+                  type: 'string',
+                  description: 'Número de teléfono del cliente',
+                },
+                email: {
+                  type: 'string',
+                  description: 'Email del cliente',
+                },
+                need: {
+                  type: 'string',
+                  description: 'Qué necesita o quiere cotizar el cliente',
+                },
+                notes: {
+                  type: 'string',
+                  description: 'Notas adicionales sobre la consulta',
+                },
+              },
+              required: ['full_name', 'need'],
+            },
+          },
         },
       ],
     },
     voice: { provider: voiceRes.voiceProvider, voiceId: voiceRes.voiceId },
     transcriber: { provider: trCfg.provider, model: trCfg.model, language: trCfg.language },
+    endCallFunctionEnabled: true,
+    endCallMessage: 'Hasta luego, que tenga buen día.',
+    maxDurationSeconds: 180,
   }
 }
 
@@ -196,6 +258,19 @@ async function handleAssistantRequest(request: NextRequest, flat: JsonRecord, ra
   })
   const phoneRaw = phoneRes.phone || getCallerPhoneFromPayload(flat)
 
+  // Resolución del nombre de la org (para usar en el system prompt dinámico)
+  let orgName = 'SWATWORKS'
+  if (orgId) {
+    const { data: orgRow } = await supabase
+      .from('organizations')
+      .select('name')
+      .eq('id', orgId)
+      .maybeSingle()
+    if (typeof orgRow?.name === 'string' && orgRow.name.trim()) {
+      orgName = orgRow.name.trim()
+    }
+  }
+
   if (!phoneRaw?.trim()) {
     console.warn('[vapi:webhook] assistant-request: missing caller phone')
     const trCfg = getTranscriberConfigForVapi()
@@ -209,9 +284,10 @@ async function handleAssistantRequest(request: NextRequest, flat: JsonRecord, ra
           })
     return NextResponse.json({
       assistant: defaultTransientAssistant(
-        'Hola, gracias por llamarnos. No pudimos identificar su número automáticamente.',
+        `Buen día, ${orgName}, ¿en qué le puedo ayudar?`,
         voiceRes,
         trCfg,
+        orgName,
       ),
     })
   }
@@ -236,18 +312,6 @@ async function handleAssistantRequest(request: NextRequest, flat: JsonRecord, ra
 
   const payload = await getClientStatusPayload(supabase, phoneRaw, orgId)
 
-  let orgName = 'SWATWORKS'
-  if (orgId) {
-    const { data: orgRow } = await supabase
-      .from('organizations')
-      .select('name')
-      .eq('id', orgId)
-      .maybeSingle()
-    if (typeof orgRow?.name === 'string' && orgRow.name.trim()) {
-      orgName = orgRow.name.trim()
-    }
-  }
-
   const identity =
     orgId && normalizedPhone
       ? await resolveTrustedCallerFirstName({
@@ -267,7 +331,7 @@ async function handleAssistantRequest(request: NextRequest, flat: JsonRecord, ra
       firstMessage = `${personalized} ${spokenJobLineFromStatusPayload(payload.job)}`
     }
   } else if (!payload.found) {
-    firstMessage = 'Hola, gracias por llamar. ¿Me indica su nombre, por favor?'
+    firstMessage = `Buen día, ${orgName}, ¿en qué le puedo ayudar?`
   } else {
     const greeting = `Hola ${payload.client.name}, ¿en qué podemos ayudarte hoy?`
     if (!payload.job) {
@@ -279,6 +343,7 @@ async function handleAssistantRequest(request: NextRequest, flat: JsonRecord, ra
 
   console.log('[vapi:webhook] assistant-request', {
     organizationId: orgId,
+    orgName,
     personalized: Boolean(identity.firstName),
     personalized_source: identity.source,
     personalized_name: identity.firstName,
@@ -303,8 +368,9 @@ async function handleAssistantRequest(request: NextRequest, flat: JsonRecord, ra
     transcriber_language: trCfg.language,
   })
 
+  // FIX: se pasa orgName para que el system prompt sea dinámico por cliente
   return NextResponse.json({
-    assistant: defaultTransientAssistant(firstMessage, voiceRes, trCfg),
+    assistant: defaultTransientAssistant(firstMessage, voiceRes, trCfg, orgName),
   })
 }
 
@@ -573,7 +639,6 @@ async function handleToolCalls(request: NextRequest, flat: JsonRecord, rawBody: 
         result = JSON.stringify({ ok: false, error: 'unknown_tool', toolName: name })
       }
 
-      // Vapi ToolCallResult requires both toolCallId and name
       return { toolCallId, name: name || 'unknown', result }
     }),
   )
