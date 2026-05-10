@@ -261,13 +261,13 @@ function extractToolsArrayFromAssistantPayload(a: Record<string, unknown>): unkn
   return []
 }
 
-/** IDs returned by Vapi GET responses only; do not send these in PATCH payloads. */
+/** IDs de Tools Library en `model.toolIds` (Vapi permite `model.tools` + `model.toolIds` a la vez). */
 function extractModelToolIdsFromAssistant(rec: Record<string, unknown>): string[] | null {
   const merged = collectToolIdsFromAssistantGetPayload(rec)
   return merged.length ? merged : null
 }
 
-/** Collect IDs from model.toolIds / model.tool_ids and root toolIds in Vapi GET responses. */
+/** Une IDs desde model.toolIds / model.tool_ids y raíz toolIds (respuestas GET de Vapi varían). */
 function collectToolIdsFromAssistantGetPayload(preJson: Record<string, unknown>): string[] {
   const out: string[] = []
   const model =
@@ -1296,8 +1296,8 @@ export async function POST(request: NextRequest) {
       .map((item) => item.name)
 
     /**
-     * Keep Tool Library IDs for diagnostics only. The current Vapi assistant PATCH rejects
-     * both top-level toolIds and model.toolIds, so the write payload uses model.tools only.
+     * Reenviar siempre `model.toolIds` si hay algo que preservar (GET + env).
+     * Si el PATCH omite la clave, Vapi / Publish pueden dejar toolIds en null aunque haya `model.tools`.
      */
     let mergedModelToolIds: string[] = [
       ...toolIdsFromEnv(),
@@ -1376,7 +1376,7 @@ export async function POST(request: NextRequest) {
     const maxTokensNum = Number(config.max_tokens || 110)
     const maxTokens = Number.isFinite(maxTokensNum) ? Math.min(Math.max(maxTokensNum, 80), 140) : 110
 
-    // Current Vapi assistant PATCH rejects toolIds for this builder; publish runtime tools inline.
+    // Vapi: `model.tools` (inline/transient) y `model.toolIds` (Tools Library) pueden ir juntos; no enviar toolIds: null.
     const modelForVapi: Record<string, unknown> = {
       provider: 'anthropic',
       model: 'claude-haiku-4-5-20251001',
@@ -1385,6 +1385,9 @@ export async function POST(request: NextRequest) {
       maxTokens,
       systemPrompt,
       tools: modelTools,
+    }
+    if (mergedModelToolIds.length > 0) {
+      modelForVapi.toolIds = mergedModelToolIds
     }
 
     let voicePayload: Record<string, unknown> = {
@@ -1438,6 +1441,7 @@ export async function POST(request: NextRequest) {
     const assistantConfig = {
       name: config.name,
       model: modelForVapi,
+      toolIds: mergedModelToolIds,
       voice: voicePayload,
       firstMessage,
       transcriber: transcriberPayload,
@@ -1450,13 +1454,6 @@ export async function POST(request: NextRequest) {
       model_tool_ids_in_payload: extractModelToolIdsFromAssistant({
         model: assistantConfig.model,
       } as Record<string, unknown>),
-      tool_payload_shape: {
-        top_level_toolIds_sent: false,
-        model_toolIds_sent: false,
-        model_tools_sent: true,
-        model_tools_count: modelTools.length,
-        model_tool_names: modelToolNamesSent,
-      },
     })
 
     const prePatchGjs = digestToolFromList(assistantConfig.model.tools as unknown[], 'get_job_status')
@@ -1814,18 +1811,11 @@ export async function POST(request: NextRequest) {
       message: assistantId ? 'Assistant updated' : 'Assistant created',
       toolsCreated,
       toolsFound,
+      toolIdsAttached: mergedModelToolIds,
       finalToolNames: modelToolNamesSent,
       assistantServerUrl: `${appBase}/api/voice/events?organization_id=${organizationId}`,
       phoneNumberServerUrl: phoneNumberServerSync.targetServerUrl,
       phoneNumberId: phoneNumberServerSync.phoneNumberId,
-      toolPayloadShape: {
-        topLevelToolIdsSent: false,
-        modelToolIdsSent: false,
-        modelToolsSent: true,
-        modelToolsCount: modelTools.length,
-        modelToolNames: modelToolNamesSent,
-        toolLibraryIdsFoundOrCreatedButNotSent: mergedModelToolIds,
-      },
       vapiPublish: {
         assistantId: resolvedAssistantId,
         organizationId,
@@ -1840,18 +1830,12 @@ export async function POST(request: NextRequest) {
         assistantServerUrl: `${appBase}/api/voice/events?organization_id=${organizationId}`,
         phoneNumberServerUrl: phoneNumberServerSync.targetServerUrl,
         phoneNumberId: phoneNumberServerSync.phoneNumberId,
-        toolPayloadShape: {
-          topLevelToolIdsSent: false,
-          modelToolIdsSent: false,
-          modelToolsSent: true,
-          modelToolsCount: modelTools.length,
-          modelToolNames: modelToolNamesSent,
-          toolLibraryIdsFoundOrCreatedButNotSent: mergedModelToolIds,
-        },
         toolsCreated,
         toolsFound,
+        toolIdsAttached: mergedModelToolIds,
         finalToolNames: modelToolNamesSent,
         toolNamesPublished: modelToolNamesSent,
+        toolIdsPublished: mergedModelToolIds,
         toolLibrarySync: {
           ok: toolLibrarySync.ok,
           listHttpStatus: toolLibrarySync.listHttpStatus,
