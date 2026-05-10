@@ -448,7 +448,9 @@ async function syncVapiToolLibrary(input: {
     const url = existingId
       ? `https://api.vapi.ai/tool/${encodeURIComponent(existingId)}`
       : 'https://api.vapi.ai/tool'
-    const payload = tool && typeof tool === 'object' ? { name, ...(tool as Record<string, unknown>) } : tool
+    const payload = tool && typeof tool === 'object'
+      ? { ...(tool as Record<string, unknown>) }
+      : tool
     try {
       const res = await fetch(url, {
         method,
