@@ -7,6 +7,9 @@ import { TeamTable } from '@/components/dashboard/team-table'
 import { AddTeamMemberDialog } from '@/components/dashboard/add-team-member-dialog'
 import { Users, UserCheck, Phone, Clock } from 'lucide-react'
 
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+
 export default async function TeamPage() {
   const orgId = await requireDashboardOrganizationId()
   const { db, applyOrgFilter } = await getDashboardDataClient(orgId)

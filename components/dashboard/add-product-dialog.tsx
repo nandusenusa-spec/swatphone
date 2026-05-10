@@ -24,61 +24,84 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Plus, Loader2 } from 'lucide-react'
+import { toast } from 'sonner'
+import type { Product } from '@/components/dashboard/products-page-client'
 
-export function AddProductDialog() {
+const EMPTY_FORM = {
+  name: '',
+  description: '',
+  price: '',
+  price_type: 'fixed',
+  price_min: '',
+  price_max: '',
+  currency: 'USD',
+}
+
+export function AddProductDialog({ onAdded }: { onAdded?: (product: Product) => void }) {
   const router = useRouter()
   const supabase = createClient()
   const [open, setOpen] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
-  
-  const [formData, setFormData] = useState({
-    name: '',
-    description: '',
-    price: '',
-    price_type: 'fixed',
-    price_min: '',
-    price_max: '',
-    currency: 'USD',
-  })
+  const [formData, setFormData] = useState(EMPTY_FORM)
 
   const handleSubmit = async (e: React.FormEvent) => {
     e.preventDefault()
     setIsLoading(true)
 
     try {
-      // Get organization_id from profile
-      const { data: { user } } = await supabase.auth.getUser()
-      const { data: profile } = await supabase
+      const {
+        data: { user },
+        error: authErr,
+      } = await supabase.auth.getUser()
+      if (authErr || !user) {
+        throw new Error(authErr?.message || 'Sesion expirada. Volve a iniciar sesion.')
+      }
+
+      const { data: profile, error: profErr } = await supabase
         .from('profiles')
         .select('organization_id')
-        .eq('id', user?.id)
+        .eq('id', user.id)
+        .single()
+      if (profErr || !profile?.organization_id) {
+        throw new Error(profErr?.message || 'No se encontro tu organizacion en el perfil.')
+      }
+
+      const { data: inserted, error } = await supabase
+        .from('products')
+        .insert({
+          organization_id: profile.organization_id,
+          name: formData.name,
+          description: formData.description || null,
+          price: formData.price ? parseFloat(formData.price) : null,
+          price_type: formData.price_type,
+          price_min: formData.price_min ? parseFloat(formData.price_min) : null,
+          price_max: formData.price_max ? parseFloat(formData.price_max) : null,
+          currency: formData.currency,
+          is_active: true,
+        })
+        .select()
         .single()
 
-      await supabase.from('products').insert({
-        organization_id: profile?.organization_id,
-        name: formData.name,
-        description: formData.description || null,
-        price: formData.price ? parseFloat(formData.price) : null,
-        price_type: formData.price_type,
-        price_min: formData.price_min ? parseFloat(formData.price_min) : null,
-        price_max: formData.price_max ? parseFloat(formData.price_max) : null,
-        currency: formData.currency,
-        is_active: true,
-      })
+      if (error) {
+        const code = (error as { code?: string }).code
+        const detail = [error.message, error.details, error.hint, code ? `code=${code}` : '']
+          .filter(Boolean)
+          .join(' • ')
+        throw new Error(detail || 'Error desconocido al guardar')
+      }
 
+      toast.success('Producto agregado', { description: formData.name })
       setOpen(false)
-      setFormData({
-        name: '',
-        description: '',
-        price: '',
-        price_type: 'fixed',
-        price_min: '',
-        price_max: '',
-        currency: 'USD',
-      })
+      setFormData(EMPTY_FORM)
+
+      if (onAdded && inserted) {
+        onAdded(inserted as Product)
+      }
       router.refresh()
     } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Error desconocido'
       console.error('Error adding product:', error)
+      toast.error('No se pudo agregar el producto', { description: msg, duration: 8000 })
     } finally {
       setIsLoading(false)
     }

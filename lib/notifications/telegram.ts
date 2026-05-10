@@ -30,12 +30,13 @@ export function classifyLeadTemperature(p:{
   return hasName&&hasPhone&&hasNeed&&hasExtra?'hot':'lukewarm'
 }
 export async function notifyLeadTelegram(payload: TelegramLeadPayload): Promise<boolean> {
-  if(payload.temperature==='lukewarm'){ console.log('[telegram] tibio → solo CRM'); return false }
   const chatId=process.env.TELEGRAM_CHAT_ID?.trim()
   if(!chatId){ console.warn('[telegram] TELEGRAM_CHAT_ID no configurado'); return false }
+  const isHot = payload.temperature==='hot'
   const org=esc(payload.organizationName||'SWATWORKS')
+  const header = isHot ? '🔥 *LEAD CALIENTE — '+org+'*' : '⚠️ *Lead tibio — '+org+'*'
   const lines=[
-    '🔥 *LEAD CALIENTE — '+org+'*','',
+    header,'',
     '👤 *Nombre:* '+esc(payload.customerName),
     '📞 *Teléfono:* '+esc(payload.phone),
   ]
@@ -44,8 +45,9 @@ export async function notifyLeadTelegram(payload: TelegramLeadPayload): Promise<
   if(payload.category) lines.push('🏷️ *Categoría:* '+esc(payload.category))
   if(payload.dateNeeded) lines.push('📅 *Cuándo:* '+esc(payload.dateNeeded))
   if(payload.priceRequested) lines.push('💰 *Pidió cotización: SÍ*')
-  if(payload.nextAction) lines.push('','➡️ *Acción:* '+esc(payload.nextAction))
-  if(payload.summary) lines.push('','📝 '+esc(payload.summary))
+  if(isHot && payload.nextAction) lines.push('','➡️ *Acción:* '+esc(payload.nextAction))
+  if(isHot && payload.summary) lines.push('','📝 '+esc(payload.summary))
+  if(!isHot) lines.push('','_Información mínima — revisar en CRM_')
   lines.push('','⏰ _'+esc(nowStr())+'_')
   return sendMsg(chatId, lines.join('\n'))
 }

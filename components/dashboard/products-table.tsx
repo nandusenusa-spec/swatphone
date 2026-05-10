@@ -15,19 +15,7 @@ import { Button } from '@/components/ui/button'
 import { Switch } from '@/components/ui/switch'
 import { EditProductDialog } from './edit-product-dialog'
 import { Trash2 } from 'lucide-react'
-import { cn } from '@/lib/utils'
-
-interface Product {
-  id: string
-  name: string
-  description: string | null
-  price: number | null
-  price_type: string
-  price_min: number | null
-  price_max: number | null
-  currency: string
-  is_active: boolean
-}
+import type { Product } from '@/components/dashboard/products-page-client'
 
 const priceTypeLabels: Record<string, string> = {
   fixed: 'Precio Fijo',
@@ -36,7 +24,14 @@ const priceTypeLabels: Record<string, string> = {
   range: 'Rango',
 }
 
-export function ProductsTable({ products }: { products: Product[] }) {
+interface Props {
+  products: Product[]
+  onToggled?: (id: string, isActive: boolean) => void
+  onDeleted?: (id: string) => void
+  onUpdated?: (product: Product) => void
+}
+
+export function ProductsTable({ products, onToggled, onDeleted, onUpdated }: Props) {
   const router = useRouter()
   const supabase = createClient()
 
@@ -45,20 +40,28 @@ export function ProductsTable({ products }: { products: Product[] }) {
       .from('products')
       .update({ is_active: isActive, updated_at: new Date().toISOString() })
       .eq('id', id)
-    router.refresh()
+    if (onToggled) {
+      onToggled(id, isActive)
+    } else {
+      router.refresh()
+    }
   }
 
   const handleDelete = async (id: string) => {
     if (confirm('Estas seguro de eliminar este producto?')) {
       await supabase.from('products').delete().eq('id', id)
-      router.refresh()
+      if (onDeleted) {
+        onDeleted(id)
+      } else {
+        router.refresh()
+      }
     }
   }
 
   const formatPrice = (product: Product) => {
     const currency = product.currency || 'USD'
     const symbol = currency === 'USD' ? '$' : currency
-    
+
     switch (product.price_type) {
       case 'fixed':
         return `${symbol}${product.price?.toFixed(2) || '0.00'}`
@@ -110,9 +113,7 @@ export function ProductsTable({ products }: { products: Product[] }) {
                 {priceTypeLabels[product.price_type] || product.price_type}
               </Badge>
             </TableCell>
-            <TableCell className="font-medium">
-              {formatPrice(product)}
-            </TableCell>
+            <TableCell className="font-medium">{formatPrice(product)}</TableCell>
             <TableCell>
               <Switch
                 checked={product.is_active}
@@ -121,7 +122,7 @@ export function ProductsTable({ products }: { products: Product[] }) {
             </TableCell>
             <TableCell>
               <div className="flex gap-1">
-                <EditProductDialog product={product} />
+                <EditProductDialog product={product} onUpdated={onUpdated} />
                 <Button
                   size="sm"
                   variant="ghost"

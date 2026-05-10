@@ -404,23 +404,28 @@ export async function executeToolHandler(
           leadId: out.lead?.id ?? null,
           error: null,
         })
-        void notifyLeadTelegram({
-          temperature: classifyLeadTemperature({
-            customerName: mergedName, phone,
+        try {
+          const tgOk = await notifyLeadTelegram({
+            temperature: classifyLeadTemperature({
+              customerName: mergedName, phone,
+              email: typeof args.email==='string'?args.email:null,
+              need: mergedNotes||'',
+              priceRequested: commercial.intent==='quote_request',
+              dateNeeded: typeof args.date_needed==='string'?args.date_needed:null,
+            }),
+            customerName: mergedName||'Sin nombre', phone,
             email: typeof args.email==='string'?args.email:null,
             need: mergedNotes||'',
             priceRequested: commercial.intent==='quote_request',
             dateNeeded: typeof args.date_needed==='string'?args.date_needed:null,
-          }),
-          customerName: mergedName||'Sin nombre', phone,
-          email: typeof args.email==='string'?args.email:null,
-          need: mergedNotes||'',
-          priceRequested: commercial.intent==='quote_request',
-          dateNeeded: typeof args.date_needed==='string'?args.date_needed:null,
-          category: commercial.category||null,
-          summary: commercial.summary||null,
-          nextAction: commercial.next_action||null,
-        })
+            category: commercial.category||null,
+            summary: commercial.summary||null,
+            nextAction: commercial.next_action||null,
+          })
+          console.info('[vapi/save-lead] telegram', { sent: tgOk, leadId: out.lead?.id ?? null })
+        } catch (tgErr) {
+          console.error('[vapi/save-lead] telegram_error', tgErr)
+        }
         await tryAutoFollowUpAfterLeadSave({
           organizationId: context.organizationId,
           phone,

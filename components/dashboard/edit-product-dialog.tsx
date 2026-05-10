@@ -24,25 +24,20 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Pencil, Loader2 } from 'lucide-react'
+import type { Product } from '@/components/dashboard/products-page-client'
 
-interface Product {
-  id: string
-  name: string
-  description: string | null
-  price: number | null
-  price_type: string
-  price_min: number | null
-  price_max: number | null
-  currency: string
-  is_active: boolean
-}
-
-export function EditProductDialog({ product }: { product: Product }) {
+export function EditProductDialog({
+  product,
+  onUpdated,
+}: {
+  product: Product
+  onUpdated?: (product: Product) => void
+}) {
   const router = useRouter()
   const supabase = createClient()
   const [open, setOpen] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
-  
+
   const [formData, setFormData] = useState({
     name: product.name,
     description: product.description || '',
@@ -58,7 +53,7 @@ export function EditProductDialog({ product }: { product: Product }) {
     setIsLoading(true)
 
     try {
-      await supabase
+      const { data: updated, error } = await supabase
         .from('products')
         .update({
           name: formData.name,
@@ -71,9 +66,18 @@ export function EditProductDialog({ product }: { product: Product }) {
           updated_at: new Date().toISOString(),
         })
         .eq('id', product.id)
+        .select()
+        .single()
+
+      if (error) throw error
 
       setOpen(false)
-      router.refresh()
+
+      if (onUpdated && updated) {
+        onUpdated(updated as Product)
+      } else {
+        router.refresh()
+      }
     } catch (error) {
       console.error('Error updating product:', error)
     } finally {
@@ -91,9 +95,7 @@ export function EditProductDialog({ product }: { product: Product }) {
       <DialogContent>
         <DialogHeader>
           <DialogTitle>Editar Producto</DialogTitle>
-          <DialogDescription>
-            Actualiza los datos del producto
-          </DialogDescription>
+          <DialogDescription>Actualiza los datos del producto</DialogDescription>
         </DialogHeader>
         <form onSubmit={handleSubmit} className="space-y-4">
           <div className="space-y-2">

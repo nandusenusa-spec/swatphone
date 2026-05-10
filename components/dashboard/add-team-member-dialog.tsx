@@ -16,6 +16,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { Plus, Loader2 } from 'lucide-react'
+import { toast } from 'sonner'
 
 export function AddTeamMemberDialog() {
   const router = useRouter()
@@ -37,26 +38,47 @@ export function AddTeamMemberDialog() {
 
     try {
       // Get organization_id from profile
-      const { data: { user } } = await supabase.auth.getUser()
-      const { data: profile } = await supabase
+      const { data: { user }, error: authErr } = await supabase.auth.getUser()
+      if (authErr || !user) {
+        throw new Error(authErr?.message || 'Sesion expirada. Volve a iniciar sesion.')
+      }
+
+      const { data: profile, error: profErr } = await supabase
         .from('profiles')
         .select('organization_id')
-        .eq('id', user?.id)
+        .eq('id', user.id)
         .single()
+      if (profErr || !profile?.organization_id) {
+        throw new Error(profErr?.message || 'No se encontro tu organizacion en el perfil.')
+      }
 
-      const { error: insErr } = await supabase.from('team_members').insert({
-        organization_id: profile?.organization_id,
-        name: formData.name,
-        role: formData.role || null,
-        phone: formData.phone || null,
-        email: formData.email || null,
-        extension: formData.extension || null,
-        is_available: true,
-      })
-      if (insErr) throw insErr
+      const { data: inserted, error: insErr } = await supabase
+        .from('team_members')
+        .insert({
+          organization_id: profile.organization_id,
+          name: formData.name,
+          role: formData.role || null,
+          phone: formData.phone || null,
+          email: formData.email || null,
+          extension: formData.extension || null,
+          is_available: true,
+        })
+        .select()
+        .single()
+      if (insErr) {
+        const code = (insErr as { code?: string }).code
+        const detail = [insErr.message, insErr.details, insErr.hint, code ? `code=${code}` : '']
+          .filter(Boolean)
+          .join(' • ')
+        throw new Error(detail || 'Error desconocido al guardar')
+      }
+      if (!inserted) {
+        throw new Error('Insert sin error pero sin filas devueltas (posible RLS bloqueando lectura post-insert)')
+      }
 
       await fetch('/api/dashboard/sync-team-transfer', { method: 'POST', credentials: 'include' }).catch(() => {})
 
+      toast.success('Miembro agregado', { description: formData.name })
       setOpen(false)
       setFormData({
         name: '',
@@ -67,7 +89,9 @@ export function AddTeamMemberDialog() {
       })
       router.refresh()
     } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Error desconocido'
       console.error('Error adding team member:', error)
+      toast.error('No se pudo agregar el miembro', { description: msg, duration: 8000 })
     } finally {
       setIsLoading(false)
     }
