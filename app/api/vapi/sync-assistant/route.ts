@@ -23,9 +23,53 @@ import {
 } from '@/lib/vapi/warm-transfer-tool'
 import { createHmac, timingSafeEqual } from 'crypto'
 
+const PRODUCTION_ORGANIZATION_ID = '9bb50e58-9ba6-4d54-8171-13922749f570'
+const PRODUCTION_ASSISTANT_ID = 'e9a5d0a4-44a5-4bf7-90df-35a5d50d181d'
+const PRODUCTION_PHONE_NUMBER_ID = '56e9913c-4032-4356-98f0-3ac1f9713508'
+const PRODUCTION_APP_BASE = 'https://swatvoiceia.vercel.app'
+const REQUIRED_VAPI_TOOL_NAMES = [
+  'save_lead_info',
+  'prepare_warm_transfer',
+  'transfer_to_ramon',
+  'create_follow_up',
+  'get_price_quote',
+  'get_job_status',
+] as const
+const UUID_RE = /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
+
 function normalizeVapiApiKey(rawKey: string | null | undefined): string {
   if (!rawKey) return ''
   return rawKey.replace(/^Bearer\s+/i, '').trim()
+}
+
+function normalizeRequiredUuid(input: string, fallback: string): string {
+  const trimmed = (input || '').trim()
+  return trimmed || fallback
+}
+
+function isValidUuid(input: string): boolean {
+  return UUID_RE.test(input.trim())
+}
+
+function isUnsafePublicBaseUrl(raw: string): boolean {
+  const value = raw.trim().toLowerCase()
+  return (
+    !value ||
+    value.includes('localhost') ||
+    value.includes('127.0.0.1') ||
+    value.includes('ngrok') ||
+    value.includes('ngrok-free') ||
+    value.includes('ngrok.app')
+  )
+}
+
+function resolveAppBaseUrlForSync(organizationId: string): string {
+  const raw = (process.env.NEXT_PUBLIC_APP_URL || '').trim().replace(/\/$/, '')
+  if (organizationId === PRODUCTION_ORGANIZATION_ID) return PRODUCTION_APP_BASE
+  if (process.env.NODE_ENV === 'production' && isUnsafePublicBaseUrl(raw)) {
+    throw new Error('NEXT_PUBLIC_APP_URL must be a production HTTPS URL; ngrok/localhost is not allowed in production.')
+  }
+  return raw || PRODUCTION_APP_BASE
 }
 
 function isProbablyPublicOrInvalidVapiKey(apiKey: string): boolean {
@@ -297,6 +341,166 @@ function toolNamesFromList(tools: unknown[]): string[] {
   return tools.map((item) => toolDisplayNameFromVapiItem(item))
 }
 
+function vapiToolIdFromItem(item: unknown): string | null {
+  if (!item || typeof item !== 'object') return null
+  const id = (item as Record<string, unknown>).id
+  return typeof id === 'string' && id.trim() ? id.trim() : null
+}
+
+type VapiToolLibrarySyncItem = {
+  id: string | null
+  name: string
+  action: 'created' | 'updated' | 'failed'
+  httpStatus: number | null
+  error?: string | null
+}
+
+function toolLibraryNameMatches(item: unknown, desiredName: string): boolean {
+  if (!item || typeof item !== 'object') return false
+  const rec = item as Record<string, unknown>
+  if (typeof rec.name === 'string' && rec.name.trim() === desiredName) return true
+  return toolDisplayNameFromVapiItem(item) === desiredName
+}
+
+function extractVapiList(value: unknown): unknown[] {
+  if (Array.isArray(value)) return value
+  if (!value || typeof value !== 'object') return []
+  const rec = value as Record<string, unknown>
+  if (Array.isArray(rec.data)) return rec.data
+  if (Array.isArray(rec.items)) return rec.items
+  if (Array.isArray(rec.results)) return rec.results
+  return []
+}
+
+function withServerUrlForFunctionTools(tools: unknown[], serverUrl: string): unknown[] {
+  return tools.map((tool) => {
+    if (!tool || typeof tool !== 'object') return tool
+    const rec = tool as Record<string, unknown>
+    const name = toolDisplayNameFromVapiItem(rec)
+    if (!REQUIRED_VAPI_TOOL_NAMES.includes(name as (typeof REQUIRED_VAPI_TOOL_NAMES)[number])) {
+      return tool
+    }
+    if (rec.type === 'function') {
+      return {
+        ...rec,
+        server: {
+          ...(rec.server && typeof rec.server === 'object' && !Array.isArray(rec.server)
+            ? (rec.server as Record<string, unknown>)
+            : {}),
+          url: serverUrl,
+        },
+      }
+    }
+    return tool
+  })
+}
+
+async function syncVapiToolLibrary(input: {
+  vapiApiKey: string
+  tools: unknown[]
+}): Promise<{
+  ok: boolean
+  toolIds: string[]
+  toolNames: string[]
+  items: VapiToolLibrarySyncItem[]
+  listHttpStatus: number | null
+  error?: string | null
+}> {
+  const requiredTools = input.tools.filter((tool) => {
+    const name = toolDisplayNameFromVapiItem(tool)
+    return REQUIRED_VAPI_TOOL_NAMES.includes(name as (typeof REQUIRED_VAPI_TOOL_NAMES)[number])
+  })
+  const existingRes = await fetch('https://api.vapi.ai/tool', {
+    headers: { Authorization: `Bearer ${input.vapiApiKey}` },
+  })
+  const listHttpStatus = existingRes.status
+  if (!existingRes.ok) {
+    const body = await existingRes.text().catch(() => '')
+    return {
+      ok: false,
+      toolIds: [],
+      toolNames: [],
+      items: [],
+      listHttpStatus,
+      error: body ? clipText(body, 500) : `GET /tool failed with ${existingRes.status}`,
+    }
+  }
+
+  const existing = (await existingRes.json().catch(() => [])) as unknown
+  const existingList = extractVapiList(existing)
+  const items: VapiToolLibrarySyncItem[] = []
+  const toolIds: string[] = []
+  const toolNames: string[] = []
+
+  for (const tool of requiredTools) {
+    const name = toolDisplayNameFromVapiItem(tool)
+    const existingTool = existingList.find((item) => toolLibraryNameMatches(item, name))
+    const existingId = vapiToolIdFromItem(existingTool)
+    const method = existingId ? 'PATCH' : 'POST'
+    const url = existingId
+      ? `https://api.vapi.ai/tool/${encodeURIComponent(existingId)}`
+      : 'https://api.vapi.ai/tool'
+    const payload =
+      tool && typeof tool === 'object'
+        ? { name, ...(tool as Record<string, unknown>) }
+        : tool
+
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: {
+          Authorization: `Bearer ${input.vapiApiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      })
+      const raw = await res.text()
+      let parsed: unknown = null
+      try {
+        parsed = raw ? JSON.parse(raw) : null
+      } catch {
+        parsed = { message: raw || null }
+      }
+      const id = vapiToolIdFromItem(parsed) || existingId
+      if (!res.ok || !id) {
+        items.push({
+          id: id || null,
+          name,
+          action: 'failed',
+          httpStatus: res.status,
+          error: raw ? clipText(raw, 500) : 'Missing tool id in Vapi tool response',
+        })
+        continue
+      }
+      toolIds.push(id)
+      toolNames.push(name)
+      items.push({
+        id,
+        name,
+        action: existingId ? 'updated' : 'created',
+        httpStatus: res.status,
+        error: null,
+      })
+    } catch (err) {
+      items.push({
+        id: existingId || null,
+        name,
+        action: 'failed',
+        httpStatus: null,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  return {
+    ok: items.every((item) => item.action !== 'failed'),
+    toolIds: [...new Set(toolIds)],
+    toolNames: [...new Set(toolNames)],
+    items,
+    listHttpStatus,
+  }
+}
+
 function modelToolsItemsPreview(tools: unknown[], max = 24): Array<{ index: number; type: string; name: string }> {
   return tools.slice(0, max).map((item, index) => {
     const rec = item && typeof item === 'object' ? (item as Record<string, unknown>) : {}
@@ -464,14 +668,160 @@ async function fetchVapiPhoneNumbersForSync(vapiApiKey: string, syncedAssistantI
   return { ok: true as const, httpStatus: res.status, items }
 }
 
+async function updateVapiPhoneNumberServerUrls(input: {
+  vapiApiKey: string
+  assistantId: string
+  phoneNumberId?: string | null
+  targetServerUrl: string
+}): Promise<{
+  ok: boolean
+  targetServerUrl: string
+  phoneNumberId: string | null
+  updated: Array<{ id: string | null; number: string | null; oldServerUrl: string | null; httpStatus: number }>
+  skipped: Array<{ id: string | null; number: string | null; serverUrl: string | null; reason: string }>
+  errors: Array<{ id: string | null; number: string | null; oldServerUrl: string | null; httpStatus: number | null; error: string }>
+}> {
+  const listRes = await fetch('https://api.vapi.ai/phone-number?limit=100', {
+    headers: { Authorization: `Bearer ${input.vapiApiKey}` },
+  })
+  if (!listRes.ok) {
+    return {
+      ok: false,
+      targetServerUrl: input.targetServerUrl,
+      phoneNumberId: input.phoneNumberId || null,
+      updated: [],
+      skipped: [],
+      errors: [
+        {
+          id: null,
+          number: null,
+          oldServerUrl: null,
+          httpStatus: listRes.status,
+          error: await listRes.text().catch(() => `GET /phone-number failed ${listRes.status}`),
+        },
+      ],
+    }
+  }
+  const listJson = await listRes.json().catch(() => [])
+  const rows = extractVapiList(listJson)
+  const knownPhoneNumberPresent = input.phoneNumberId
+    ? rows.some((row) => {
+        const rec = row && typeof row === 'object' ? (row as Record<string, unknown>) : {}
+        return rec.id === input.phoneNumberId
+      })
+    : true
+  if (input.phoneNumberId && !knownPhoneNumberPresent) {
+    rows.push({ id: input.phoneNumberId, assistantId: input.assistantId, number: null })
+  }
+  const updated: Array<{ id: string | null; number: string | null; oldServerUrl: string | null; httpStatus: number }> = []
+  const skipped: Array<{ id: string | null; number: string | null; serverUrl: string | null; reason: string }> = []
+  const errors: Array<{ id: string | null; number: string | null; oldServerUrl: string | null; httpStatus: number | null; error: string }> = []
+
+  for (const row of rows) {
+    const rec = row && typeof row === 'object' ? (row as Record<string, unknown>) : {}
+    const id = typeof rec.id === 'string' ? rec.id : null
+    const number = typeof rec.number === 'string' ? rec.number : null
+    const assistantId = typeof rec.assistantId === 'string' ? rec.assistantId : null
+    const server = rec.server && typeof rec.server === 'object' && !Array.isArray(rec.server)
+      ? (rec.server as Record<string, unknown>)
+      : null
+    const oldServerUrl =
+      typeof server?.url === 'string'
+        ? server.url
+        : typeof rec.serverUrl === 'string'
+          ? rec.serverUrl
+          : null
+    const shouldUpdate =
+      Boolean(id) &&
+      (id === input.phoneNumberId ||
+        assistantId === input.assistantId ||
+        oldServerUrl?.includes('ngrok') ||
+        oldServerUrl?.includes(`${PRODUCTION_ORGANIZATION_ID}s`) ||
+        oldServerUrl !== input.targetServerUrl)
+
+    if (!id || !shouldUpdate) {
+      skipped.push({
+        id,
+        number,
+        serverUrl: oldServerUrl,
+        reason: !id ? 'missing_id' : 'already_correct_or_not_applicable',
+      })
+      continue
+    }
+
+    try {
+      const patchRes = await fetch(`https://api.vapi.ai/phone-number/${encodeURIComponent(id)}`, {
+        method: 'PATCH',
+        headers: {
+          Authorization: `Bearer ${input.vapiApiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify({
+          assistantId: input.assistantId,
+          server: {
+            ...(server || {}),
+            url: input.targetServerUrl,
+          },
+        }),
+      })
+      if (!patchRes.ok) {
+        errors.push({
+          id,
+          number,
+          oldServerUrl,
+          httpStatus: patchRes.status,
+          error: await patchRes.text().catch(() => `PATCH /phone-number/${id} failed`),
+        })
+      } else {
+        updated.push({ id, number, oldServerUrl, httpStatus: patchRes.status })
+      }
+    } catch (err) {
+      errors.push({
+        id,
+        number,
+        oldServerUrl,
+        httpStatus: null,
+        error: err instanceof Error ? err.message : String(err),
+      })
+    }
+  }
+
+  return {
+    ok: errors.length === 0,
+    targetServerUrl: input.targetServerUrl,
+    phoneNumberId: input.phoneNumberId || null,
+    updated,
+    skipped,
+    errors,
+  }
+}
+
 // This endpoint syncs the assistant configuration to Vapi
 export async function POST(request: NextRequest) {
   try {
     const reqBody = (await request.json().catch(() => ({}))) as Record<string, unknown>
-    const requestedOrgId =
+    const requestedOrgId = normalizeRequiredUuid(
       (typeof reqBody.organization_id === 'string' ? reqBody.organization_id : '') ||
-      request.nextUrl.searchParams.get('organization_id') ||
-      ''
+        request.nextUrl.searchParams.get('organization_id') ||
+        '',
+      PRODUCTION_ORGANIZATION_ID,
+    )
+    const requestedAssistantId =
+      (typeof reqBody.assistant_id === 'string' ? reqBody.assistant_id : '') ||
+      request.nextUrl.searchParams.get('assistant_id') ||
+      process.env.VAPI_ASSISTANT_ID ||
+      PRODUCTION_ASSISTANT_ID
+
+    if (!isValidUuid(requestedOrgId)) {
+      return NextResponse.json(
+        {
+          error: 'invalid_organization_id',
+          message: 'organization_id must be a valid UUID with no trailing characters.',
+          received: requestedOrgId,
+        },
+        { status: 400 },
+      )
+    }
 
     const supabaseAuthClient = await createClient()
     const serviceRole = createServiceRoleClient()
@@ -535,6 +885,24 @@ export async function POST(request: NextRequest) {
       )
     }
 
+    const assistantIdFromOrganization = assistantId
+    if (requestedAssistantId.trim()) {
+      assistantId = requestedAssistantId.trim()
+    }
+    console.log('[vapi/sync-assistant] assistant_id_resolution', {
+      organization_id: organizationId,
+      organization_assistant_id: assistantIdFromOrganization || null,
+      override_assistant_id: requestedAssistantId.trim() || null,
+      final_assistant_id: assistantId || null,
+      override_source: requestedAssistantId.trim()
+        ? typeof reqBody.assistant_id === 'string'
+          ? 'body.assistant_id'
+          : request.nextUrl.searchParams.get('assistant_id')
+            ? 'query.assistant_id'
+            : 'env.VAPI_ASSISTANT_ID'
+        : 'organization.vapi_assistant_id',
+    })
+
     if (isProbablyPublicOrInvalidVapiKey(vapiApiKey)) {
       return NextResponse.json(
         {
@@ -577,18 +945,15 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    if (!process.env.NEXT_PUBLIC_APP_URL) {
-      return NextResponse.json(
-        { error: 'NEXT_PUBLIC_APP_URL is not configured' },
-        { status: 500 }
-      )
-    }
-
-    const appBase = process.env.NEXT_PUBLIC_APP_URL.replace(/\/$/, '')
+    const appBase = resolveAppBaseUrlForSync(organizationId)
 
     console.log('[vapi/sync-assistant] sync_start', {
       organization_id: organizationId,
       assistant_id: assistantId,
+      app_base: appBase,
+      unsafe_env_app_base_ignored:
+        organizationId === PRODUCTION_ORGANIZATION_ID &&
+        isUnsafePublicBaseUrl(process.env.NEXT_PUBLIC_APP_URL || ''),
     })
 
     // Get FAQs for context
@@ -718,7 +1083,7 @@ export async function POST(request: NextRequest) {
           },
         },
         server: {
-          url: `${appBase}/api/vapi/tools/get-job-status`,
+          url: voiceEventsToolServerUrl,
         },
       },
       {
@@ -890,13 +1255,54 @@ export async function POST(request: NextRequest) {
       },
     ]
 
-    const modelTools = [...persistentTransferTools, ...staticFunctionTools]
+    const modelTools = withServerUrlForFunctionTools(
+      [...persistentTransferTools, ...staticFunctionTools],
+      voiceEventsToolServerUrl,
+    )
+    const modelToolNamesSent = toolNamesFromList(modelTools)
+    const requiredCriticalToolNames = [...REQUIRED_VAPI_TOOL_NAMES]
+    const missingCriticalFromPayload = requiredCriticalToolNames.filter(
+      (name) => !modelToolNamesSent.includes(name),
+    )
+    if (missingCriticalFromPayload.length > 0) {
+      console.error('[vapi/sync-assistant] critical_tools_missing_from_patch_payload', {
+        missing: missingCriticalFromPayload,
+        model_tool_names_sent: modelToolNamesSent,
+      })
+    }
+    const toolLibrarySync = await syncVapiToolLibrary({
+      vapiApiKey,
+      tools: modelTools,
+    })
+    console.log('[vapi/sync-assistant] tool_library_sync', {
+      ok: toolLibrarySync.ok,
+      list_http_status: toolLibrarySync.listHttpStatus,
+      tool_ids_count: toolLibrarySync.toolIds.length,
+      tool_names: toolLibrarySync.toolNames,
+      items: toolLibrarySync.items.map((item) => ({
+        name: item.name,
+        id: item.id,
+        action: item.action,
+        httpStatus: item.httpStatus,
+        error: item.error ? clipText(item.error, 220) : null,
+      })),
+      error: toolLibrarySync.error ? clipText(toolLibrarySync.error, 500) : null,
+    })
+    const toolsCreated = toolLibrarySync.items
+      .filter((item) => item.action === 'created')
+      .map((item) => item.name)
+    const toolsFound = toolLibrarySync.items
+      .filter((item) => item.action === 'updated')
+      .map((item) => item.name)
 
     /**
      * Reenviar siempre `model.toolIds` si hay algo que preservar (GET + env).
      * Si el PATCH omite la clave, Vapi / Publish pueden dejar toolIds en null aunque haya `model.tools`.
      */
-    let mergedModelToolIds: string[] = [...toolIdsFromEnv()]
+    let mergedModelToolIds: string[] = [
+      ...toolIdsFromEnv(),
+      ...toolLibrarySync.toolIds,
+    ]
     let preGetAssistantPayload: Record<string, unknown> | null = null
     if (assistantId) {
       try {
@@ -923,6 +1329,7 @@ export async function POST(request: NextRequest) {
       count: mergedModelToolIds.length,
       tool_ids: mergedModelToolIds.length ? mergedModelToolIds : null,
       from_env: toolIdsFromEnv().length > 0,
+      from_tool_library_sync: toolLibrarySync.toolIds.length,
     })
     if (!mergedModelToolIds.length) {
       console.warn('[vapi/sync-assistant] model_tool_ids_empty_after_merge', {
@@ -1034,6 +1441,7 @@ export async function POST(request: NextRequest) {
     const assistantConfig = {
       name: config.name,
       model: modelForVapi,
+      toolIds: mergedModelToolIds,
       voice: voicePayload,
       firstMessage,
       transcriber: transcriberPayload,
@@ -1169,6 +1577,7 @@ export async function POST(request: NextRequest) {
 
     let postPatchGetStatus = 0
     let postPatchFetched: unknown = null
+    let postPatchToolsAudit: unknown = null
     if (resolvedAssistantId) {
       const getRes = await fetch(`https://api.vapi.ai/assistant/${resolvedAssistantId}`, {
         method: 'GET',
@@ -1202,6 +1611,7 @@ export async function POST(request: NextRequest) {
       const toolsAudit = postPatchAssistantToolsSummary(postPatchFetched, {
         transferToolsInPayload: persistentTransferTools.length > 0,
       })
+      postPatchToolsAudit = toolsAudit
       console.log('[vapi/sync-assistant] postPatchAssistantSummary', toolsAudit)
       const recFetched = postPatchFetched as Record<string, unknown>
       const modelFetched =
@@ -1238,6 +1648,27 @@ export async function POST(request: NextRequest) {
     }
 
     const phoneReport = await fetchVapiPhoneNumbersForSync(vapiApiKey, resolvedAssistantId)
+    const targetPhoneNumberServerUrl = `${PRODUCTION_APP_BASE}/api/vapi/events?organization_id=${PRODUCTION_ORGANIZATION_ID}`
+    const phoneNumberServerSync = await updateVapiPhoneNumberServerUrls({
+      vapiApiKey,
+      assistantId: resolvedAssistantId || PRODUCTION_ASSISTANT_ID,
+      phoneNumberId:
+        organizationId === PRODUCTION_ORGANIZATION_ID ? PRODUCTION_PHONE_NUMBER_ID : null,
+      targetServerUrl: targetPhoneNumberServerUrl,
+    })
+    console.log('[vapi/sync-assistant] phone_number_server_sync', {
+      ok: phoneNumberServerSync.ok,
+      targetServerUrl: phoneNumberServerSync.targetServerUrl,
+      updated: phoneNumberServerSync.updated,
+      skipped_count: phoneNumberServerSync.skipped.length,
+      errors: phoneNumberServerSync.errors.map((e) => ({
+        id: e.id,
+        number: e.number,
+        httpStatus: e.httpStatus,
+        oldServerUrl: e.oldServerUrl,
+        error: clipText(e.error, 300),
+      })),
+    })
     console.log('[vapi/sync-assistant] vapi_phone_numbers', {
       ok: phoneReport.ok,
       httpStatus: phoneReport.httpStatus,
@@ -1274,6 +1705,14 @@ export async function POST(request: NextRequest) {
     }
 
     const warnings: string[] = []
+    if (
+      organizationId === PRODUCTION_ORGANIZATION_ID &&
+      isUnsafePublicBaseUrl(process.env.NEXT_PUBLIC_APP_URL || '')
+    ) {
+      warnings.push(
+        'NEXT_PUBLIC_APP_URL contains ngrok/localhost, but production sync ignored it and used https://swatvoiceia.vercel.app.',
+      )
+    }
     if (basePromptSanitizeRemoved.length > 0) {
       warnings.push(
         `Se eliminaron del system_prompt de BD patrones viejos (${basePromptSanitizeRemoved.join(', ')}). Guardá el prompt en Admin si querés persistir la versión limpia.`,
@@ -1335,6 +1774,11 @@ export async function POST(request: NextRequest) {
         `No se pudo listar phone-number en el sistema de voz (HTTP ${phoneReport.httpStatus}). Verificá el número en el dashboard del sistema de voz.`,
       )
     }
+    if (!phoneNumberServerSync.ok) {
+      warnings.push(
+        'No se pudo actualizar uno o mas server URL de phone numbers. Revisa vapiVerification.phoneNumberServerSync.errors.',
+      )
+    }
     if (
       postSummary &&
       typeof postSummary === 'object' &&
@@ -1363,7 +1807,15 @@ export async function POST(request: NextRequest) {
     return NextResponse.json({
       success: true,
       assistantId: resolvedAssistantId,
+      assistantIdUpdated: resolvedAssistantId,
       message: assistantId ? 'Assistant updated' : 'Assistant created',
+      toolsCreated,
+      toolsFound,
+      toolIdsAttached: mergedModelToolIds,
+      finalToolNames: modelToolNamesSent,
+      assistantServerUrl: `${appBase}/api/voice/events?organization_id=${organizationId}`,
+      phoneNumberServerUrl: phoneNumberServerSync.targetServerUrl,
+      phoneNumberId: phoneNumberServerSync.phoneNumberId,
       vapiPublish: {
         assistantId: resolvedAssistantId,
         organizationId,
@@ -1373,7 +1825,25 @@ export async function POST(request: NextRequest) {
         getJobStatusToolPostUrl: `${appBase}/api/vapi/tools/get-job-status`,
         webhookSecretHeader: 'x-vapi-secret',
         getJobStatusSchemaNote:
-          'En el sistema de voz, get_job_status debe tener parameters.required = [] y puede llevar server.url al endpoint get-job-status (ya publicado en sync).',
+          'En el sistema de voz, get_job_status debe tener parameters.required = [] y server.url debe apuntar a /api/voice/events.',
+        requiredToolServerUrl: voiceEventsToolServerUrl,
+        assistantServerUrl: `${appBase}/api/voice/events?organization_id=${organizationId}`,
+        phoneNumberServerUrl: phoneNumberServerSync.targetServerUrl,
+        phoneNumberId: phoneNumberServerSync.phoneNumberId,
+        toolsCreated,
+        toolsFound,
+        toolIdsAttached: mergedModelToolIds,
+        finalToolNames: modelToolNamesSent,
+        toolNamesPublished: modelToolNamesSent,
+        toolIdsPublished: mergedModelToolIds,
+        toolLibrarySync: {
+          ok: toolLibrarySync.ok,
+          listHttpStatus: toolLibrarySync.listHttpStatus,
+          toolNames: toolLibrarySync.toolNames,
+          toolIds: toolLibrarySync.toolIds,
+          items: toolLibrarySync.items,
+          error: toolLibrarySync.error || null,
+        },
         vapiDashboardNotes: [
           'Si el dashboard muestra un borrador o el botón Publish sigue activo tras el sync: el PATCH por API actualiza el recurso del assistant, pero la UI del sistema de voz puede exigir “Publicar” para que la vista y las pruebas reflejen exactamente lo guardado.',
           'Si tool-calls devuelve 404: en Vercel filtrá logs por path del POST; comprobá GET https://TU_DOMINIO/api/vapi/tool-calls (debe devolver JSON ok) y que Server URL use el mismo dominio que este deploy.',
@@ -1399,6 +1869,18 @@ export async function POST(request: NextRequest) {
         postPatchGetHttpStatus: postPatchGetStatus,
         postPatchAssistantSummary:
           postPatchGetStatus === 200 ? summarizeAssistantFromVapi(postPatchFetched) : null,
+        patchPayloadToolNames: modelToolNamesSent,
+        criticalToolNamesRequired: requiredCriticalToolNames,
+        missingCriticalFromPatchPayload,
+        toolLibrarySync: {
+          ok: toolLibrarySync.ok,
+          listHttpStatus: toolLibrarySync.listHttpStatus,
+          toolNames: toolLibrarySync.toolNames,
+          toolIds: toolLibrarySync.toolIds,
+          items: toolLibrarySync.items,
+          error: toolLibrarySync.error || null,
+        },
+        postPatchToolsAudit,
         voice: {
           patchPayload: {
             voice_provider: voiceResolved.voiceProvider,
@@ -1409,6 +1891,7 @@ export async function POST(request: NextRequest) {
           vapiGet: postPatchGetStatus === 200 ? extractVoiceFromVapiAssistantPayload(postPatchFetched) : null,
         },
         phoneNumbers: phoneReport,
+        phoneNumberServerSync,
         promptAudit: {
           verificationPhraseMarker: JOB_STATUS_SYNC_VERIFICATION_PHRASE,
           basePromptSanitizeRemoved: basePromptSanitizeRemoved,
