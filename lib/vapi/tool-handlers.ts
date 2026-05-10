@@ -34,6 +34,131 @@ function leadFullNameValid(name: string | undefined): boolean {
   return parts.length >= 2
 }
 
+function strArg(args: Record<string, unknown>, key: string): string {
+  const v = args[key]
+  return typeof v === 'string' ? v.trim() : ''
+}
+
+function normalizeTransferLanguage(raw: string): 'en' | 'es' | null {
+  const v = raw.trim().toLowerCase()
+  if (v === 'en' || v.startsWith('english')) return 'en'
+  if (v === 'es' || v.startsWith('spanish') || v.startsWith('espanol') || v.startsWith('español')) return 'es'
+  return null
+}
+
+async function saveAndNotifyTransferRequestLead(input: {
+  organizationId: string
+  phone: string
+  vapiCallId?: string | null
+  args: Record<string, unknown>
+  requestedDepartment: string
+  language: 'en' | 'es' | null
+}) {
+  const phone = normalizePhone(input.phone)
+  const requestedDepartment = input.requestedDepartment.trim()
+  if (!phone || !requestedDepartment) {
+    console.info('[vapi/transfer-request-lead] skipped', {
+      organization_id: input.organizationId,
+      call_id: input.vapiCallId || null,
+      has_phone: Boolean(phone),
+      requested_department: requestedDepartment || null,
+    })
+    return
+  }
+
+  const language = input.language || 'unknown'
+  const requestSummary =
+    requestedDepartment.toLowerCase().includes('graphic') ||
+    requestedDepartment.toLowerCase().includes('logo') ||
+    requestedDepartment.toLowerCase().includes('brand')
+      ? 'Caller requested transfer to graphic design'
+      : `Caller requested transfer to ${requestedDepartment}`
+  const customerName = strArg(input.args, 'customer_name') || undefined
+  const notes = [
+    `request_summary: ${requestSummary}`,
+    `requested_department: ${requestedDepartment}`,
+    `language: ${language}`,
+    'status: transfer_requested',
+    input.vapiCallId ? `call_id: ${input.vapiCallId}` : '',
+  ]
+    .filter(Boolean)
+    .join('\n')
+
+  const commercialSnapshot = {
+    category: 'support',
+    intent: 'transfer_request',
+    priority: 'normal',
+    source: 'vapi_call',
+    callback_required: false,
+    summary: requestSummary,
+    next_action: `Transfer caller to ${requestedDepartment}.`,
+    requested_department: requestedDepartment,
+    request_summary: requestSummary,
+    language,
+    status: 'transfer_requested',
+    call_id: input.vapiCallId || null,
+  }
+
+  let leadSaved = false
+  let leadId: string | null = null
+  try {
+    const out = await runSaveLeadInfo({
+      organizationId: input.organizationId,
+      phone,
+      name: customerName,
+      notes,
+      commercialSnapshot,
+      vapiCallId: input.vapiCallId ?? null,
+    })
+    leadSaved = Boolean(out.ok)
+    leadId = out.ok ? out.lead?.id ?? null : null
+    console.info('[vapi/transfer-request-lead] saved', {
+      organization_id: input.organizationId,
+      call_id: input.vapiCallId || null,
+      requested_department: requestedDepartment,
+      language,
+      saved: leadSaved,
+      lead_id: leadId,
+      error: out.ok ? null : out.error,
+    })
+  } catch (err) {
+    console.error('[vapi/transfer-request-lead] save_error', {
+      organization_id: input.organizationId,
+      call_id: input.vapiCallId || null,
+      requested_department: requestedDepartment,
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+
+  try {
+    const tgOk = await notifyLeadTelegram({
+      temperature: 'lukewarm',
+      customerName: customerName || 'Transfer request',
+      phone,
+      need: requestSummary,
+      priceRequested: false,
+      category: 'transfer_request',
+      summary: requestSummary,
+      nextAction: `Transfer to ${requestedDepartment}`,
+    })
+    console.info('[vapi/transfer-request-lead] telegram', {
+      organization_id: input.organizationId,
+      call_id: input.vapiCallId || null,
+      requested_department: requestedDepartment,
+      lead_saved: leadSaved,
+      lead_id: leadId,
+      sent: tgOk,
+    })
+  } catch (err) {
+    console.error('[vapi/transfer-request-lead] telegram_error', {
+      organization_id: input.organizationId,
+      call_id: input.vapiCallId || null,
+      requested_department: requestedDepartment,
+      error: err instanceof Error ? err.message : String(err),
+    })
+  }
+}
+
 async function tryAutoFollowUpAfterLeadSave(input: {
   organizationId: string
   phone: string
@@ -454,22 +579,43 @@ export async function executeToolHandler(
     case 'prepare_warm_transfer': {
       const rawArgsPhone = typeof args.phone === 'string' ? args.phone : ''
       const ctxPhone = context.phone || ''
+      const transferDepartment = strArg(args, 'transfer_department')
+      const transferPerson = strArg(args, 'transfer_person')
+      const transferExtension = strArg(args, 'transfer_extension')
+      const intent = strArg(args, 'intent')
+      const shortSummary = strArg(args, 'short_summary')
+      const language = normalizeTransferLanguage(strArg(args, 'language'))
+      const requestedDestination =
+        transferDepartment || transferPerson || intent || shortSummary || transferExtension
       const chosenPhoneSource =
         rawArgsPhone.trim() ? 'tool_args.phone' : ctxPhone.trim() ? 'webhook_context.phone' : 'none'
       console.log('[vapi/tool-handlers] prepare_warm_transfer input', {
         organization_id: context.organizationId,
         vapi_call_id: context.vapiCallId || null,
-        transfer_department:
-          typeof args.transfer_department === 'string' ? args.transfer_department : null,
-        transfer_extension:
-          typeof args.transfer_extension === 'string' ? args.transfer_extension : null,
+        transfer_department: transferDepartment || null,
+        transfer_person: transferPerson || null,
+        transfer_extension: transferExtension || null,
+        language: language || null,
         intent_preview:
-          typeof args.intent === 'string' ? args.intent.slice(0, 200) : null,
-        short_summary_set: typeof args.short_summary === 'string',
+          intent ? intent.slice(0, 200) : null,
+        short_summary_set: Boolean(shortSummary),
         context_phone_suffix: ctxPhone.length >= 4 ? ctxPhone.slice(-4) : null,
         args_phone_suffix: rawArgsPhone.length >= 4 ? rawArgsPhone.slice(-4) : null,
         chosen_phone_source: chosenPhoneSource,
       })
+      if (!requestedDestination.trim()) {
+        console.warn('[vapi/tool-handlers] prepare_warm_transfer FAIL missing transfer destination', {
+          failure_code: 'missing_transfer_destination',
+          organization_id: context.organizationId,
+          vapi_call_id: context.vapiCallId || null,
+        })
+        return {
+          ok: false as const,
+          error: 'missing_transfer_destination' as const,
+          primary_message_for_caller:
+            'Missing transfer destination. Provide transfer_department or transfer_person.',
+        }
+      }
       if (!context.vapiCallId) {
         console.warn(
           '[vapi/tool-handlers] prepare_warm_transfer FAIL missing vapi_call_id → ok:false (missing_required_fields)',
@@ -493,19 +639,37 @@ export async function executeToolHandler(
         )
         return missing(['phone'])
       }
-      return runPrepareWarmTransfer({
+      await saveAndNotifyTransferRequestLead({
+        organizationId: context.organizationId,
+        vapiCallId: context.vapiCallId,
+        phone: String(args.phone || context.phone || ''),
+        args,
+        requestedDepartment: transferDepartment || transferPerson || requestedDestination,
+        language,
+      })
+      const prepared = await runPrepareWarmTransfer({
         organizationId: context.organizationId,
         vapiCallId: context.vapiCallId,
         phone: String(args.phone || context.phone || ''),
         customerName: typeof args.customer_name === 'string' ? args.customer_name : null,
         orderNumber: typeof args.order_number === 'string' ? args.order_number : null,
-        intent: typeof args.intent === 'string' ? args.intent : null,
-        shortSummary: typeof args.short_summary === 'string' ? args.short_summary : null,
-        transferExtension:
-          typeof args.transfer_extension === 'string' ? args.transfer_extension : null,
-        transferDepartment:
-          typeof args.transfer_department === 'string' ? args.transfer_department : null,
+        intent: intent || null,
+        shortSummary: shortSummary || null,
+        transferExtension: transferExtension || null,
+        transferDepartment: transferDepartment || null,
+        transferPerson: transferPerson || null,
+        language,
       })
+      console.info('[vapi/tool-handlers] prepare_warm_transfer result', {
+        organization_id: context.organizationId,
+        vapi_call_id: context.vapiCallId || null,
+        ok: Boolean(prepared && typeof prepared === 'object' && 'ok' in prepared && prepared.ok),
+        error:
+          prepared && typeof prepared === 'object' && 'error' in prepared
+            ? prepared.error
+            : null,
+      })
+      return prepared
     }
     case 'transfer_to_ramon': {
       const fromArgs =
@@ -531,6 +695,13 @@ export async function executeToolHandler(
           error: null,
           note: 'native_transfer_no_call_log_row',
         })
+        console.info('[vapi/tool-handlers] transfer_to_ramon result', {
+          organization_id: context.organizationId,
+          vapi_call_id: context.vapiCallId || null,
+          ok: true,
+          native_transfer: true,
+          call_log_id: null,
+        })
         return { ok: true, native_transfer: true }
       }
       const pt = await persistTransfer({
@@ -550,6 +721,12 @@ export async function executeToolHandler(
         prepared: true,
         transferred: true,
         error: null,
+        call_log_id: callLogId,
+      })
+      console.info('[vapi/tool-handlers] transfer_to_ramon result', {
+        organization_id: context.organizationId,
+        vapi_call_id: context.vapiCallId || null,
+        ok: Boolean(pt && typeof pt === 'object' && 'ok' in pt ? pt.ok : pt),
         call_log_id: callLogId,
       })
       return pt

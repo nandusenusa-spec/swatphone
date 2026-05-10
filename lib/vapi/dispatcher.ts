@@ -498,6 +498,8 @@ export async function dispatchVapiEvent(input: {
               short_summary: typeof args.short_summary === 'string' ? '[set]' : undefined,
               transfer_extension: typeof args.transfer_extension === 'string' ? args.transfer_extension : undefined,
               transfer_department: typeof args.transfer_department === 'string' ? args.transfer_department : undefined,
+              transfer_person: typeof args.transfer_person === 'string' ? args.transfer_person : undefined,
+              language: typeof args.language === 'string' ? args.language : undefined,
               phone_in_args: Boolean(args.phone),
               args_phone_suffix: rawArgsPhone.length >= 4 ? rawArgsPhone.slice(-4) : null,
               args_vs_webhook_phone: normalizedFromArgs,

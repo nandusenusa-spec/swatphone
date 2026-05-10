@@ -14,6 +14,7 @@ export type OperatorHandoff = {
   order_number: string | null
   intent: string | null
   short_summary: string | null
+  language: string | null
   first_message: string
   built_at: string
   transfer_extension: string | null
@@ -30,6 +31,7 @@ function parseStoredHandoff(raw: Record<string, unknown> | null): OperatorHandof
     order_number: typeof raw.order_number === 'string' ? raw.order_number : null,
     intent: typeof raw.intent === 'string' ? raw.intent : null,
     short_summary: typeof raw.short_summary === 'string' ? raw.short_summary : null,
+    language: typeof raw.language === 'string' ? raw.language : null,
     first_message: raw.first_message,
     built_at: typeof raw.built_at === 'string' ? raw.built_at : new Date().toISOString(),
     transfer_extension: typeof raw.transfer_extension === 'string' ? raw.transfer_extension : null,
@@ -47,12 +49,13 @@ function buildOperatorFirstMessage(
     | 'order_number'
     | 'intent'
     | 'short_summary'
+    | 'language'
     | 'transfer_label'
     | 'transfer_extension'
   >,
 ): string {
-  const name = h.customer_name?.trim() || 'Cliente'
-  return `El cliente ${name} quiere hablar con usted. ¿Desea tomar la llamada?`
+  const name = h.customer_name?.trim() || 'caller'
+  return `The caller ${name} wants to speak with you. Do you want to take the call?`
 }
 
 function buildTransferAssistantSystemPrompt(
@@ -84,6 +87,8 @@ export async function runPrepareWarmTransfer(input: {
   shortSummary?: string | null
   transferExtension?: string | null
   transferDepartment?: string | null
+  transferPerson?: string | null
+  language?: string | null
 }) {
   const rawPhoneIn = typeof input.phone === 'string' ? input.phone : ''
   const phone = normalizePhone(input.phone)
@@ -123,11 +128,40 @@ export async function runPrepareWarmTransfer(input: {
   }
 
   const runtime = await getOrganizationRuntimeConfig(input.organizationId)
+  const destinationRequested = [
+    input.transferExtension,
+    input.transferDepartment,
+    input.transferPerson,
+    input.intent,
+    input.shortSummary,
+  ].some((v) => typeof v === 'string' && v.trim().length > 0)
+  if (!destinationRequested) {
+    console.warn('[vapi/operator-handoff] prepare_warm_transfer failed: missing_transfer_destination', {
+      organization_id: input.organizationId,
+      call_id: input.vapiCallId || null,
+    })
+    console.info('[vapi/transfer-routing]', {
+      input: null,
+      matchedName: null,
+      matchedRole: null,
+      matchedDepartment: null,
+      transferExtension: null,
+      transferPhone: null,
+      prepared: false,
+      transferred: false,
+      error: 'missing_transfer_destination',
+    })
+    return {
+      error: 'missing_transfer_destination' as const,
+      primary_message_for_caller:
+        'Missing transfer destination. Provide transfer_department or transfer_person.',
+    }
+  }
   /** `department` ya va aparte; el cue solo lleva intent + resumen (evita duplicar "Diseño" y romper matching). */
   const intentCue = buildIntentCue(null, input.intent, input.shortSummary)
   const resolved = resolveTransferTarget(runtime, {
     extension: input.transferExtension ?? null,
-    department: input.transferDepartment ?? null,
+    department: input.transferDepartment ?? input.transferPerson ?? null,
     intentCue,
   })
 
@@ -135,7 +169,8 @@ export async function runPrepareWarmTransfer(input: {
     organization_id: input.organizationId,
     call_id: input.vapiCallId || null,
     transfer_extension: input.transferExtension ?? null,
-    transfer_department: input.transferDepartment ?? null,
+    transfer_department: input.transferDepartment ?? input.transferPerson ?? null,
+    language: input.language ?? null,
     intent_cue_preview: intentCue ? intentCue.slice(0, 120) : null,
     raw_destinations_count: (runtime.transferPolicy.transferDestinations || []).length,
     resolved: resolved
@@ -229,6 +264,7 @@ export async function runPrepareWarmTransfer(input: {
     order_number: orderNumber,
     intent,
     short_summary: shortSummary,
+    language: input.language?.trim() || null,
     transfer_label: resolved.label,
     transfer_extension: resolved.extension,
   }
@@ -281,6 +317,7 @@ export async function runPrepareWarmTransfer(input: {
       order_number: handoff.order_number,
       intent: handoff.intent,
       short_summary: handoff.short_summary,
+      language: handoff.language,
       transfer_label: handoff.transfer_label,
       transfer_extension: handoff.transfer_extension,
       operator_first_message_preview: handoff.first_message,
@@ -309,7 +346,7 @@ export async function buildDynamicWarmTransferDestination(input: {
     await getCallLogOperatorHandoffJson(input.organizationId, input.vapiCallId),
   )
   if (!handoff) {
-    const phone = normalizePhone(input.callerPhone)
+    const phone = normalizePhone(input.callerPhone || '')
     if (!phone) {
       console.warn('[vapi/operator-handoff] transfer-destination-request no handoff and invalid caller phone', {
         organization_id: input.organizationId,
@@ -323,6 +360,7 @@ export async function buildDynamicWarmTransferDestination(input: {
       order_number: null,
       intent: 'transferencia a operador',
       short_summary: 'El cliente pidió hablar con una persona; no hay handoff previo en sistema.',
+      language: null as string | null,
       transfer_label: null as string | null,
       transfer_extension: null as string | null,
     }
@@ -339,6 +377,7 @@ export async function buildDynamicWarmTransferDestination(input: {
       handoff: handoff as unknown as Record<string, unknown>,
     })
   }
+  if (!handoff) return null
 
   let e164 =
     handoff.destination_phone_e164 ||
@@ -438,12 +477,17 @@ export async function buildDynamicWarmTransferDestination(input: {
     },
   }
 
+  const callerLanguage = (handoff.language || '').trim().toLowerCase()
+  const callerTransferMessage =
+    callerLanguage === 'es'
+      ? 'Un momento, te transfiero ahora.'
+      : "One moment, I'll transfer you now."
+
   return {
     destination,
     message: {
       type: 'request-start',
-      message:
-        'Te comunico con el operador. Por favor esperá en línea; no cortes. En unos momentos intentamos la conexión.',
+      message: callerTransferMessage,
     },
   }
 }

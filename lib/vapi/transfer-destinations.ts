@@ -386,6 +386,7 @@ export function inferTransferExtensionFromKeywords(blob: string): string | null 
   if (/fernando|dise[nñ]ador\s+gr[aá]fico/.test(n)) return '105'
   /** "diseño gráfico" / graphic design → Fernando Sardo (105) antes que "diseño" genérico (90). */
   if (/dise[nñ]o\s+gr[aá]fico/.test(n) || /\bgraphic\s+design\b/.test(n)) return '105'
+  if (/\blogo(s)?\b/.test(n) || /\bbranding\b/.test(n) || /\bbrand\s+design\b/.test(n)) return '105'
   if (/\bcnc\b/.test(n) || /\bleandro\b/.test(n)) return '107'
   if (/\brafael\b/.test(n)) return '106'
   if (/producci[oó]n/.test(n)) return '106'

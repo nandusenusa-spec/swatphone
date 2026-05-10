@@ -1,8 +1,8 @@
 import type { VapiRuntimeConfig } from '@/lib/vapi/runtime-config'
 
 /**
- * Herramienta servidor: persiste operator_handoff (mensaje y datos) antes del transferCall.
- * El destino y el transfer assistant se arman en transfer-destination-request (sin hardcode en Vapi).
+ * Server tool: persists operator handoff context before transferCall.
+ * The destination and transfer assistant are built in transfer-destination-request.
  */
 export function buildPrepareWarmTransferServerTool(organizationId: string): Record<string, unknown> | null {
   const base = (process.env.NEXT_PUBLIC_APP_URL || '').trim()
@@ -15,23 +15,31 @@ export function buildPrepareWarmTransferServerTool(organizationId: string): Reco
     function: {
       name: 'prepare_warm_transfer',
       description:
-        'OBLIGATORIO antes de transfer_to_ramon: registra contexto para el operador y el destino de transferencia. Pasá transfer_extension (interno, ej. 90 para Diseño, 91 Administración, 100 Ramón, 106 Producción/Rafael, 107 CNC/Leandro, 105 Fernando/diseño gráfico) y/o transfer_department con el nombre exacto del área (ej. "Diseño"). Si el cliente pidió "Diseño" o departamento de diseño (no diseñador gráfico personal), usá interno 90 además de transfer_department "Diseño". Después de respuesta ok, llamá transfer_to_ramon sin demora.',
+        'Required before transfer_to_ramon: stores operator context and the transfer destination. When the caller asks for a department/person, always pass transfer_department or transfer_person. For English "graphic design", "design", "logo", or "branding", pass transfer_department="graphic design" or "design" and language="en"; include transfer_extension only if it is present in the active routing data. After ok, call transfer_to_ramon immediately.',
       parameters: {
         type: 'object',
         properties: {
-          customer_name: { type: 'string', description: 'Nombre del cliente si se conoce' },
-          order_number: { type: 'string', description: 'Número de orden o trabajo si existe' },
-          intent: { type: 'string', description: 'Motivo principal en una frase' },
-          short_summary: { type: 'string', description: 'Resumen breve para quien atiende' },
+          customer_name: { type: 'string', description: 'Customer name if known.' },
+          order_number: { type: 'string', description: 'Order or work order number if known.' },
+          intent: { type: 'string', description: 'Main reason in one short phrase.' },
+          short_summary: { type: 'string', description: 'Brief summary for the person receiving the call.' },
           transfer_extension: {
             type: 'string',
             description:
-              'Interno marcado al cliente (ej. 90, 91). Usar si el cliente lo dice o si ya está claro el destino.',
+              'Internal extension only when present in active routing data, e.g. 90 or 105 for design.',
           },
           transfer_department: {
             type: 'string',
             description:
-              'Nombre del área o persona destino (ej. Diseño, Administración, Ramón), como figura en la lista de transferencias de la empresa.',
+              'Destination department/person as the caller said it, e.g. "graphic design", "design", "Diseno", "Administracion", "Ramon". Required when caller requested a destination.',
+          },
+          transfer_person: {
+            type: 'string',
+            description: 'Destination person if the caller requested a person by name.',
+          },
+          language: {
+            type: 'string',
+            description: 'Caller language: en or es.',
           },
         },
       },
@@ -40,13 +48,13 @@ export function buildPrepareWarmTransferServerTool(organizationId: string): Reco
     messages: [
       {
         type: 'request-start',
-        content: 'Preparo la transferencia con el operador. Por favor esperá en línea.',
+        content: "One moment, I'll transfer you now.",
       },
     ],
   }
 }
 
-/** Tool nativo Vapi: transferencia en caliente; destino y briefing los responde transfer-destination-request. */
+/** Native Vapi tool: warm transfer; destination is supplied by transfer-destination-request. */
 export function buildWarmTransferCallTool(
   runtime: VapiRuntimeConfig,
   options?: { holdAudioUrl?: string },
@@ -70,14 +78,13 @@ export function buildWarmTransferCallTool(
     type: 'transferCall',
     function: {
       name: 'transfer_to_ramon',
-      description: `Transferir en vivo a ${owner}. Antes DEBÉS llamar prepare_warm_transfer con el contexto del cliente. El cliente queda en espera mientras el asistente de transferencia habla con ${owner}; no cuelgues.`,
+      description: `Live transfer to ${owner}. You must call prepare_warm_transfer first with the caller context and destination. Keep the caller on the line while the warm transfer assistant speaks with ${owner}.`,
     },
     destinations: [],
     messages: [
       {
         type: 'request-start',
-        content:
-          'Te paso con el operador. Quedate en línea un momento, vas a escuchar tono de espera; no cortes.',
+        content: "One moment, I'll transfer you now. Please stay on the line.",
       },
       ...(holdUrl
         ? ([{ type: 'request-complete', content: holdUrl }] as Record<string, unknown>[])
@@ -85,7 +92,7 @@ export function buildWarmTransferCallTool(
       {
         type: 'request-failed',
         content:
-          'No pudimos completar la transferencia en este momento. Puedo dejar anotado tu número para que te llamen. ¿Te parece bien?',
+          "I couldn't complete the transfer right now. I can leave your number so the team can call you back.",
       },
     ],
   }
