@@ -288,6 +288,50 @@ type ToolContext = {
   vapiCallId: string
   /** Id de tool call de Vapi (logging). */
   toolCallId?: string | null
+  transcript?: string | null
+  latestUserText?: string | null
+  callSummary?: string | null
+}
+
+function stripAccentsForMatch(s: string): string {
+  return s.normalize('NFD').replace(/\p{M}/gu, '')
+}
+
+function inferTransferDestinationFromText(text: string): {
+  department: string
+  extension: string | null
+  language: 'en' | 'es' | null
+  reason: string
+} | null {
+  const normalized = stripAccentsForMatch(text || '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!normalized) return null
+
+  const designHit =
+    /\bdiseno\b/.test(normalized) ||
+    /\bdiseno grafico\b/.test(normalized) ||
+    /\bdisenador grafico\b/.test(normalized) ||
+    /\bgraphic design\b/.test(normalized) ||
+    /\bdesign\b/.test(normalized) ||
+    /\blogo(s)?\b/.test(normalized) ||
+    /\bbranding\b/.test(normalized)
+
+  if (!designHit) return null
+
+  const language: 'en' | 'es' =
+    /\bgraphic design\b|\bdesign\b|\blogo(s)?\b|\bbranding\b/.test(normalized) &&
+    !/\bdiseno\b|\bdisenador\b/.test(normalized)
+      ? 'en'
+      : 'es'
+
+  return {
+    department: language === 'en' ? 'graphic design' : 'diseño gráfico',
+    extension: '90',
+    language,
+    reason: 'design_keyword_context',
+  }
 }
 
 export async function executeToolHandler(
@@ -579,12 +623,28 @@ export async function executeToolHandler(
     case 'prepare_warm_transfer': {
       const rawArgsPhone = typeof args.phone === 'string' ? args.phone : ''
       const ctxPhone = context.phone || ''
-      const transferDepartment = strArg(args, 'transfer_department')
+      let transferDepartment = strArg(args, 'transfer_department')
       const transferPerson = strArg(args, 'transfer_person')
-      const transferExtension = strArg(args, 'transfer_extension')
+      let transferExtension = strArg(args, 'transfer_extension')
       const intent = strArg(args, 'intent')
       const shortSummary = strArg(args, 'short_summary')
-      const language = normalizeTransferLanguage(strArg(args, 'language'))
+      let language = normalizeTransferLanguage(strArg(args, 'language'))
+      const contextText = [
+        context.latestUserText || '',
+        context.transcript || '',
+        context.callSummary || '',
+        intent,
+        shortSummary,
+      ].filter(Boolean).join('\n')
+      const inferredDestination =
+        !transferDepartment && !transferPerson && !transferExtension
+          ? inferTransferDestinationFromText(contextText)
+          : null
+      if (inferredDestination) {
+        transferDepartment = inferredDestination.department
+        transferExtension = inferredDestination.extension || ''
+        language = language || inferredDestination.language
+      }
       const requestedDestination =
         transferDepartment || transferPerson || intent || shortSummary || transferExtension
       const chosenPhoneSource =
@@ -599,6 +659,15 @@ export async function executeToolHandler(
         intent_preview:
           intent ? intent.slice(0, 200) : null,
         short_summary_set: Boolean(shortSummary),
+        inferred_destination: inferredDestination
+          ? {
+              department: inferredDestination.department,
+              extension: inferredDestination.extension,
+              language: inferredDestination.language,
+              reason: inferredDestination.reason,
+            }
+          : null,
+        context_text_preview: contextText ? contextText.slice(0, 220) : null,
         context_phone_suffix: ctxPhone.length >= 4 ? ctxPhone.slice(-4) : null,
         args_phone_suffix: rawArgsPhone.length >= 4 ? rawArgsPhone.slice(-4) : null,
         chosen_phone_source: chosenPhoneSource,
@@ -608,12 +677,15 @@ export async function executeToolHandler(
           failure_code: 'missing_transfer_destination',
           organization_id: context.organizationId,
           vapi_call_id: context.vapiCallId || null,
+          loop_prevention_result: 'returned_transfer_destination_needed_instead_of_missing_transfer_destination',
         })
         return {
           ok: false as const,
-          error: 'missing_transfer_destination' as const,
+          error: 'transfer_destination_needed' as const,
           primary_message_for_caller:
-            'Missing transfer destination. Provide transfer_department or transfer_person.',
+            language === 'en'
+              ? 'Which department or person should I transfer you to?'
+              : '¿Con qué departamento o persona querés que te transfiera?',
         }
       }
       if (!context.vapiCallId) {
@@ -646,6 +718,14 @@ export async function executeToolHandler(
         args,
         requestedDepartment: transferDepartment || transferPerson || requestedDestination,
         language,
+      })
+      console.info('[vapi/tool-handlers] prepare_warm_transfer minimal_transfer_lead_requested', {
+        organization_id: context.organizationId,
+        vapi_call_id: context.vapiCallId || null,
+        requested_department: transferDepartment || transferPerson || requestedDestination,
+        language: language || null,
+        phone_suffix: String(args.phone || context.phone || '').slice(-4) || null,
+        inferred: Boolean(inferredDestination),
       })
       const prepared = await runPrepareWarmTransfer({
         organizationId: context.organizationId,

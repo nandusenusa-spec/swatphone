@@ -90,6 +90,29 @@ function parseToolArgs(toolCall: JsonRecord): JsonRecord {
   return raw && typeof raw === 'object' ? (raw as JsonRecord) : {}
 }
 
+function latestUserTextFromMessages(messages: unknown[] | null | undefined): string {
+  if (!Array.isArray(messages)) return ''
+  for (let i = messages.length - 1; i >= 0; i -= 1) {
+    const rec = asRecord(messages[i])
+    const role = str(rec, 'role').toLowerCase()
+    const type = str(rec, 'type').toLowerCase()
+    const text =
+      str(rec, 'content') ||
+      str(rec, 'message') ||
+      str(rec, 'text') ||
+      str(rec, 'transcript')
+    const isUser =
+      role === 'user' ||
+      role === 'customer' ||
+      role === 'caller' ||
+      type === 'user' ||
+      type === 'customer' ||
+      type === 'caller'
+    if (isUser && text.trim()) return text.trim()
+  }
+  return ''
+}
+
 function getPhone(payload: JsonRecord): string {
   const call = asRecord(payload.call)
   return (
@@ -170,6 +193,7 @@ export async function dispatchVapiEvent(input: {
   if (!transcriptFinal && messagesFromPayload?.length) {
     transcriptFinal = (buildTranscriptFromMessages(messagesFromPayload) || '').trim()
   }
+  const latestUserText = latestUserTextFromMessages(messagesFromPayload)
 
   let resolvedPhone = phone
   let phoneFromCallLogs = false
@@ -475,6 +499,9 @@ export async function dispatchVapiEvent(input: {
             phone: phoneForToolContext,
             vapiCallId,
             toolCallId: toolCallId || null,
+            transcript: transcriptFinal || null,
+            latestUserText: latestUserText || null,
+            callSummary: summary || null,
           })
           const failed =
             out &&

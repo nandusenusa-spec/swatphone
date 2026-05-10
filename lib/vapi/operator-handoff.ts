@@ -291,6 +291,7 @@ export async function runPrepareWarmTransfer(input: {
     organization_id: input.organizationId,
     call_id: input.vapiCallId || null,
     transfer_label: handoff.transfer_label,
+    transfer_extension: handoff.transfer_extension,
     destination_suffix: resolved.phoneE164.length >= 4 ? resolved.phoneE164.slice(-4) : '****',
   })
 

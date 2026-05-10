@@ -23,6 +23,19 @@ import {
 } from '@/lib/vapi/warm-transfer-tool'
 import { createHmac, timingSafeEqual } from 'crypto'
 
+const PRODUCTION_ORGANIZATION_ID = '9bb50e58-9ba6-4d54-8171-13922749f570'
+const PRODUCTION_ASSISTANT_ID = 'e9a5d0a4-44a5-4bf7-90df-35a5d50d181d'
+const PRODUCTION_PHONE_NUMBER_ID = '56e9913c-4032-4356-98f0-3ac1f9713508'
+const PRODUCTION_APP_BASE = 'https://swatvoiceia.vercel.app'
+const REQUIRED_VAPI_TOOL_NAMES = [
+  'save_lead_info',
+  'prepare_warm_transfer',
+  'transfer_to_ramon',
+  'create_follow_up',
+  'get_price_quote',
+  'get_job_status',
+] as const
+
 function normalizeVapiApiKey(rawKey: string | null | undefined): string {
   if (!rawKey) return ''
   return rawKey.replace(/^Bearer\s+/i, '').trim()
@@ -151,6 +164,47 @@ function conciseFirstMessage(raw: unknown): string {
 function clipText(text: string, max: number): string {
   if (text.length <= max) return text
   return `${text.slice(0, max)}…`
+}
+
+type SyncFailureStep =
+  | 'vapi_get_assistant'
+  | 'vapi_create_tool'
+  | 'vapi_patch_assistant'
+  | 'vapi_patch_phone_number'
+  | 'supabase_lookup'
+
+function safeExternalErrorBody(input: unknown): unknown {
+  if (input == null) return null
+  const raw = typeof input === 'string' ? input : JSON.stringify(input)
+  return clipText(
+    raw
+      .replace(/Bearer\s+[A-Za-z0-9._~+/=-]+/gi, 'Bearer [redacted]')
+      .replace(/sk-[A-Za-z0-9._-]+/gi, 'sk-[redacted]')
+      .replace(/"apiKey"\s*:\s*"[^"]+"/gi, '"apiKey":"[redacted]"')
+      .replace(/"authorization"\s*:\s*"[^"]+"/gi, '"authorization":"[redacted]"'),
+    1200,
+  )
+}
+
+function stepFailureResponse(input: {
+  step: SyncFailureStep
+  status?: number | null
+  message: string
+  vapiError?: unknown
+}) {
+  const status = input.status ?? null
+  const responseStatus =
+    typeof status === 'number' && status >= 400 && status < 600 ? status : 500
+  return NextResponse.json(
+    {
+      ok: false,
+      step: input.step,
+      status,
+      message: input.message,
+      vapiError: safeExternalErrorBody(input.vapiError ?? null),
+    },
+    { status: responseStatus },
+  )
 }
 
 function logLongString(tag: string, text: string, chunkSize = 7000) {
@@ -295,6 +349,146 @@ function toolDisplayNameFromVapiItem(item: unknown): string {
 
 function toolNamesFromList(tools: unknown[]): string[] {
   return tools.map((item) => toolDisplayNameFromVapiItem(item))
+}
+
+function extractVapiList(raw: unknown): unknown[] {
+  if (Array.isArray(raw)) return raw
+  if (raw && typeof raw === 'object') {
+    const rec = raw as Record<string, unknown>
+    if (Array.isArray(rec.data)) return rec.data
+    if (Array.isArray(rec.items)) return rec.items
+    if (Array.isArray(rec.results)) return rec.results
+  }
+  return []
+}
+
+function vapiToolIdFromItem(item: unknown): string | null {
+  const rec = item && typeof item === 'object' ? (item as Record<string, unknown>) : null
+  return typeof rec?.id === 'string' && rec.id.trim() ? rec.id.trim() : null
+}
+
+function toolLibraryNameMatches(item: unknown, name: string): boolean {
+  const rec = item && typeof item === 'object' ? (item as Record<string, unknown>) : null
+  if (!rec) return false
+  if (typeof rec.name === 'string' && rec.name.trim() === name) return true
+  const fn = rec.function
+  return Boolean(
+    fn &&
+      typeof fn === 'object' &&
+      !Array.isArray(fn) &&
+      (fn as Record<string, unknown>).name === name,
+  )
+}
+
+function withServerUrlForFunctionTools(tools: unknown[], serverUrl: string): unknown[] {
+  return tools.map((tool) => {
+    if (!tool || typeof tool !== 'object' || Array.isArray(tool)) return tool
+    const rec = tool as Record<string, unknown>
+    const name = toolDisplayNameFromVapiItem(tool)
+    if (!REQUIRED_VAPI_TOOL_NAMES.includes(name as (typeof REQUIRED_VAPI_TOOL_NAMES)[number])) {
+      return tool
+    }
+    return {
+      ...rec,
+      server: {
+        ...(rec.server && typeof rec.server === 'object' && !Array.isArray(rec.server)
+          ? (rec.server as Record<string, unknown>)
+          : {}),
+        url: serverUrl,
+      },
+    }
+  })
+}
+
+async function syncVapiToolLibrary(input: {
+  vapiApiKey: string
+  tools: unknown[]
+}): Promise<{
+  ok: boolean
+  toolIds: string[]
+  toolNames: string[]
+  toolsCreated: string[]
+  toolsFound: string[]
+  listHttpStatus: number | null
+  items: Array<{ id: string | null; name: string; action: 'created' | 'updated' | 'failed'; httpStatus: number | null; error: string | null }>
+  error?: string | null
+}> {
+  const requiredTools = input.tools.filter((tool) =>
+    REQUIRED_VAPI_TOOL_NAMES.includes(toolDisplayNameFromVapiItem(tool) as (typeof REQUIRED_VAPI_TOOL_NAMES)[number]),
+  )
+  const listRes = await fetch('https://api.vapi.ai/tool', {
+    headers: { Authorization: `Bearer ${input.vapiApiKey}` },
+  })
+  const listHttpStatus = listRes.status
+  if (!listRes.ok) {
+    const body = await listRes.text().catch(() => '')
+    return {
+      ok: false,
+      toolIds: [],
+      toolNames: [],
+      toolsCreated: [],
+      toolsFound: [],
+      listHttpStatus,
+      items: [],
+      error: body || `GET /tool failed with ${listRes.status}`,
+    }
+  }
+  const existing = extractVapiList(await listRes.json().catch(() => []))
+  const items: Array<{ id: string | null; name: string; action: 'created' | 'updated' | 'failed'; httpStatus: number | null; error: string | null }> = []
+  const toolsCreated: string[] = []
+  const toolsFound: string[] = []
+  const toolIds: string[] = []
+  const toolNames: string[] = []
+
+  for (const tool of requiredTools) {
+    const name = toolDisplayNameFromVapiItem(tool)
+    const existingTool = existing.find((item) => toolLibraryNameMatches(item, name))
+    const existingId = vapiToolIdFromItem(existingTool)
+    const method = existingId ? 'PATCH' : 'POST'
+    const url = existingId
+      ? `https://api.vapi.ai/tool/${encodeURIComponent(existingId)}`
+      : 'https://api.vapi.ai/tool'
+    const payload = tool && typeof tool === 'object' ? { name, ...(tool as Record<string, unknown>) } : tool
+    try {
+      const res = await fetch(url, {
+        method,
+        headers: {
+          Authorization: `Bearer ${input.vapiApiKey}`,
+          'Content-Type': 'application/json',
+        },
+        body: JSON.stringify(payload),
+      })
+      const raw = await res.text()
+      let parsed: unknown = null
+      try {
+        parsed = raw ? JSON.parse(raw) : null
+      } catch {
+        parsed = { message: raw || null }
+      }
+      const id = vapiToolIdFromItem(parsed) || existingId
+      if (!res.ok || !id) {
+        items.push({ id: id || null, name, action: 'failed', httpStatus: res.status, error: raw || 'Missing tool id in Vapi response' })
+        continue
+      }
+      toolIds.push(id)
+      toolNames.push(name)
+      if (existingId) toolsFound.push(name)
+      else toolsCreated.push(name)
+      items.push({ id, name, action: existingId ? 'updated' : 'created', httpStatus: res.status, error: null })
+    } catch (err) {
+      items.push({ id: existingId || null, name, action: 'failed', httpStatus: null, error: err instanceof Error ? err.message : String(err) })
+    }
+  }
+
+  return {
+    ok: items.every((item) => item.action !== 'failed'),
+    toolIds: [...new Set(toolIds)],
+    toolNames: [...new Set(toolNames)],
+    toolsCreated,
+    toolsFound,
+    listHttpStatus,
+    items,
+  }
 }
 
 function modelToolsItemsPreview(tools: unknown[], max = 24): Array<{ index: number; type: string; name: string }> {
@@ -464,6 +658,39 @@ async function fetchVapiPhoneNumbersForSync(vapiApiKey: string, syncedAssistantI
   return { ok: true as const, httpStatus: res.status, items }
 }
 
+async function updateVapiPhoneNumberServerUrl(input: {
+  vapiApiKey: string
+  assistantId: string
+  phoneNumberId: string
+  targetServerUrl: string
+}) {
+  const res = await fetch(`https://api.vapi.ai/phone-number/${encodeURIComponent(input.phoneNumberId)}`, {
+    method: 'PATCH',
+    headers: {
+      Authorization: `Bearer ${input.vapiApiKey}`,
+      'Content-Type': 'application/json',
+    },
+    body: JSON.stringify({
+      assistantId: input.assistantId,
+      server: { url: input.targetServerUrl },
+    }),
+  })
+  const raw = await res.text()
+  let parsed: unknown = null
+  try {
+    parsed = raw ? JSON.parse(raw) : null
+  } catch {
+    parsed = { message: raw || null }
+  }
+  return {
+    ok: res.ok,
+    status: res.status,
+    body: parsed,
+    targetServerUrl: input.targetServerUrl,
+    phoneNumberId: input.phoneNumberId,
+  }
+}
+
 // This endpoint syncs the assistant configuration to Vapi
 export async function POST(request: NextRequest) {
   try {
@@ -482,11 +709,19 @@ export async function POST(request: NextRequest) {
 
     const { data: { user } } = await supabaseAuthClient.auth.getUser()
     if (user) {
-      const { data: profile } = await serviceRole
+      const { data: profile, error: profileErr } = await serviceRole
         .from('profiles')
         .select('organization_id, organizations(vapi_api_key, vapi_assistant_id)')
         .eq('id', user.id)
         .single()
+      if (profileErr || !profile?.organization_id) {
+        return stepFailureResponse({
+          step: 'supabase_lookup',
+          status: 500,
+          message: 'Supabase profile organization lookup failed',
+          vapiError: profileErr?.message || 'Missing organization_id on profile',
+        })
+      }
       organizationId = String(profile?.organization_id || '')
       assistantId = (profile?.organizations?.vapi_assistant_id as string | null) || null
       vapiApiKey = normalizeVapiApiKey(profile?.organizations?.vapi_api_key)
@@ -505,7 +740,12 @@ export async function POST(request: NextRequest) {
         .eq('id', DEMO_ORGANIZATION_ID)
         .maybeSingle()
       if (orgErr || !orgRow) {
-        return NextResponse.json({ error: 'Organization not found' }, { status: 404 })
+        return stepFailureResponse({
+          step: 'supabase_lookup',
+          status: orgErr ? 500 : 404,
+          message: 'Supabase organization lookup failed',
+          vapiError: orgErr?.message || 'Organization not found',
+        })
       }
       organizationId = String(orgRow.id)
       assistantId = (orgRow.vapi_assistant_id as string | null) || null
@@ -521,7 +761,12 @@ export async function POST(request: NextRequest) {
         .eq('id', requestedOrgId)
         .maybeSingle()
       if (orgErr || !orgRow) {
-        return NextResponse.json({ error: 'Organization not found' }, { status: 404 })
+        return stepFailureResponse({
+          step: 'supabase_lookup',
+          status: orgErr ? 500 : 404,
+          message: 'Supabase organization lookup failed',
+          vapiError: orgErr?.message || 'Organization not found',
+        })
       }
       organizationId = String(orgRow.id)
       assistantId = (orgRow.vapi_assistant_id as string | null) || null
@@ -577,14 +822,13 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    if (!process.env.NEXT_PUBLIC_APP_URL) {
-      return NextResponse.json(
-        { error: 'NEXT_PUBLIC_APP_URL is not configured' },
-        { status: 500 }
-      )
+    const appBase =
+      organizationId === PRODUCTION_ORGANIZATION_ID
+        ? PRODUCTION_APP_BASE
+        : (process.env.NEXT_PUBLIC_APP_URL || PRODUCTION_APP_BASE).replace(/\/$/, '')
+    if (organizationId === PRODUCTION_ORGANIZATION_ID && !assistantId) {
+      assistantId = PRODUCTION_ASSISTANT_ID
     }
-
-    const appBase = process.env.NEXT_PUBLIC_APP_URL.replace(/\/$/, '')
 
     console.log('[vapi/sync-assistant] sync_start', {
       organization_id: organizationId,
@@ -674,8 +918,9 @@ export async function POST(request: NextRequest) {
       ),
     })
 
-    /** Misma URL que assistant.serverUrl: Vapi debe POSTear estas tools al dispatcher, no solo a get-job-status. */
+    /** Tools always post to the voice dispatcher. Assistant/phone serverUrl use the Vapi event route. */
     const voiceEventsToolServerUrl = `${appBase}/api/voice/events?organization_id=${organizationId}`
+    const vapiEventsServerUrl = `${appBase}/api/vapi/events?organization_id=${organizationId}`
 
     const staticFunctionTools = [
       {
@@ -718,7 +963,7 @@ export async function POST(request: NextRequest) {
           },
         },
         server: {
-          url: `${appBase}/api/vapi/tools/get-job-status`,
+          url: voiceEventsToolServerUrl,
         },
       },
       {
@@ -890,13 +1135,57 @@ export async function POST(request: NextRequest) {
       },
     ]
 
-    const modelTools = [...persistentTransferTools, ...staticFunctionTools]
+    const modelTools = withServerUrlForFunctionTools(
+      [...persistentTransferTools, ...staticFunctionTools],
+      voiceEventsToolServerUrl,
+    )
+
+    let toolLibrarySync
+    try {
+      toolLibrarySync = await syncVapiToolLibrary({
+        vapiApiKey,
+        tools: modelTools,
+      })
+    } catch (err) {
+      return stepFailureResponse({
+        step: 'vapi_create_tool',
+        status: null,
+        message: 'Vapi tool library sync failed before receiving a response',
+        vapiError: err instanceof Error ? err.message : String(err),
+      })
+    }
+    console.log('[vapi/sync-assistant] tool_library_sync', {
+      ok: toolLibrarySync.ok,
+      list_http_status: toolLibrarySync.listHttpStatus,
+      tool_names: toolLibrarySync.toolNames,
+      tools_created: toolLibrarySync.toolsCreated,
+      tools_found: toolLibrarySync.toolsFound,
+      items: toolLibrarySync.items.map((item) => ({
+        name: item.name,
+        id: item.id,
+        action: item.action,
+        httpStatus: item.httpStatus,
+        error: item.error ? clipText(item.error, 220) : null,
+      })),
+      error: toolLibrarySync.error ? clipText(toolLibrarySync.error, 500) : null,
+    })
+    if (!toolLibrarySync.ok) {
+      const failedItem = toolLibrarySync.items.find((item) => item.action === 'failed')
+      return stepFailureResponse({
+        step: 'vapi_create_tool',
+        status: failedItem?.httpStatus ?? toolLibrarySync.listHttpStatus ?? null,
+        message: failedItem
+          ? `Vapi tool sync failed for ${failedItem.name}`
+          : 'Vapi tool library lookup failed',
+        vapiError: failedItem?.error || toolLibrarySync.error || null,
+      })
+    }
 
     /**
-     * Reenviar siempre `model.toolIds` si hay algo que preservar (GET + env).
-     * Si el PATCH omite la clave, Vapi / Publish pueden dejar toolIds en null aunque haya `model.tools`.
+     * Keep Tool Library IDs for diagnostics only. This Vapi builder rejects
+     * top-level toolIds/model.toolIds, so PATCH/POST sends model.tools inline.
      */
-    let mergedModelToolIds: string[] = [...toolIdsFromEnv()]
+    let mergedModelToolIds: string[] = [...toolIdsFromEnv(), ...toolLibrarySync.toolIds]
     let preGetAssistantPayload: Record<string, unknown> | null = null
     if (assistantId) {
       try {
@@ -909,13 +1198,26 @@ export async function POST(request: NextRequest) {
           const fromApi = collectToolIdsFromAssistantGetPayload(preGetAssistantPayload)
           mergedModelToolIds = [...new Set([...fromApi, ...mergedModelToolIds])]
         } else {
+          const body = await preGetRes.text().catch(() => '')
           console.warn('[vapi/sync-assistant] pre_patch_get_assistant_for_tool_ids_http', {
             httpStatus: preGetRes.status,
             assistant_id: assistantId,
           })
+          return stepFailureResponse({
+            step: 'vapi_get_assistant',
+            status: preGetRes.status,
+            message: 'Vapi GET assistant failed before patching assistant',
+            vapiError: body || `GET /assistant/${assistantId} failed`,
+          })
         }
       } catch (e) {
         console.warn('[vapi/sync-assistant] pre_patch_get_assistant_for_tool_ids_failed', e)
+        return stepFailureResponse({
+          step: 'vapi_get_assistant',
+          status: null,
+          message: 'Vapi GET assistant failed before receiving a response',
+          vapiError: e instanceof Error ? e.message : String(e),
+        })
       }
     }
     console.log('[vapi/sync-assistant] pre_patch_merged_model_tool_ids', {
@@ -923,6 +1225,7 @@ export async function POST(request: NextRequest) {
       count: mergedModelToolIds.length,
       tool_ids: mergedModelToolIds.length ? mergedModelToolIds : null,
       from_env: toolIdsFromEnv().length > 0,
+      from_tool_library_sync: toolLibrarySync.toolIds.length,
     })
     if (!mergedModelToolIds.length) {
       console.warn('[vapi/sync-assistant] model_tool_ids_empty_after_merge', {
@@ -969,7 +1272,7 @@ export async function POST(request: NextRequest) {
     const maxTokensNum = Number(config.max_tokens || 110)
     const maxTokens = Number.isFinite(maxTokensNum) ? Math.min(Math.max(maxTokensNum, 80), 140) : 110
 
-    // Vapi: `model.tools` (inline/transient) y `model.toolIds` (Tools Library) pueden ir juntos; no enviar toolIds: null.
+    // Current Vapi assistant PATCH rejects toolIds for this builder; publish runtime tools inline.
     const modelForVapi: Record<string, unknown> = {
       provider: 'anthropic',
       model: 'claude-haiku-4-5-20251001',
@@ -978,9 +1281,6 @@ export async function POST(request: NextRequest) {
       maxTokens,
       systemPrompt,
       tools: modelTools,
-    }
-    if (mergedModelToolIds.length > 0) {
-      modelForVapi.toolIds = mergedModelToolIds
     }
 
     let voicePayload: Record<string, unknown> = {
@@ -1037,7 +1337,7 @@ export async function POST(request: NextRequest) {
       voice: voicePayload,
       firstMessage,
       transcriber: transcriberPayload,
-      serverUrl: `${appBase}/api/voice/events?organization_id=${organizationId}`,
+      serverUrl: vapiEventsServerUrl,
       serverUrlSecret: process.env.VAPI_WEBHOOK_SECRET,
     }
 
@@ -1046,6 +1346,14 @@ export async function POST(request: NextRequest) {
       model_tool_ids_in_payload: extractModelToolIdsFromAssistant({
         model: assistantConfig.model,
       } as Record<string, unknown>),
+      tool_payload_shape: {
+        top_level_toolIds_sent: false,
+        model_toolIds_sent: false,
+        model_tools_sent: true,
+        model_tools_count: modelTools.length,
+        model_tool_names: toolNamesFromList(modelTools),
+        tool_library_ids_found_or_created_but_not_sent: mergedModelToolIds,
+      },
     })
 
     const prePatchGjs = digestToolFromList(assistantConfig.model.tools as unknown[], 'get_job_status')
@@ -1082,25 +1390,34 @@ export async function POST(request: NextRequest) {
     })
 
     let response
-    if (assistantId) {
-      // Update existing assistant
-      response = await fetch(`https://api.vapi.ai/assistant/${assistantId}`, {
-        method: 'PATCH',
-        headers: {
-          'Authorization': `Bearer ${vapiApiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(assistantConfig),
-      })
-    } else {
-      // Create new assistant
-      response = await fetch('https://api.vapi.ai/assistant', {
-        method: 'POST',
-        headers: {
-          'Authorization': `Bearer ${vapiApiKey}`,
-          'Content-Type': 'application/json',
-        },
-        body: JSON.stringify(assistantConfig),
+    try {
+      if (assistantId) {
+        // Update existing assistant
+        response = await fetch(`https://api.vapi.ai/assistant/${assistantId}`, {
+          method: 'PATCH',
+          headers: {
+            'Authorization': `Bearer ${vapiApiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(assistantConfig),
+        })
+      } else {
+        // Create new assistant
+        response = await fetch('https://api.vapi.ai/assistant', {
+          method: 'POST',
+          headers: {
+            'Authorization': `Bearer ${vapiApiKey}`,
+            'Content-Type': 'application/json',
+          },
+          body: JSON.stringify(assistantConfig),
+        })
+      }
+    } catch (err) {
+      return stepFailureResponse({
+        step: 'vapi_patch_assistant',
+        status: null,
+        message: 'Vapi assistant PATCH/POST failed before receiving a response',
+        vapiError: err instanceof Error ? err.message : String(err),
       })
     }
 
@@ -1148,13 +1465,12 @@ export async function POST(request: NextRequest) {
         raw && !baseMsg.includes(raw.slice(0, 80))
           ? ` Detalle del sistema de voz: ${raw.slice(0, 400)}${raw.length > 400 ? '…' : ''}`
           : ''
-      return NextResponse.json(
-        {
-          error: `${baseMsg}${detail}`,
-          vapiMessage: result?.message || null,
-        },
-        { status: response.status === 401 ? 401 : 500 }
-      )
+      return stepFailureResponse({
+        step: 'vapi_patch_assistant',
+        status: response.status,
+        message: `${baseMsg}${detail}`,
+        vapiError: result || rawResponse || null,
+      })
     }
 
     // Save assistant ID if new
@@ -1170,18 +1486,36 @@ export async function POST(request: NextRequest) {
     let postPatchGetStatus = 0
     let postPatchFetched: unknown = null
     if (resolvedAssistantId) {
-      const getRes = await fetch(`https://api.vapi.ai/assistant/${resolvedAssistantId}`, {
-        method: 'GET',
-        headers: {
-          Authorization: `Bearer ${vapiApiKey}`,
-        },
-      })
+      let getRes
+      try {
+        getRes = await fetch(`https://api.vapi.ai/assistant/${resolvedAssistantId}`, {
+          method: 'GET',
+          headers: {
+            Authorization: `Bearer ${vapiApiKey}`,
+          },
+        })
+      } catch (err) {
+        return stepFailureResponse({
+          step: 'vapi_get_assistant',
+          status: null,
+          message: 'Vapi GET assistant failed after patching assistant',
+          vapiError: err instanceof Error ? err.message : String(err),
+        })
+      }
       postPatchGetStatus = getRes.status
       const getText = await getRes.text()
       try {
         postPatchFetched = getText ? JSON.parse(getText) : null
       } catch {
         postPatchFetched = { parseError: true, rawPreview: clipText(getText, 200) }
+      }
+      if (!getRes.ok) {
+        return stepFailureResponse({
+          step: 'vapi_get_assistant',
+          status: getRes.status,
+          message: 'Vapi GET assistant failed after patching assistant',
+          vapiError: postPatchFetched || getText || null,
+        })
       }
       const summary = summarizeAssistantFromVapi(postPatchFetched)
       const postGjs = summary && typeof summary === 'object' && 'get_job_status' in summary ? summary.get_job_status : null
@@ -1238,6 +1572,31 @@ export async function POST(request: NextRequest) {
     }
 
     const phoneReport = await fetchVapiPhoneNumbersForSync(vapiApiKey, resolvedAssistantId)
+    const phoneNumberId =
+      organizationId === PRODUCTION_ORGANIZATION_ID ? PRODUCTION_PHONE_NUMBER_ID : ''
+    const phoneNumberServerUrl = `${appBase}/api/vapi/events?organization_id=${organizationId}`
+    const phoneNumberServerSync = phoneNumberId
+      ? await updateVapiPhoneNumberServerUrl({
+          vapiApiKey,
+          assistantId: resolvedAssistantId || PRODUCTION_ASSISTANT_ID,
+          phoneNumberId,
+          targetServerUrl: phoneNumberServerUrl,
+        })
+      : null
+    if (phoneNumberServerSync && !phoneNumberServerSync.ok) {
+      return stepFailureResponse({
+        step: 'vapi_patch_phone_number',
+        status: phoneNumberServerSync.status,
+        message: 'Vapi phone number server URL sync failed',
+        vapiError: phoneNumberServerSync.body,
+      })
+    }
+    console.log('[vapi/sync-assistant] phone_number_server_sync', {
+      ok: phoneNumberServerSync?.ok ?? null,
+      phoneNumberId: phoneNumberServerSync?.phoneNumberId ?? null,
+      status: phoneNumberServerSync?.status ?? null,
+      targetServerUrl: phoneNumberServerSync?.targetServerUrl ?? null,
+    })
     console.log('[vapi/sync-assistant] vapi_phone_numbers', {
       ok: phoneReport.ok,
       httpStatus: phoneReport.httpStatus,
@@ -1361,16 +1720,47 @@ export async function POST(request: NextRequest) {
     }
 
     return NextResponse.json({
+      ok: true,
       success: true,
       assistantId: resolvedAssistantId,
+      phoneNumberId: phoneNumberServerSync?.phoneNumberId ?? null,
       message: assistantId ? 'Assistant updated' : 'Assistant created',
+      toolsCreated: toolLibrarySync.toolsCreated,
+      toolsFound: toolLibrarySync.toolsFound,
+      finalToolNames: toolNamesFromList(modelTools),
+      assistantServerUrl: vapiEventsServerUrl,
+      phoneNumberServerUrl,
+      toolPayloadShape: {
+        topLevelToolIdsSent: false,
+        modelToolIdsSent: false,
+        modelToolsSent: true,
+        modelToolsCount: modelTools.length,
+        modelToolNames: toolNamesFromList(modelTools),
+        toolLibraryIdsFoundOrCreatedButNotSent: mergedModelToolIds,
+      },
+      warnings,
       vapiPublish: {
         assistantId: resolvedAssistantId,
         organizationId,
-        serverUrl: `${appBase}/api/voice/events?organization_id=${organizationId}`,
-        vapiEventsUrl: `${appBase}/api/vapi/events?organization_id=${organizationId}`,
+        serverUrl: vapiEventsServerUrl,
+        vapiEventsUrl: vapiEventsServerUrl,
         toolCallsCompatUrl: `${appBase}/api/vapi/tool-calls?organization_id=${organizationId}`,
         getJobStatusToolPostUrl: `${appBase}/api/vapi/tools/get-job-status`,
+        requiredToolServerUrl: voiceEventsToolServerUrl,
+        assistantServerUrl: vapiEventsServerUrl,
+        phoneNumberServerUrl,
+        phoneNumberId: phoneNumberServerSync?.phoneNumberId ?? null,
+        toolPayloadShape: {
+          topLevelToolIdsSent: false,
+          modelToolIdsSent: false,
+          modelToolsSent: true,
+          modelToolsCount: modelTools.length,
+          modelToolNames: toolNamesFromList(modelTools),
+          toolLibraryIdsFoundOrCreatedButNotSent: mergedModelToolIds,
+        },
+        toolsCreated: toolLibrarySync.toolsCreated,
+        toolsFound: toolLibrarySync.toolsFound,
+        finalToolNames: toolNamesFromList(modelTools),
         webhookSecretHeader: 'x-vapi-secret',
         getJobStatusSchemaNote:
           'En el sistema de voz, get_job_status debe tener parameters.required = [] y puede llevar server.url al endpoint get-job-status (ya publicado en sync).',
@@ -1425,12 +1815,11 @@ export async function POST(request: NextRequest) {
       console.error('[v0] Sync assistant error stack:', error.stack)
     }
     const detail = serializeSyncAssistantCatchError(error)
-    return NextResponse.json(
-      {
-        error: 'Internal server error',
-        ...(process.env.NODE_ENV === 'development' ? { detail } : {}),
-      },
-      { status: 500 },
-    )
+    return stepFailureResponse({
+      step: 'supabase_lookup',
+      status: 500,
+      message: 'Unexpected sync-assistant failure',
+      vapiError: detail,
+    })
   }
 }
