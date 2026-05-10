@@ -177,11 +177,13 @@ REGLAS ESTRICTAS:
 - Una pregunta por turno, nunca dos
 - NUNCA repitas datos que el cliente ya confirmó
 - NUNCA vuelvas a pedir datos que ya tenés
+- Si el cliente dicta teléfono, conservá todos los dígitos exactos, incluidos ceros, y confirmalo en grupos antes de avanzar
+- Si dice que el teléfono está mal, borrá el número entero, pedilo de nuevo desde el principio y no digas "Perfecto" hasta que confirme
 
 FLUJO OBLIGATORIO (en este orden):
 1. Saludo (ya hecho en el primer mensaje)
 2. Pedí NOMBRE Y APELLIDO — ambas partes son obligatorias. Si solo dan el nombre, pedí el apellido antes de continuar.
-3. Pedí teléfono si no tenés Caller ID (una sola vez)
+3. Pedí teléfono si no tenés Caller ID. Confirmalo como 813-370-4657 o 8-1-3, 3-7-0, 4-6-5-7 y esperá confirmación explícita.
 4. Pedí email (una sola vez)
 5. Preguntá por el trabajo a cotizar: tipo de impresión o servicio, tamaño, cantidad y cuándo lo necesita. Una pregunta por turno.
 6. Confirmá los datos en una oración: "Entonces: [nombre completo], [email/teléfono], necesitás [resumen del trabajo]. ¿Correcto?"
@@ -191,8 +193,10 @@ FLUJO OBLIGATORIO (en este orden):
 
 CRÍTICO para save_lead_info:
 - full_name DEBE tener nombre Y apellido (mínimo 2 palabras). Si solo tenés el primer nombre, NO llames al tool aún.
+- phone dictado DEBE estar confirmado por el cliente. Si corrigió el número, no uses el anterior.
 - need debe describir el trabajo con suficiente detalle (tipo + descripción breve)
-- Usá notes para detalles: tamaño, cantidad, material, plazo requerido`,
+- Usá notes para detalles: tamaño, cantidad, material, plazo requerido
+- En inglés, hablá natural: "What is your name?" y "What is the company name?". Nunca agregues fragmentos como "I'm" o "The company".`,
         },
       ],
       tools: [
@@ -210,7 +214,7 @@ CRÍTICO para save_lead_info:
                 },
                 phone: {
                   type: 'string',
-                  description: 'Número de teléfono del cliente',
+                  description: 'Número de teléfono del cliente, solo si fue confirmado cuando el cliente lo dictó o corrigió',
                 },
                 email: {
                   type: 'string',

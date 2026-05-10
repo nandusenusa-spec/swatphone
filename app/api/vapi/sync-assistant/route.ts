@@ -765,7 +765,7 @@ export async function POST(request: NextRequest) {
         function: {
           name: 'save_lead_info',
           description:
-            'Guarda lead comercial: nombre (full_name o name), need/motivo, teléfono si lo dictó (si no, Caller ID). Incluí clasificación: category (wrap, business_cards, flyers, banners, signage, design, delivery, order_status, billing, general_quote, support), intent (ej. quote_request), priority (low, normal, high), estimated_value_level, summary, next_action, source=vapi_call, callback_required si aplica. Wrap vehicular: category=wrap, priority=high, estimated_value_level=high, callback_required=true. Tras cotización sin precio confirmado, llamá esta tool y luego create_follow_up si prometiste presupuesto o contacto.',
+            'Guarda lead comercial: nombre (full_name o name), need/motivo, teléfono confirmado si el cliente lo dictó (si no dictó otro número, el backend puede usar Caller ID). No llames esta tool con un teléfono dictado o corregido hasta haber confirmado el número completo en grupos y recibir confirmación explícita. Incluí clasificación: category (wrap, business_cards, flyers, banners, signage, design, delivery, order_status, billing, general_quote, support), intent (ej. quote_request), priority (low, normal, high), estimated_value_level, summary, next_action, source=vapi_call, callback_required si aplica. Wrap vehicular: category=wrap, priority=high, estimated_value_level=high, callback_required=true. Tras cotización sin precio confirmado, llamá esta tool y luego create_follow_up si prometiste presupuesto o contacto.',
           parameters: {
             type: 'object',
             properties: {
@@ -776,7 +776,7 @@ export async function POST(request: NextRequest) {
               phone: {
                 type: 'string',
                 description:
-                  'Opcional. E.164 si el cliente lo dictó; si omitís, el backend usa el número de la llamada cuando esté disponible.',
+                  'Opcional. E.164 solo si el cliente dictó el número y ya confirmó que el número completo agrupado es correcto. Si lo corrigió o dijo que estaba mal, descartá el número anterior, recapturalo desde cero y no lo envíes hasta confirmarlo. Si omitís, el backend usa el número de la llamada cuando esté disponible.',
               },
               organization_id: {
                 type: 'string',
