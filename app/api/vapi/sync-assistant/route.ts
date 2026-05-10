@@ -400,6 +400,19 @@ function withServerUrlForFunctionTools(tools: unknown[], serverUrl: string): unk
   })
 }
 
+function normalizeVapiToolLibraryPayload(tool: unknown): Record<string, unknown> | unknown {
+  if (!tool || typeof tool !== 'object' || Array.isArray(tool)) return tool
+  const rec = tool as Record<string, unknown>
+  const payload: Record<string, unknown> = {}
+  if (rec.function && typeof rec.function === 'object' && !Array.isArray(rec.function)) {
+    payload.function = rec.function
+  }
+  if (rec.server && typeof rec.server === 'object' && !Array.isArray(rec.server)) {
+    payload.server = rec.server
+  }
+  return payload
+}
+
 async function syncVapiToolLibrary(input: {
   vapiApiKey: string
   tools: unknown[]
@@ -448,9 +461,28 @@ async function syncVapiToolLibrary(input: {
     const url = existingId
       ? `https://api.vapi.ai/tool/${encodeURIComponent(existingId)}`
       : 'https://api.vapi.ai/tool'
-    const payload = tool && typeof tool === 'object'
-      ? { ...(tool as Record<string, unknown>) }
-      : tool
+    const payload = normalizeVapiToolLibraryPayload(tool)
+    console.log('[vapi/sync-assistant] tool_library_payload_shape', {
+      name,
+      action: existingId ? 'update' : 'create',
+      top_level_keys: payload && typeof payload === 'object' && !Array.isArray(payload)
+        ? Object.keys(payload as Record<string, unknown>)
+        : [],
+      function_name:
+        payload &&
+        typeof payload === 'object' &&
+        !Array.isArray(payload) &&
+        (payload as Record<string, unknown>).function &&
+        typeof (payload as Record<string, unknown>).function === 'object'
+          ? ((payload as Record<string, unknown>).function as Record<string, unknown>).name ?? null
+          : null,
+      has_server: Boolean(
+        payload &&
+          typeof payload === 'object' &&
+          !Array.isArray(payload) &&
+          (payload as Record<string, unknown>).server,
+      ),
+    })
     try {
       const res = await fetch(url, {
         method,
