@@ -30,8 +30,16 @@ import {
 
 function leadFullNameValid(name: string | undefined): boolean {
   if (!name?.trim()) return false
+  const normalized = stripAccentsForMatch(name).toLowerCase().replace(/\s+/g, ' ').trim()
+  const blocked =
+    /^(y apellido|es jos|esta semana|particular|empresa|no tengo email|sin email)$/i.test(normalized) ||
+    /\b(nombre|apellido|telefono|cotizacion|wrap|vehicular|semana|particular)\b/i.test(normalized)
+  if (blocked) return false
   const parts = name.trim().split(/\s+/).filter((p) => p.length > 0)
-  return parts.length >= 2
+  return (
+    parts.length === 2 &&
+    parts.every((part) => /^[\p{L}'-]{2,}$/u.test(part))
+  )
 }
 
 function strArg(args: Record<string, unknown>, key: string): string {
@@ -361,8 +369,68 @@ function inferProductNameFromText(text: string): string {
   return normalized.length >= 2 ? normalized : ''
 }
 
+type TranscriptLine = { speaker: 'assistant' | 'user' | 'unknown'; text: string }
+
+function parseTranscriptLines(text: string): TranscriptLine[] {
+  return (text || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const match = line.match(/^(Assistant|Bot|Agente|Asistente|User|Caller|Customer|Cliente|Usuario)\s*:\s*(.+)$/i)
+      if (!match) return { speaker: 'unknown' as const, text: line }
+      const rawSpeaker = match[1].toLowerCase()
+      const speaker =
+        /assistant|bot|agente|asistente/.test(rawSpeaker)
+          ? 'assistant'
+          : 'user'
+      return { speaker, text: match[2].trim() }
+    })
+}
+
+function userOnlyText(text: string): string {
+  const lines = parseTranscriptLines(text)
+  const hasSpeakerLabels = lines.some((line) => line.speaker !== 'unknown')
+  return lines
+    .filter((line) => !hasSpeakerLabels || line.speaker === 'user')
+    .map((line) => line.text)
+    .join('\n')
+}
+
+function cleanNameCandidate(raw: string): string {
+  return raw
+    .replace(/[.,;:!?¿¡"]/g, ' ')
+    .replace(/\b(?:me llamo|mi nombre es|soy|es|nombre y apellido|nombre|apellido)\b/giu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
+function titleCaseName(raw: string): string {
+  return raw
+    .trim()
+    .split(/\s+/)
+    .map((part) => part ? part[0].toUpperCase() + part.slice(1).toLowerCase() : '')
+    .join(' ')
+}
+
+function inferNameAfterAssistantPrompt(transcript: string): string {
+  const lines = parseTranscriptLines(transcript)
+  for (let i = 0; i < lines.length - 1; i += 1) {
+    const current = stripAccentsForMatch(lines[i].text).toLowerCase()
+    if (
+      lines[i].speaker === 'assistant' &&
+      /\b(nombre y apellido|nombre completo|me das tu nombre|cual es tu nombre)\b/.test(current)
+    ) {
+      const nextUser = lines.slice(i + 1).find((line) => line.speaker === 'user')
+      const candidate = titleCaseName(cleanNameCandidate(nextUser?.text || ''))
+      if (leadFullNameValid(candidate)) return candidate
+    }
+  }
+  return ''
+}
+
 function inferFullNameFromText(text: string): string {
-  const raw = (text || '').replace(/\s+/g, ' ').trim()
+  const raw = userOnlyText(text).replace(/\s+/g, ' ').trim()
   if (!raw) return ''
   const patterns = [
     /\b(?:me llamo|mi nombre es|soy)\s+([\p{L}'-]+(?:\s+[\p{L}'-]+){1,3})/iu,
@@ -370,10 +438,14 @@ function inferFullNameFromText(text: string): string {
   ]
   for (const pattern of patterns) {
     const match = raw.match(pattern)
-    if (match?.[1]) return match[1].trim()
+    if (match?.[1]) {
+      const candidate = titleCaseName(cleanNameCandidate(match[1]))
+      if (leadFullNameValid(candidate)) return candidate
+    }
   }
   const capitalized = raw.match(/\b([\p{Lu}][\p{L}'-]{2,}\s+[\p{Lu}][\p{L}'-]{2,})\b/u)
-  return capitalized?.[1]?.trim() || ''
+  const candidate = titleCaseName(cleanNameCandidate(capitalized?.[1] || ''))
+  return leadFullNameValid(candidate) ? candidate : ''
 }
 
 function normalizeDictatedDigits(raw: string): string {
@@ -384,7 +456,7 @@ function normalizeDictatedDigits(raw: string): string {
 }
 
 function inferDictatedPhoneFromText(text: string): string {
-  const raw = text || ''
+  const raw = userOnlyText(text)
   const digitWords: Record<string, string> = {
     zero: '0', cero: '0', oh: '0',
     one: '1', uno: '1',
@@ -645,8 +717,8 @@ export async function executeToolHandler(
       const dictatedPhone = inferConfirmedPhoneFromText(fallbackText)
       const argPhone = typeof args.phone === 'string' ? normalizeDictatedDigits(args.phone) : ''
       const ctxPhone = context.phone ? normalizePhone(context.phone) : ''
-      const phone = argPhone || dictatedPhone || ctxPhone || ''
-      const phoneSource = argPhone ? 'tool_args' : dictatedPhone ? 'transcript' : ctxPhone ? 'caller_id' : 'missing'
+      const phone = dictatedPhone || argPhone || ctxPhone || ''
+      const phoneSource = dictatedPhone ? 'transcript' : argPhone ? 'tool_args' : ctxPhone ? 'caller_id' : 'missing'
       const emailDeclined = callerDeclinedEmail(fallbackText)
       const cleanedEmail = emailDeclined ? undefined : cleanOptionalEmail(args.email)
       if (!phone) {
@@ -657,7 +729,8 @@ export async function executeToolHandler(
       const last = typeof args.last_name === 'string' ? args.last_name.trim() : ''
       const full = typeof args.full_name === 'string' ? args.full_name.trim() : ''
       const nameOnly = typeof args.name === 'string' ? args.name.trim() : ''
-      const inferredName = inferFullNameFromText(fallbackText)
+      const promptAnswerName = inferNameAfterAssistantPrompt(context.transcript || '')
+      const inferredName = promptAnswerName || inferFullNameFromText(fallbackText)
       const modelArgsName = [first, last].filter(Boolean).join(' ').trim() || full || nameOnly || ''
       const modelNameLooksLikeFragment = /\b(es|soy|nombre|llamo|jos)\b/i.test(modelArgsName)
       const transcriptNameWins =
@@ -1131,6 +1204,25 @@ export async function executeToolHandler(
         title_preview: String(args.title ?? '').slice(0, 120),
         callback_required: Boolean(args.callback_required),
       })
+      const followUpContext = contextTextForTool(
+        context,
+        typeof args.category === 'string' ? args.category : '',
+        typeof args.intent === 'string' ? args.intent : '',
+        typeof args.summary === 'string' ? args.summary : '',
+        typeof args.notes === 'string' ? args.notes : '',
+      )
+      const isWrapFollowUp =
+        detectWrapIntent(followUpContext) ||
+        String(args.category || '').toLowerCase().trim() === 'wrap'
+      const isQuoteFollowUp =
+        isWrapFollowUp ||
+        String(args.intent || '').toLowerCase().trim() === 'quote_request' ||
+        /\b(cotizacion|cotización|quote)\b/i.test(stripAccentsForMatch(followUpContext))
+      if (!args.title && isWrapFollowUp) {
+        args.title = 'Llamar por cotización de wrap vehicular'
+      } else if (!args.title && isQuoteFollowUp) {
+        args.title = 'Seguimiento: cotización solicitada'
+      }
       if (!args.title)
         return missing(
           ['title'],
@@ -1199,6 +1291,8 @@ export async function executeToolHandler(
           error: 'follow_up_failed' as const,
           primary_message_for_caller:
             'No pude registrar el seguimiento en el sistema. Podemos intentar de nuevo en un momento.',
+          assistant_instruction:
+            'Say only primary_message_for_caller. Do not say the follow-up or callback was created.',
         }
       }
     }
