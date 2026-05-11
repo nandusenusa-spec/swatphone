@@ -296,7 +296,11 @@ function inferWrapQuoteNeedFromTranscript(transcript: string): {
     /\bfleet graphics\b/.test(normalized)
   if (!hasWrap) return null
 
-  const vehicleType = /\b(van|furgoneta)\b/.test(normalized)
+  const vehicleType = /\bford ranger\b/.test(normalized)
+    ? 'Ford Ranger'
+    : /\branger\b/.test(normalized)
+      ? 'Ford Ranger'
+      : /\b(van|furgoneta)\b/.test(normalized)
     ? 'van'
     : /\b(auto|carro|coche|car|vehiculo|sedan)\b/.test(normalized)
     ? 'auto'
@@ -312,7 +316,7 @@ function inferWrapQuoteNeedFromTranscript(transcript: string): {
       : null
   const designHelp =
     /\b(diseno|design|arte|artwork)\b/.test(normalized) &&
-    /\b(ayuda|help|needs|need|necesito|necesita|sin|no tengo|hacer|from us)\b/.test(normalized)
+    /\b(ayuda|help|needs|need|necesito|necesita|sin|no tengo|hacer|make|from us|ustedes|swatworks)\b/.test(normalized)
   const timeline = /\b(esta semana|this week)\b/.test(normalized)
     ? 'esta semana'
     : /\b(urgente|urgent|cuanto antes|as soon as possible)\b/.test(normalized)

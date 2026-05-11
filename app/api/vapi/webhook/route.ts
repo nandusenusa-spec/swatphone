@@ -540,6 +540,8 @@ async function handleToolCalls(request: NextRequest, flat: JsonRecord, rawBody: 
             phone: phoneRaw,
             vapiCallId: getCallIdFromPayload(flat) || '',
             toolCallId: toolCallId || null,
+            transcript: getTranscriptFromPayload(flat) || null,
+            callSummary: getSummaryFromPayload(flat) || null,
           })
           if (out && typeof out === 'object' && 'ok' in out && out.ok === true) {
             console.log('[vapi:webhook] save_lead_info persisted', {

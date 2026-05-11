@@ -551,7 +551,11 @@ function inferWrapNeedFromText(text: string): {
     /fleet graphics/.test(normalized)
   if (!hasWrap) return null
 
-  const vehicleType = /\bvan|furgoneta\b/.test(normalized)
+  const vehicleType = /\bford ranger\b/.test(normalized)
+    ? 'Ford Ranger'
+    : /\branger\b/.test(normalized)
+      ? 'Ford Ranger'
+      : /\bvan|furgoneta\b/.test(normalized)
     ? 'van'
     : /\b(auto|carro|car|vehiculo|vehículo)\b/.test(normalized)
     ? 'auto'
@@ -565,7 +569,7 @@ function inferWrapNeedFromText(text: string): {
       : null
   const designHelp =
     /\b(diseno|diseño|design|arte|artwork)\b/.test(normalized) &&
-    /\b(ayuda|help|needs|need|necesito|necesita|sin|no tengo|hacer|from us)\b/.test(normalized)
+    /\b(ayuda|help|needs|need|necesito|necesita|sin|no tengo|hacer|make|from us|ustedes|swatworks)\b/.test(normalized)
   const timeline = /esta semana|this week/.test(normalized)
     ? 'esta semana'
     : /\burgente|urgent|cuanto antes/.test(normalized)
@@ -701,18 +705,12 @@ export async function executeToolHandler(
         has_context_phone: Boolean(context.phone?.trim()),
       })
       const argContextText = [
-        typeof args.need === 'string' ? args.need : '',
-        typeof args.notes === 'string' ? args.notes : '',
-        typeof args.reason === 'string' ? args.reason : '',
-        typeof args.motivo === 'string' ? args.motivo : '',
-        typeof args.category === 'string' ? args.category : '',
-        typeof args.summary === 'string' ? args.summary : '',
-        typeof args.next_action === 'string' ? args.next_action : '',
-        typeof args.vehicle_type === 'string' ? args.vehicle_type : '',
-        typeof args.wrap_scope === 'string' ? args.wrap_scope : '',
-        typeof args.timeline === 'string' ? args.timeline : '',
-        typeof args.design_help_needed === 'string' ? args.design_help_needed : '',
+        ...Object.entries(args)
+          .filter(([, value]) => typeof value === 'string' || value === true)
+          .map(([key, value]) => `${key}: ${value === true ? 'true' : value}`),
         args.design_help_needed === true ? 'needs design' : '',
+        args.needs_design === true ? 'needs design' : '',
+        args.design_needed === true ? 'needs design' : '',
       ]
         .filter(Boolean)
         .join('\n')
