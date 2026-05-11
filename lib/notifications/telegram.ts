@@ -67,3 +67,29 @@ export async function notifyJobCompleteTelegram(params:{
   ].join('\n')
   return sendMsg(chatId,text)
 }
+
+export async function notifyAppointmentTelegram(params: {
+  customerName: string
+  phone: string
+  appointmentAt: string
+  reason?: string | null
+  calendarStatus: string
+  googleEventId?: string | null
+  organizationName?: string | null
+}): Promise<boolean> {
+  const chatId = process.env.TELEGRAM_CHAT_ID?.trim()
+  if (!chatId) return false
+  const org = esc(params.organizationName || 'SWATWORKS')
+  const lines = [
+    '*CITA CREADA - ' + org + '*',
+    '',
+    '*Nombre:* ' + esc(params.customerName || 'Cliente'),
+    '*Telefono:* ' + esc(params.phone || 'N/A'),
+    '*Fecha/hora:* ' + esc(params.appointmentAt),
+  ]
+  if (params.reason) lines.push('*Motivo:* ' + esc(params.reason))
+  lines.push('*Calendar:* ' + esc(params.calendarStatus))
+  if (params.googleEventId) lines.push('*Google event:* ' + esc(params.googleEventId))
+  lines.push('', '_' + esc(nowStr()) + '_')
+  return sendMsg(chatId, lines.join('\n'))
+}

@@ -10,6 +10,7 @@ import {
   UserCircle,
   LayoutDashboard,
   Settings,
+  Plug,
   HelpCircle,
   MessageSquare,
   CalendarClock,
@@ -37,6 +38,7 @@ const navigation = [
   { name: 'Productos', href: '/dashboard/products', icon: Package },
   { name: 'Equipo', href: '/dashboard/team', icon: UserCircle },
   { name: 'FAQs', href: '/dashboard/faqs', icon: HelpCircle },
+  { name: 'Integrations', href: '/dashboard/integrations', icon: Plug },
 ]
 
 const secondaryNavigation = [

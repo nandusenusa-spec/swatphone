@@ -369,6 +369,30 @@ export async function createAppointment(input: {
   return data
 }
 
+export async function updateAppointmentCalendarSync(input: {
+  appointmentId: string
+  googleEventId?: string | null
+  calendarId?: string | null
+  status: string
+  error?: string | null
+}) {
+  const supabase = createServiceRoleClient()
+  const { data, error } = await supabase
+    .from('appointments')
+    .update({
+      google_event_id: input.googleEventId || null,
+      calendar_id: input.calendarId || null,
+      calendar_sync_status: input.status,
+      calendar_sync_error: input.error || null,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', input.appointmentId)
+    .select('*')
+    .maybeSingle()
+  if (error) throw error
+  return data
+}
+
 export async function createWorkOrder(input: {
   organizationId: string
   customerId: string

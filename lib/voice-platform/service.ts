@@ -18,6 +18,7 @@ import {
   upsertLeadByPhone,
   upsertCustomerLeadInfo,
   upsertCallLog,
+  updateAppointmentCalendarSync,
 } from '@/lib/voice-platform/repository'
 import {
   expandPriceLookupTerms,
@@ -28,6 +29,8 @@ import {
 } from '@/lib/voice-platform/price-lookup-terms'
 import { logPriceLookup, type PriceLookupSearchMeta } from '@/lib/voice-platform/price-lookup-log'
 import { logProductSuggestion } from '@/lib/voice-platform/product-suggestion-log'
+import { createGoogleCalendarEvent } from '@/lib/integrations/google-calendar'
+import { notifyAppointmentTelegram } from '@/lib/notifications/telegram'
 import type { QuoteRow } from '@/lib/voice-platform/repository'
 import {
   allQuoteRowsLookLikeBusinessCardsCatalog,
@@ -159,7 +162,96 @@ export async function runCreateAppointment(input: {
     notes: input.notes,
     callLogId: input.callLogId,
   })
-  return { ok: true, appointment }
+  const appointmentId =
+    appointment && typeof appointment === 'object' && 'id' in appointment
+      ? String((appointment as { id?: unknown }).id || '')
+      : ''
+  const appointmentStart = new Date(input.appointmentAt)
+  let calendarStatus = 'calendar_not_connected'
+  let calendarWarning: string | null = 'calendar_not_connected'
+  let googleEventId: string | null = null
+  let calendarId: string | null = null
+
+  if (Number.isFinite(appointmentStart.getTime())) {
+    try {
+      const event = await createGoogleCalendarEvent({
+        organizationId: input.organizationId,
+        summary: `Appointment: ${customer.name || input.customerName || input.phone}`,
+        description: [
+          input.notes ? `Reason: ${input.notes}` : null,
+          input.phone ? `Phone: ${input.phone}` : null,
+        ]
+          .filter(Boolean)
+          .join('\n'),
+        start: appointmentStart,
+        durationMinutes: 30,
+      })
+      if (event.created) {
+        calendarStatus = 'synced'
+        calendarWarning = null
+        googleEventId = event.googleEventId
+        calendarId = event.calendarId
+      }
+    } catch (error) {
+      calendarStatus = 'calendar_sync_failed'
+      calendarWarning = 'calendar_sync_failed'
+      console.error('[voice-platform/create-appointment] calendar sync failed', {
+        organization_id: input.organizationId,
+        appointment_id: appointmentId || null,
+        message: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
+  if (appointmentId) {
+    try {
+      await updateAppointmentCalendarSync({
+        appointmentId,
+        googleEventId,
+        calendarId,
+        status: calendarStatus,
+        error: calendarWarning,
+      })
+    } catch (error) {
+      console.warn('[voice-platform/create-appointment] calendar sync status update failed', {
+        organization_id: input.organizationId,
+        appointment_id: appointmentId,
+        message: error instanceof Error ? error.message : String(error),
+      })
+    }
+  }
+
+  const runtime = await getOrganizationRuntimeConfig(input.organizationId)
+  const telegramSent = await notifyAppointmentTelegram({
+    customerName: customer.name || input.customerName || 'Cliente',
+    phone: input.phone,
+    appointmentAt: input.appointmentAt,
+    reason: input.notes,
+    calendarStatus,
+    googleEventId,
+    organizationName: runtime.organizationDisplayName,
+  })
+  console.info('[voice-platform/create-appointment]', {
+    organization_id: input.organizationId,
+    appointment_id: appointmentId || null,
+    calendar_status: calendarStatus,
+    google_event_id: googleEventId,
+    telegram_sent: telegramSent,
+  })
+
+  return {
+    ok: true,
+    appointment,
+    calendar_sync_status: calendarStatus,
+    google_event_id: googleEventId,
+    calendar_id: calendarId,
+    warning: calendarWarning,
+    telegram_sent: telegramSent,
+    assistant_instruction:
+      calendarStatus === 'synced'
+        ? 'The appointment was saved and added to Google Calendar. You may tell the caller the appointment is scheduled.'
+        : 'The appointment request was saved, but Google Calendar is not connected or did not sync. Tell the caller the request was registered and the team will confirm manually.',
+  }
 }
 
 export async function runCreateWorkOrder(input: {
