@@ -8,6 +8,9 @@ import {
 } from '@/lib/vapi/lead-classification'
 import { Users, UserCheck, Star } from 'lucide-react'
 
+export const dynamic = 'force-dynamic'
+export const revalidate = 0
+
 function commercialFromStoredLead(row: Record<string, unknown>) {
   const meta = row.metadata as Record<string, unknown> | undefined
   const fromMeta =

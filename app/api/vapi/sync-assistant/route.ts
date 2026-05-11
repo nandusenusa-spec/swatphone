@@ -36,6 +36,10 @@ const REQUIRED_VAPI_TOOL_NAMES = [
   'get_job_status',
 ] as const
 
+const VAPI_NATIVE_END_CALL_TOOL = {
+  type: 'endCall',
+} as const
+
 function normalizeVapiApiKey(rawKey: string | null | undefined): string {
   if (!rawKey) return ''
   return rawKey.replace(/^Bearer\s+/i, '').trim()
@@ -1146,7 +1150,7 @@ export async function POST(request: NextRequest) {
         function: {
           name: 'create_follow_up',
           description:
-            'Crea tarea de seguimiento visible en /dashboard/follow-ups. Para wrap usá siempre title claro (ej. Llamar por cotización de wrap), category=wrap, priority=high, callback_required=true, due_at ISO mañana si no hay fecha, notes con nombre/teléfono/vehículo/resumen.',
+            'Crea tarea de seguimiento visible en /dashboard/follow-ups. Para wrap usá siempre title claro (ej. Llamar por cotización de wrap vehicular), category=wrap, priority=high, callback_required=true, due_at ISO mañana si no hay fecha, notes con nombre/teléfono/vehículo/resumen.',
           parameters: {
             type: 'object',
             properties: {
@@ -1170,7 +1174,7 @@ export async function POST(request: NextRequest) {
     ]
 
     const modelTools = withServerUrlForFunctionTools(
-      [...persistentTransferTools, ...staticFunctionTools],
+      [...persistentTransferTools, ...staticFunctionTools, VAPI_NATIVE_END_CALL_TOOL],
       voiceEventsToolServerUrl,
     )
 

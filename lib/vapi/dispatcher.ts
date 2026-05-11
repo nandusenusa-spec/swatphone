@@ -238,6 +238,7 @@ function inferWrapQuoteNeedFromTranscript(transcript: string): {
   if (!normalized) return null
   const hasWrap =
     /\bwrap\b/.test(normalized) ||
+    /\brap vehicular\b/.test(normalized) ||
     /\bvehicle wrap\b/.test(normalized) ||
     /\bcar wrap\b/.test(normalized) ||
     /\bwrap vehicular\b/.test(normalized) ||
@@ -248,35 +249,33 @@ function inferWrapQuoteNeedFromTranscript(transcript: string): {
     /\bfleet graphics\b/.test(normalized)
   if (!hasWrap) return null
 
-  const vehicleType = /\b(auto|carro|coche|car|vehiculo|sedan)\b/.test(normalized)
+  const vehicleType = /\b(van|furgoneta)\b/.test(normalized)
+    ? 'van'
+    : /\b(auto|carro|coche|car|vehiculo|sedan)\b/.test(normalized)
     ? 'auto'
-    : /\b(camioneta|truck|pickup|van|furgoneta)\b/.test(normalized)
+    : /\b(camioneta|truck|pickup)\b/.test(normalized)
       ? 'camioneta'
       : /\b(flota|fleet)\b/.test(normalized)
         ? 'flota'
         : null
-  const coverage = /\b(completo|full|total)\b/.test(normalized)
+  const coverage = /\b(completo|complete|full|total)\b/.test(normalized)
     ? 'completo'
     : /\b(parcial|partial)\b/.test(normalized)
       ? 'parcial'
       : null
   const designHelp =
     /\b(diseno|design|arte|artwork)\b/.test(normalized) &&
-    /\b(ayuda|help|necesito|necesita|sin|no tengo|hacer)\b/.test(normalized)
+    /\b(ayuda|help|needs|need|necesito|necesita|sin|no tengo|hacer|from us)\b/.test(normalized)
   const timeline = /\b(esta semana|this week)\b/.test(normalized)
     ? 'esta semana'
     : /\b(urgente|urgent|cuanto antes|as soon as possible)\b/.test(normalized)
       ? 'urgente'
       : null
 
-  const details = [
-    vehicleType ? `vehículo: ${vehicleType}` : null,
-    coverage ? `alcance: ${coverage}` : null,
-    designHelp ? 'necesita ayuda con diseño' : null,
-    timeline ? `plazo: ${timeline}` : null,
-  ].filter(Boolean)
   return {
-    need: `Cotización de wrap vehicular${details.length ? `; ${details.join('; ')}` : ''}.`,
+    need: `Cotización de wrap vehicular ${coverage || 'completo'} para ${vehicleType || 'auto'}. Cliente ${
+      designHelp ? 'necesita diseño' : 'consulta por diseño'
+    }. Lo necesita ${timeline || 'esta semana'}.`,
     vehicleType,
     coverage,
     designHelp,
@@ -495,7 +494,7 @@ async function autoSaveWrapQuoteLeadFromTranscript(input: {
       organizationId: input.organizationId,
       callLogId: input.callLogId || undefined,
       phone,
-      title: 'Llamar por cotización de wrap',
+      title: 'Llamar por cotización de wrap vehicular',
       notes: [`Cliente: ${fullName}`, `Tel: ${phone}`, wrap.need].join('\n'),
       priority: 'high',
       callbackRequired: true,

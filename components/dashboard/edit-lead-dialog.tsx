@@ -23,6 +23,7 @@ import {
   SelectValue,
 } from '@/components/ui/select'
 import { Pencil, Loader2 } from 'lucide-react'
+import { toast } from 'sonner'
 
 interface Lead {
   id: string
@@ -54,23 +55,68 @@ export function EditLeadDialog({ lead }: { lead: Lead }) {
     setIsLoading(true)
 
     try {
-      await supabase
-        .from('leads')
-        .update({
-          name: formData.name || null,
-          phone: formData.phone,
-          email: formData.email || null,
-          company: formData.company || null,
-          status: formData.status,
-          score: parseInt(formData.score),
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', lead.id)
+      const payload = {
+        name: formData.name || null,
+        phone: formData.phone,
+        email: formData.email || null,
+        company: formData.company || null,
+        status: formData.status,
+        score: parseInt(formData.score) || 0,
+        updated_at: new Date().toISOString(),
+      }
+
+      const isFromCall = lead.id.startsWith('call-')
+      let updateData: any = null
+      let updateError: any = null
+
+      if (!isFromCall) {
+        const { data, error } = await supabase
+          .from('leads')
+          .update(payload)
+          .eq('id', lead.id)
+          .select('id')
+        updateData = data
+        updateError = error
+      }
+
+      // Si la fila no era un lead real (id de call_log o de customer), insertamos
+      if (isFromCall || (!updateError && (!updateData || updateData.length === 0))) {
+        const { data: { user }, error: authErr } = await supabase.auth.getUser()
+        if (authErr || !user) throw new Error(authErr?.message || 'Sesion expirada')
+
+        const { data: profile, error: profErr } = await supabase
+          .from('profiles')
+          .select('organization_id')
+          .eq('id', user.id)
+          .single()
+        if (profErr || !profile?.organization_id) {
+          throw new Error(profErr?.message || 'No se encontro tu organizacion')
+        }
+
+        const { data: inserted, error: insErr } = await supabase
+          .from('leads')
+          .insert({ ...payload, organization_id: profile.organization_id })
+          .select('id')
+          .single()
+
+        if (insErr) {
+          const code = (insErr as { code?: string }).code
+          throw new Error(`${insErr.message}${code ? ` (${code})` : ''}`)
+        }
+        toast.success('Lead creado', { description: formData.name || formData.phone })
+      } else if (updateError) {
+        const code = (updateError as { code?: string }).code
+        throw new Error(`${updateError.message}${code ? ` (${code})` : ''}`)
+      } else {
+        toast.success('Lead actualizado', { description: formData.name || formData.phone })
+      }
 
       setOpen(false)
       router.refresh()
     } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Error desconocido'
       console.error('Error updating lead:', error)
+      toast.error('No se pudo guardar', { description: msg, duration: 8000 })
     } finally {
       setIsLoading(false)
     }

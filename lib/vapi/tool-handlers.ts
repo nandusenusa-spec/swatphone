@@ -216,7 +216,7 @@ async function tryAutoFollowUpAfterLeadSave(input: {
 
   const title =
     c.category === 'wrap'
-      ? 'Llamar por cotización de wrap'
+      ? 'Llamar por cotización de wrap vehicular'
       : 'Seguimiento: cotización o contacto solicitado'
 
   const notes = [
@@ -365,14 +365,14 @@ function inferFullNameFromText(text: string): string {
   const raw = (text || '').replace(/\s+/g, ' ').trim()
   if (!raw) return ''
   const patterns = [
-    /\b(?:me llamo|mi nombre es|soy)\s+([A-Z][A-Za-z'-]+(?:\s+[A-Z][A-Za-z'-]+){1,3})/i,
-    /\b(?:nombre y apellido|nombre)\s+(?:es|:)?\s*([A-Z][A-Za-z'-]+(?:\s+[A-Z][A-Za-z'-]+){1,3})/i,
+    /\b(?:me llamo|mi nombre es|soy)\s+([\p{L}'-]+(?:\s+[\p{L}'-]+){1,3})/iu,
+    /\b(?:nombre y apellido|nombre)\s+(?:es|:)?\s*([\p{L}'-]+(?:\s+[\p{L}'-]+){1,3})/iu,
   ]
   for (const pattern of patterns) {
     const match = raw.match(pattern)
     if (match?.[1]) return match[1].trim()
   }
-  const capitalized = raw.match(/\b([A-Z][a-z'-]{2,}\s+[A-Z][a-z'-]{2,})\b/)
+  const capitalized = raw.match(/\b([\p{Lu}][\p{L}'-]{2,}\s+[\p{Lu}][\p{L}'-]{2,})\b/u)
   return capitalized?.[1]?.trim() || ''
 }
 
@@ -466,35 +466,41 @@ function inferWrapNeedFromText(text: string): {
   if (!normalized) return null
   const hasWrap =
     /\bwrap\b/.test(normalized) ||
+    /\brap vehicular\b/.test(normalized) ||
+    /\bcar wrap\b/.test(normalized) ||
     /rotulacion/.test(normalized) ||
     /vehicle wrap/.test(normalized) ||
     /vinilo vehicular/.test(normalized) ||
-    /grafica vehicular/.test(normalized)
+    /grafica vehicular/.test(normalized) ||
+    /lettering vehicular/.test(normalized) ||
+    /fleet graphics/.test(normalized)
   if (!hasWrap) return null
 
-  const vehicleType = /\b(auto|carro|car|vehiculo|vehículo)\b/.test(normalized)
+  const vehicleType = /\bvan|furgoneta\b/.test(normalized)
+    ? 'van'
+    : /\b(auto|carro|car|vehiculo|vehículo)\b/.test(normalized)
     ? 'auto'
-    : /\bcamioneta|truck|van\b/.test(normalized)
+    : /\bcamioneta|truck|pickup\b/.test(normalized)
       ? 'camioneta'
       : null
-  const coverage = /\bcompleto|full\b/.test(normalized)
+  const coverage = /\bcompleto|complete|full|total\b/.test(normalized)
     ? 'completo'
     : /\bparcial|partial\b/.test(normalized)
       ? 'parcial'
       : null
   const designHelp =
-    /diseno|diseño|design help|ayuda con.*diseno|ayuda con.*diseño|no tengo.*diseno|no tengo.*diseño/.test(normalized)
+    /\b(diseno|diseño|design|arte|artwork)\b/.test(normalized) &&
+    /\b(ayuda|help|needs|need|necesito|necesita|sin|no tengo|hacer|from us)\b/.test(normalized)
   const timeline = /esta semana|this week/.test(normalized)
     ? 'esta semana'
     : /\burgente|urgent|cuanto antes/.test(normalized)
       ? 'urgente'
       : null
-  const need = [
-    `Cotización de wrap vehicular${coverage ? ` ${coverage}` : ' completo'}`,
-    `para ${vehicleType || 'auto'}`,
-    designHelp ? 'cliente necesita ayuda con diseño' : 'cliente consultó por diseño',
-    `lo necesita ${timeline || 'esta semana'}`,
-  ].join('; ') + '.'
+  const scope = coverage || 'completo'
+  const vehicle = vehicleType || 'auto'
+  const designText = designHelp ? 'necesita diseño' : 'consulta por diseño'
+  const dueText = timeline || 'esta semana'
+  const need = `Cotización de wrap vehicular ${scope} para ${vehicle}. Cliente ${designText}. Lo necesita ${dueText}.`
 
   return { need, vehicleType, coverage: coverage || 'completo', designHelp, timeline: timeline || 'esta semana' }
 }
@@ -619,7 +625,23 @@ export async function executeToolHandler(
         ),
         has_context_phone: Boolean(context.phone?.trim()),
       })
-      const fallbackText = contextTextForTool(context)
+      const argContextText = [
+        typeof args.need === 'string' ? args.need : '',
+        typeof args.notes === 'string' ? args.notes : '',
+        typeof args.reason === 'string' ? args.reason : '',
+        typeof args.motivo === 'string' ? args.motivo : '',
+        typeof args.category === 'string' ? args.category : '',
+        typeof args.summary === 'string' ? args.summary : '',
+        typeof args.next_action === 'string' ? args.next_action : '',
+        typeof args.vehicle_type === 'string' ? args.vehicle_type : '',
+        typeof args.wrap_scope === 'string' ? args.wrap_scope : '',
+        typeof args.timeline === 'string' ? args.timeline : '',
+        typeof args.design_help_needed === 'string' ? args.design_help_needed : '',
+        args.design_help_needed === true ? 'needs design' : '',
+      ]
+        .filter(Boolean)
+        .join('\n')
+      const fallbackText = contextTextForTool(context, argContextText)
       const dictatedPhone = inferConfirmedPhoneFromText(fallbackText)
       const argPhone = typeof args.phone === 'string' ? normalizeDictatedDigits(args.phone) : ''
       const ctxPhone = context.phone ? normalizePhone(context.phone) : ''
@@ -636,10 +658,14 @@ export async function executeToolHandler(
       const full = typeof args.full_name === 'string' ? args.full_name.trim() : ''
       const nameOnly = typeof args.name === 'string' ? args.name.trim() : ''
       const inferredName = inferFullNameFromText(fallbackText)
-      const mergedName =
-        [first, last].filter(Boolean).join(' ').trim() || full || nameOnly || inferredName || undefined
       const modelArgsName = [first, last].filter(Boolean).join(' ').trim() || full || nameOnly || ''
-      const nameSource = modelArgsName ? 'tool_args' : inferredName ? 'transcript' : 'missing'
+      const modelNameLooksLikeFragment = /\b(es|soy|nombre|llamo|jos)\b/i.test(modelArgsName)
+      const transcriptNameWins =
+        leadFullNameValid(inferredName) && (!leadFullNameValid(modelArgsName) || modelNameLooksLikeFragment)
+      const mergedName = transcriptNameWins
+        ? inferredName
+        : modelArgsName || inferredName || undefined
+      const nameSource = transcriptNameWins ? 'transcript' : modelArgsName ? 'tool_args' : inferredName ? 'transcript' : 'missing'
 
       const wrapFallback = inferWrapNeedFromText(fallbackText)
       const quoteContext = quoteContextFromArgs(args)
@@ -673,6 +699,8 @@ export async function executeToolHandler(
           error: 'missing_name' as const,
           primary_message_for_caller:
             'Disculpá, no pude guardar la solicitud todavía. Confirmame tu nombre y apellido.',
+          assistant_instruction:
+            'Say only primary_message_for_caller. Do not say the request was registered.',
         }
       }
 
@@ -692,6 +720,8 @@ export async function executeToolHandler(
           error: 'missing_need' as const,
           primary_message_for_caller:
             'Disculpá, todavía no pude guardar la solicitud. Confirmame qué necesitás cotizar.',
+          assistant_instruction:
+            'Say only primary_message_for_caller. Do not say the request was registered.',
         }
       }
 
@@ -708,7 +738,7 @@ export async function executeToolHandler(
             'Cliente solicita cotización para wrap vehicular.',
           next_action:
             commercial.next_action ||
-            'Llamar cuanto antes para pedir detalles del vehículo y alcance del wrap.',
+            'Llamar para revisar vehículo, alcance del trabajo y preparar cotización.',
           source: commercial.source || 'vapi_call',
           callback_required: true,
           vehicle_type: wrapFallback?.vehicleType || commercial.vehicle_type,
@@ -863,6 +893,8 @@ export async function executeToolHandler(
             out.error === 'missing_name'
               ? 'Disculpá, no pude guardar la solicitud todavía. Confirmame tu nombre y apellido.'
               : 'Disculpá, no pude guardar la solicitud todavía. Confirmame los datos para intentarlo de nuevo.',
+          assistant_instruction:
+            'Say only primary_message_for_caller. Do not say the request was registered.',
         }
       }
 

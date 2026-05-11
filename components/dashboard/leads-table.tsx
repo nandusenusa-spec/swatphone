@@ -30,6 +30,7 @@ import {
 import { format } from 'date-fns'
 import { cn } from '@/lib/utils'
 import { Eye, Phone, Mail, Pencil, Trash2 } from 'lucide-react'
+import { toast } from 'sonner'
 import { EditLeadDialog } from './edit-lead-dialog'
 
 interface Lead {
@@ -75,10 +76,32 @@ export function LeadsTable({ leads, teamMembers }: { leads: Lead[]; teamMembers:
   const supabase = createClient()
 
   const handleStatusChange = async (leadId: string, newStatus: string) => {
-    await supabase
+    // Filas con id "call-XXX" vienen de call_logs, no son leads reales
+    if (leadId.startsWith('call-')) {
+      toast.error('Este registro vino de una llamada, no es un lead aún', {
+        description: 'Editalo desde el botón "lápiz" para convertirlo en lead.',
+        duration: 6000,
+      })
+      return
+    }
+    const { data, error } = await supabase
       .from('leads')
       .update({ status: newStatus, updated_at: new Date().toISOString() })
       .eq('id', leadId)
+      .select('id')
+    if (error) {
+      toast.error('No se pudo actualizar el estado', { description: error.message })
+      return
+    }
+    if (!data || data.length === 0) {
+      // El id no existe en `leads` (probablemente vino de `customers`). Avisar.
+      toast.error('Este contacto aún no es un lead real', {
+        description: 'Click en el lápiz para editarlo y se creará automáticamente.',
+        duration: 6000,
+      })
+      return
+    }
+    toast.success('Estado actualizado')
     router.refresh()
   }
 
