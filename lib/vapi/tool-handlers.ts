@@ -351,15 +351,18 @@ function inferProductNameFromText(text: string): string {
     .replace(/\s+/g, ' ')
     .trim()
   if (!normalized) return ''
+  const mentionsFourBySix =
+    /\b4\s*(x|por|by)\s*6\b/.test(normalized) ||
+    /\bcuatro\s*(por|x)\s*seis\b/.test(normalized)
+  const priceContext =
+    /\b(cuanto|cuestan|cuesta|precio|cotizar|cotizacion|quote|price)\b/.test(normalized)
   if (/\bflyers?\b/.test(normalized)) {
-    if (
-      /\b4\s*(x|por|by)\s*6\b/.test(normalized) ||
-      /\bcuatro\s*(por|x)\s*seis\b/.test(normalized)
-    ) {
+    if (mentionsFourBySix) {
       return 'flyers 4x6'
     }
     return 'flyers'
   }
+  if (mentionsFourBySix && priceContext) return 'flyers 4x6'
   if (/\bbusiness cards?\b|\btc\b|\btarjetas?\b/.test(normalized)) return 'business cards'
   return ''
 }

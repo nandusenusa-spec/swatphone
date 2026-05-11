@@ -41,10 +41,27 @@ import {
 import { workOrderStatusForVoice } from '@/lib/voice-platform/work-order-voice'
 
 const PRODUCT_QUOTE_SAVE_LEAD_INSTRUCTION =
-  'Después de comunicar el precio, si el cliente acepta cotización o pide que le tomes los datos, recolectá nombre y apellido, empresa o particular, teléfono confirmado y email opcional una sola vez. Si dice "no tengo email", "no email", "no" o "no quiero dar email", tratá email como vacío/null y la siguiente acción obligatoria es llamar save_lead_info inmediatamente con full_name, phone, email vacío/null, need, category="printing", intent="quote_request" y source="vapi_call". No digas "te registro", "registré", "quedó guardado", "el equipo te contacta" ni nada similar antes de que save_lead_info devuelva ok:true. Para flyers 4x6, need debe ser "Cotización formal de flyers cuatro por seis, lote de 500 unidades, precio consultado 127 dólares con 50 centavos.". En español decí "flyers cuatro por seis", "127 dólares con 50 centavos" y "¿Cuál es tu teléfono de contacto?". Nunca digas "flyers 4 per 6", "120 27", "contact", "Scene Prolema" ni "Hostel Lago".'
+  'Después de comunicar el precio, si el cliente acepta cotización o pide que le tomes los datos, recolectá nombre y apellido, empresa o particular, teléfono confirmado y email opcional una sola vez. Si dice "no tengo email", "no email", "no" o "no quiero dar email", tratá email como vacío/null y la siguiente acción obligatoria es llamar save_lead_info inmediatamente con full_name, phone, email vacío/null, need, category="printing", intent="quote_request" y source="vapi_call". No confirmes registro, guardado ni contacto humano antes de que save_lead_info devuelva ok:true. Para flyers 4x6, need debe ser "Cotización formal de flyers cuatro por seis, lote de 500 unidades, precio consultado 127 dólares con 50 centavos.". En español usá solo español natural para producto, precio y teléfono.'
 
 function withProductQuoteSaveLeadInstruction(instruction: string): string {
   return `${instruction} ${PRODUCT_QUOTE_SAVE_LEAD_INSTRUCTION}`
+}
+
+function productQuotePrimaryMessage(row: QuoteRow | undefined, inputName: string): string | null {
+  if (!row) return null
+  const normalized = normalizeVoiceProductQuery(`${inputName} ${row.service_name}`).toLowerCase()
+  const isFlyers4x6 =
+    /\bflyers?\b/.test(normalized) &&
+    (/\b4\s*(x|por|by)\s*6\b/.test(normalized) ||
+      /\bcuatro\s*(por|x)\s*seis\b/.test(normalized))
+  const price = typeof row.unit_price === 'number' ? row.unit_price : Number(row.unit_price)
+  if (isFlyers4x6 && Number.isFinite(price)) {
+    const dollars = Math.trunc(price)
+    const cents = Math.round((price - dollars) * 100)
+    const centsPart = cents > 0 ? ` con ${cents} centavos` : ''
+    return `Los flyers cuatro por seis cuestan ${dollars} dólares${centsPart} por un lote de 500 unidades.`
+  }
+  return null
 }
 
 function formatPriceForVoiceUnit(unit: unknown, currency: string | null): string {
@@ -386,6 +403,7 @@ export async function runGetPriceQuote(input: {
     catalog_source: r.source,
     catalog_updated_at: r.source_updated_at,
   }))
+  const primaryMessageForCaller = productQuotePrimaryMessage(first, inputName)
 
   if (rows.length === 0) {
     const triedNote =
@@ -454,8 +472,11 @@ export async function runGetPriceQuote(input: {
     match_count: 1,
     quotes,
     must_confirm_price_with_team: false,
+    primary_message_for_caller: primaryMessageForCaller,
     assistant_instruction: withProductQuoteSaveLeadInstruction(
-      'Comunicá solo el precio y moneda de quotes[0]; no agregues cargos que no figuren en el sistema.',
+      primaryMessageForCaller
+        ? 'Decí primary_message_for_caller exactamente, sin cambiar producto, cantidad, moneda ni precio.'
+        : 'Comunicá solo el precio y moneda de quotes[0]; no agregues cargos que no figuren en el sistema.',
     ),
   }
 }

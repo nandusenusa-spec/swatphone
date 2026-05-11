@@ -40,6 +40,8 @@ import { screenInboundAssistantRequest } from '@/lib/vapi/phone-screening'
 import { textSuggestsPromisedCallback } from '@/lib/voice-platform/callback-heuristic'
 import { normalizePhone } from '@/lib/phone'
 import { logVapiToolCallReceived } from '@/lib/vapi/tool-call-logging'
+import { notifyLeadTelegram } from '@/lib/notifications/telegram'
+import { runSaveLeadInfo } from '@/lib/voice-platform/service'
 
 type JsonRecord = Record<string, unknown>
 
@@ -137,6 +139,160 @@ function endedEvent(type: string): boolean {
     type === 'hang' ||
     type === 'hang-up'
   )
+}
+
+function stripAccentsForMatch(s: string): string {
+  return s.normalize('NFD').replace(/\p{M}/gu, '')
+}
+
+function transcriptUserLines(transcript: string): string[] {
+  return transcript
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => line.replace(/^(User|Caller|Customer|Cliente|Usuario)\s*:\s*/i, '').trim())
+    .filter(Boolean)
+}
+
+function titleCaseName(raw: string): string {
+  return raw
+    .trim()
+    .split(/\s+/)
+    .map((part) => part ? part[0].toUpperCase() + part.slice(1).toLowerCase() : '')
+    .join(' ')
+}
+
+function inferCurrentCallNameFromTranscript(transcript: string): string {
+  const lines = transcriptUserLines(transcript)
+  const blocked = /\b(flyers?|cuatro|seis|telefono|teléfono|email|correo|particular|empresa|cotizacion|cotización|precio|cuestan|confirmado|si|sí|no)\b/i
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const line = lines[i].replace(/[.,;:!?¿¡"]/g, ' ').replace(/\s+/g, ' ').trim()
+    const explicit = line.match(/\b(?:me llamo|mi nombre es|soy)\s+([\p{L}'-]+(?:\s+[\p{L}'-]+){1,3})\b/iu)
+    const candidate = (explicit?.[1] || line).trim()
+    if (blocked.test(candidate)) continue
+    if (/^[\p{L}'-]{3,}(?:\s+[\p{L}'-]{3,}){1,3}$/u.test(candidate)) {
+      return titleCaseName(candidate)
+    }
+  }
+  return ''
+}
+
+function normalizeDictatedPhone(raw: string): string {
+  const digits = raw.replace(/\D/g, '')
+  if (digits.length === 10) return `+1${digits}`
+  if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`
+  return normalizePhone(raw)
+}
+
+function inferDictatedPhoneFromTranscript(transcript: string): string {
+  const digitWords: Record<string, string> = {
+    zero: '0', cero: '0', oh: '0',
+    one: '1', uno: '1',
+    two: '2', dos: '2',
+    three: '3', tres: '3',
+    four: '4', cuatro: '4',
+    five: '5', cinco: '5',
+    six: '6', seis: '6',
+    seven: '7', siete: '7',
+    eight: '8', ocho: '8',
+    nine: '9', nueve: '9',
+  }
+  const lines = transcriptUserLines(transcript)
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    const normalized = stripAccentsForMatch(lines[i]).toLowerCase()
+    const tokens = normalized.match(/\d|zero|cero|oh|one|uno|two|dos|three|tres|four|cuatro|five|cinco|six|seis|seven|siete|eight|ocho|nine|nueve/g)
+    if (tokens && tokens.length >= 10) {
+      const digits = tokens.map((t) => digitWords[t] || t).join('').slice(-10)
+      const phone = normalizeDictatedPhone(digits)
+      if (phone) return phone
+    }
+    const numeric = lines[i].match(/(?:\+?\d[\d\s().-]{7,}\d)/g) || []
+    for (const candidate of numeric.reverse()) {
+      const phone = normalizeDictatedPhone(candidate)
+      if (phone) return phone
+    }
+  }
+  return ''
+}
+
+function hasDeclinedEmail(transcript: string): boolean {
+  const t = stripAccentsForMatch(transcript).toLowerCase()
+  return /\b(no tengo email|no tengo correo|no email|sin email|sin correo|no quiero dar email|no quiero dar correo)\b/.test(t)
+}
+
+function isFlyersQuoteFlow(transcript: string, summary: string): boolean {
+  const t = stripAccentsForMatch(`${summary}\n${transcript}`).toLowerCase().replace(/\s+/g, ' ')
+  const hasFlyers = /\bflyers?\b/.test(t)
+  const hasSize = /\b4\s*(x|por|by)\s*6\b/.test(t) || /\bcuatro\s*(por|x)\s*seis\b/.test(t)
+  const quoteIntent = /\b(cotizacion|cotizar|precio|cuestan|cuesta|presupuesto|127|ciento veintisiete)\b/.test(t)
+  return hasFlyers && hasSize && quoteIntent
+}
+
+async function autoSaveFlyersQuoteLeadFromTranscript(input: {
+  organizationId: string
+  transcript: string
+  summary: string
+  vapiCallId: string
+}) {
+  if (!isFlyersQuoteFlow(input.transcript, input.summary)) return null
+  const fullName = inferCurrentCallNameFromTranscript(input.transcript)
+  const phone = inferDictatedPhoneFromTranscript(input.transcript)
+  const emailDeclined = hasDeclinedEmail(input.transcript)
+  const need =
+    'Cotización formal de flyers cuatro por seis, lote de 500 unidades, precio consultado 127 dólares con 50 centavos.'
+  if (!fullName || !phone || !emailDeclined) {
+    console.info('[vapi/quote-lead-autosave] skipped', {
+      organization_id: input.organizationId,
+      call_id: input.vapiCallId || null,
+      has_name: Boolean(fullName),
+      has_dictated_phone: Boolean(phone),
+      email_declined: emailDeclined,
+    })
+    return null
+  }
+  const out = await runSaveLeadInfo({
+    organizationId: input.organizationId,
+    phone,
+    name: fullName,
+    email: undefined,
+    notes: need,
+    commercialSnapshot: {
+      category: 'printing',
+      intent: 'quote_request',
+      priority: 'normal',
+      estimated_value_level: 'low_medium',
+      source: 'vapi_call',
+      summary: need,
+      next_action: 'Enviar cotización formal de flyers cuatro por seis.',
+      callback_required: true,
+    },
+    vapiCallId: input.vapiCallId || null,
+  })
+  let telegramSent = false
+  if (out.ok) {
+    telegramSent = await notifyLeadTelegram({
+      temperature: 'hot',
+      customerName: fullName,
+      phone,
+      email: null,
+      need,
+      priceRequested: true,
+      category: 'printing',
+      summary: need,
+      nextAction: 'Enviar cotización formal de flyers cuatro por seis.',
+    })
+  }
+  console.info('[vapi/quote-lead-autosave] result', {
+    organization_id: input.organizationId,
+    call_id: input.vapiCallId || null,
+    ok: out.ok,
+    lead_id: out.ok ? out.lead?.id ?? null : null,
+    final_name: fullName,
+    final_phone_suffix: phone.replace(/\D/g, '').slice(-4),
+    telegram_sent: telegramSent,
+    error: out.ok ? null : out.error,
+  })
+  return { out, telegramSent }
 }
 
 
@@ -752,6 +908,16 @@ export async function dispatchVapiEvent(input: {
     followUpAfterFailedTransfer = fu.follow_up_created
   }
 
+  const quoteLeadAutosave =
+    ended && transcriptFinal.trim()
+      ? await autoSaveFlyersQuoteLeadFromTranscript({
+          organizationId: input.organizationId,
+          transcript: transcriptFinal,
+          summary: summary || '',
+          vapiCallId,
+        })
+      : null
+
   return {
     ok: true,
     event_type: eventType || 'unknown',
@@ -759,5 +925,12 @@ export async function dispatchVapiEvent(input: {
     classification: persisted.classification,
     ended_reason: er || undefined,
     follow_up_after_failed_transfer: followUpAfterFailedTransfer,
+    quote_lead_autosave:
+      quoteLeadAutosave
+        ? {
+            ok: quoteLeadAutosave.out.ok,
+            telegram_sent: quoteLeadAutosave.telegramSent,
+          }
+        : undefined,
   }
 }
