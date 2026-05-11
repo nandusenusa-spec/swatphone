@@ -6,6 +6,8 @@ import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { extractSwatCommercialPreview } from '@/lib/vapi/lead-classification'
+import { Trash2 } from 'lucide-react'
+import { toast } from 'sonner'
 
 type CustomerJoin = { name: string | null; phone: string | null } | null
 
@@ -46,6 +48,8 @@ function humanizeFollowUpText(item: FollowUp) {
 export function FollowUpsClient({ initialFollowUps }: { initialFollowUps: FollowUp[] }) {
   const [rows, setRows] = useState(initialFollowUps)
   const [savingId, setSavingId] = useState<string | null>(null)
+  const [deletingId, setDeletingId] = useState<string | null>(null)
+  const [deleteError, setDeleteError] = useState<string | null>(null)
   const router = useRouter()
   const supabase = createClient()
 
@@ -67,12 +71,45 @@ export function FollowUpsClient({ initialFollowUps }: { initialFollowUps: Follow
     }
   }
 
+  const deleteRow = async (id: string) => {
+    const confirmed = window.confirm('¿Seguro que querés borrar este follow-up?')
+    if (!confirmed) return
+    setDeleteError(null)
+    setDeletingId(id)
+    try {
+      const res = await fetch(`/api/dashboard/follow-ups/${id}`, {
+        method: 'DELETE',
+        headers: { 'Content-Type': 'application/json' },
+      })
+      const data = (await res.json().catch(() => ({}))) as { error?: string; message?: string }
+      if (!res.ok) {
+        const msg = data?.message || data?.error || 'No se pudo borrar el follow-up'
+        setDeleteError(msg)
+        toast.error('No se pudo borrar el follow-up', { description: msg })
+        return
+      }
+      toast.success('Follow-up borrado')
+      router.refresh()
+    } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Error de red al borrar follow-up'
+      setDeleteError(msg)
+      toast.error('No se pudo borrar el follow-up', { description: msg })
+    } finally {
+      setDeletingId(null)
+    }
+  }
+
   if (rows.length === 0) {
     return <p className="py-8 text-center text-muted-foreground">No hay follow-ups registrados</p>
   }
 
   return (
     <div className="space-y-3">
+      {deleteError ? (
+        <div className="rounded-md border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive">
+          {deleteError}
+        </div>
+      ) : null}
       {rows.map((item) => {
         const cust = customerFromRow(item)
         const commercial = extractSwatCommercialPreview(item.notes)
@@ -105,7 +142,7 @@ export function FollowUpsClient({ initialFollowUps }: { initialFollowUps: Follow
               </p>
             )}
             <p className="text-xs text-muted-foreground">Owner: {item.owner || 'Sin asignar'}</p>
-            <div className="grid gap-2 md:grid-cols-3">
+            <div className="grid gap-2 md:grid-cols-4">
               <select
                 className="h-10 rounded-md border border-input bg-background px-3 text-sm"
                 value={item.status || 'pending'}
@@ -131,6 +168,14 @@ export function FollowUpsClient({ initialFollowUps }: { initialFollowUps: Follow
               />
               <Button disabled={savingId === item.id} onClick={() => saveRow(item)}>
                 {savingId === item.id ? 'Guardando...' : 'Guardar'}
+              </Button>
+              <Button
+                variant="destructive"
+                disabled={deletingId === item.id}
+                onClick={() => deleteRow(item.id)}
+              >
+                <Trash2 className="mr-2 h-4 w-4" />
+                {deletingId === item.id ? 'Borrando...' : 'Borrar'}
               </Button>
             </div>
             <Input
