@@ -434,6 +434,14 @@ function cleanOptionalEmail(raw: unknown): string | undefined {
   return trimmed
 }
 
+function callerDeclinedEmail(text: string): boolean {
+  const normalized = stripAccentsForMatch(text || '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
+  return /\b(no tengo email|no tengo correo|no email|sin email|sin correo|no quiero dar email|no quiero dar correo)\b/.test(normalized)
+}
+
 function inferProductQuoteNeedFromText(text: string): {
   need: string
   category: string
@@ -452,8 +460,8 @@ function inferProductQuoteNeedFromText(text: string): {
     (/\b4\s*(x|por|by)\s*6\b/.test(normalized) ||
       /\bcuatro\s*(por|x)\s*seis\b/.test(normalized))
   const quoteAccepted =
-    /\bcotizaci[oó]n\b|\bcotizar\b|\bpresupuesto\b/.test(normalized) ||
-    /\b(si|sí|see|correcto|dale|claro|ok|esta bien|está bien)\b/.test(normalized)
+    /\bcotizacion\b|\bcotizar\b|\bpresupuesto\b|\btomar los datos\b|\bte doy mis datos\b|\bno tengo email\b|\bno tengo correo\b/.test(normalized) ||
+    /\b(si|see|correcto|dale|claro|ok|esta bien)\b/.test(normalized)
   if (!mentionsFlyers4x6 || !quoteAccepted) return null
   const need =
     'Cotización formal de flyers cuatro por seis, lote de 500 unidades, precio consultado 127 dólares con 50 centavos.'
@@ -640,6 +648,8 @@ export async function executeToolHandler(
       const ctxPhone = context.phone ? normalizePhone(context.phone) : ''
       const phone = argPhone || dictatedPhone || ctxPhone || ''
       const phoneSource = argPhone ? 'tool_args' : dictatedPhone ? 'transcript' : ctxPhone ? 'caller_id' : 'missing'
+      const emailDeclined = callerDeclinedEmail(fallbackText)
+      const cleanedEmail = emailDeclined ? undefined : cleanOptionalEmail(args.email)
       if (!phone) {
         return missing(['phone'], 'Me falta un dato para registrar tu solicitud.')
       }
@@ -784,7 +794,7 @@ export async function executeToolHandler(
         organizationId: context.organizationId,
         phone,
         name: mergedName,
-        email: cleanOptionalEmail(args.email),
+        email: cleanedEmail,
         company: typeof args.company === 'string' ? args.company : undefined,
         notes: notesWithMeta || mergedNotes,
         commercialSnapshot: commercial,
@@ -831,13 +841,13 @@ export async function executeToolHandler(
           const tgOk = await notifyLeadTelegram({
             temperature: classifyLeadTemperature({
               customerName: mergedName, phone,
-              email: cleanOptionalEmail(args.email) ?? null,
+              email: cleanedEmail ?? null,
               need: mergedNotes||'',
               priceRequested: commercial.intent==='quote_request',
               dateNeeded: typeof args.date_needed==='string'?args.date_needed:null,
             }),
             customerName: mergedName||'Sin nombre', phone,
-            email: cleanOptionalEmail(args.email) ?? null,
+            email: cleanedEmail ?? null,
             need: mergedNotes||'',
             priceRequested: commercial.intent==='quote_request',
             dateNeeded: typeof args.date_needed==='string'?args.date_needed:null,

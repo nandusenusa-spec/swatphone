@@ -15,6 +15,24 @@ type PromptInput = {
   organizationId?: string
 }
 
+function cleanPromptMojibake(text: string): string {
+  let t = text
+  const replacements: Array<[RegExp, string]> = [
+    [/\u00c3\u0192\u00c2\u00a1/g, 'á'], [/\u00c3\u0192\u00c2\u00a9/g, 'é'], [/\u00c3\u0192\u00c2\u00ad/g, 'í'], [/\u00c3\u0192\u00c2\u00b3/g, 'ó'], [/\u00c3\u0192\u00c2\u00ba/g, 'ú'],
+    [/\u00c3\u0192\u00c2\u00b1/g, 'ñ'], [/\u00c3\u0192\u00c2\u00bc/g, 'ü'], [/\u00c3\u0192\u00c2\u008d/g, 'Í'],
+    [/\u00c3\u201a\u00c2\u00bf/g, '¿'], [/\u00c3\u201a\u00c2\u00a1/g, '¡'], [/\u00c3\u201a\u00c2\u00ab/g, '«'], [/\u00c3\u201a\u00c2\u00bb/g, '»'],
+    [/\u00c3\u00a1/g, 'á'], [/\u00c3\u00a9/g, 'é'], [/\u00c3\u00ad/g, 'í'], [/\u00c3\u00b3/g, 'ó'], [/\u00c3\u00ba/g, 'ú'],
+    [/\u00c3\u00b1/g, 'ñ'], [/\u00c3\u00bc/g, 'ü'], [/\u00c3\u0081/g, 'Á'], [/\u00c3\u0089/g, 'É'], [/\u00c3\u008d/g, 'Í'], [/\u00c3\u0093/g, 'Ó'], [/\u00c3\u009a/g, 'Ú'],
+    [/\u00c2\u00bf/g, '¿'], [/\u00c2\u00a1/g, '¡'], [/\u00c2\u00ab/g, '«'], [/\u00c2\u00bb/g, '»'],
+    [/\u00e2\u20ac\u2122/g, '’'], [/\u00e2\u20ac\u0153/g, '“'], [/\u00e2\u20ac\u009d/g, '”'],
+    [/\u00e2\u20ac\u201d/g, '—'], [/\u00e2\u20ac\u201c/g, '–'], [/\u00e2\u2020\u2019/g, '→'], [/\u00e2\u20ac\u00a6/g, '…'],
+  ]
+  for (const [pattern, replacement] of replacements) {
+    t = t.replace(pattern, replacement)
+  }
+  return t
+}
+
 /**
  * Quita del system_prompt guardado en DB instrucciones viejas que contradicen get_job_status opcional.
  * El sync concatena basePrompt + Reglas operativas; si el base repite "organization_id = UUID…", el modelo prioriza eso.
@@ -79,7 +97,7 @@ export function sanitizeAssistantBasePromptForSync(base: string): {
           '',
         )
         .replace(/pedile que te lo deletree letra por letra/gi, '')
-        .replace(/me lo deletre[aÃ¡]s letra por letra/gi, '')
+        .replace(/me lo deletre[aá]s letra por letra/gi, '')
         .replace(/spell it letter by letter/gi, '')
         .replace(/confirm email letter by letter/gi, ''),
   })
@@ -90,7 +108,7 @@ export function sanitizeAssistantBasePromptForSync(base: string): {
     if (t !== before) removedLabels.push(label)
   }
 
-  t = t.replace(/\n{3,}/g, '\n\n').trim()
+  t = cleanPromptMojibake(t.replace(/\n{3,}/g, '\n\n').trim())
   return { cleaned: t, removedLabels }
 }
 
@@ -132,10 +150,10 @@ export function sanitizeFaqTextForSync(text: string): string {
   t = t.replace(/UUID\s+de\s+esta\s+organizaci[oó]n/gi, '')
   t = t.replace(/\bOrganizationID\b[^.]*UUID[^.]*(phone|E\.?164)[^.]*\./gi, '')
   t = t.replace(/pedile que te lo deletree letra por letra/gi, '')
-  t = t.replace(/me lo deletre[aÃ¡]s letra por letra/gi, '')
+  t = t.replace(/me lo deletre[aá]s letra por letra/gi, '')
   t = t.replace(/spell it letter by letter/gi, '')
   t = t.replace(/confirm email letter by letter/gi, '')
-  return t.replace(/\s{2,}/g, ' ').trim()
+  return cleanPromptMojibake(t.replace(/\s{2,}/g, ' ').trim())
 }
 
 export function extractRawSystemPromptFromVapiAssistant(payload: unknown): string | null {
@@ -215,8 +233,11 @@ export function buildSystemPrompt(input: PromptInput): string {
       ? 'Cotización o precio: prohibido decir "no pude cotizar", "no tengo precio" o excusas sin haber llamado antes get_product_price (product_name) o get_price_quote (service_name) con lo que dijo el cliente (incluso si es vago: probá con lo que tengas). Solo después de la respuesta de la tool podés hablar de precio o de falta de match. Los montos salen solo de la tool/DB; no hardcodees precios en voz. Si la tool devuelve varias variantes del mismo producto (lista en quotes con nombres y precios del catálogo), ofrecelas todas con nombre y monto exactos de quotes y una sola pregunta por turno para que elija; no inventes variantes ni precios. Business Cards (BC, tarjetas de presentación, tarjetas de visita, etc.): si dice "BC" sin cantidad, la tool debe listar variantes reales del catálogo; si ya hablaron de BC y dice "las 500", "500", "quinientas" o "five hundred", interpretá Business Cards - 500 y confirmá precio con la tool. Si la tool dice found false o must_confirm_price_with_team: decí "No tengo un precio confirmado para eso. Te tomo los datos y el equipo te envía una cotización." Luego save_lead_info y create_follow_up si prometés envío o contacto. No inventes cifra.'
       : 'No hay catalogo cargado; no intentes cotizar con cifras; ofrecé que un humano lo contacte y usá save_lead_info + create_follow_up si aplica.',
     'Cotización de flyers: si el cliente dice "flyers 4 por 6", "flyers cuatro por seis" o "flyers 4x6", llamá get_product_price con product_name="flyers 4x6" (o get_price_quote con service_name="flyers 4x6"). Si una primera llamada falla por missing product_name/service_name, reintentá con el producto inferido del texto del cliente; no hagas una confirmación rara ni cambies de tema. En español, pronunciá 4x6 como "cuatro por seis", nunca como "cuatrocientos seis". Si el precio viene como 127.5 USD, decí "127 dólares con 50 centavos".',
-    'AceptaciÃ³n de cotizaciÃ³n en espaÃ±ol: si preguntaste "Â¿Te interesa hacer una cotizaciÃ³n?" o similar, tratÃ¡ como SÃ estas respuestas: "sÃ­", "si", "see", "correcto", "dale", "claro", "ok", "estÃ¡ bien". En ese caso NO cierres la llamada: continuÃ¡ captura de lead una pregunta por turno.',
-    'Flujo de lead tras precio de producto: despuÃ©s de cotizar y si el cliente acepta cotizaciÃ³n o pide que le tomes datos, preguntÃ¡ nombre y apellido, empresa o particular, telÃ©fono de contacto, email opcional una sola vez, y llamÃ¡ save_lead_info antes de cerrar. Para flyers cuatro por seis, si el cliente acepta cotizaciÃ³n, save_lead_info debe incluir need="CotizaciÃ³n formal de flyers cuatro por seis, lote de 500 unidades, precio consultado 127 dÃ³lares con 50 centavos.", category="printing", intent="quote_request", source="vapi_call".',
+    'Aceptación de cotización en español: si preguntaste "¿Te interesa hacer una cotización?" o similar, tratá como SÍ estas respuestas: "sí", "si", "see", "correcto", "dale", "claro", "ok", "está bien". En ese caso NO cierres la llamada: continuá captura de lead una pregunta por turno.',
+    'Flujo de lead tras precio de producto: después de cotizar y si el cliente acepta cotización o pide que le tomes datos, preguntá nombre y apellido, empresa o particular, teléfono de contacto, email opcional una sola vez, y llamá save_lead_info antes de cerrar. Para flyers cuatro por seis, si el cliente acepta cotización, save_lead_info debe incluir need="Cotización formal de flyers cuatro por seis, lote de 500 unidades, precio consultado 127 dólares con 50 centavos.", category="printing", intent="quote_request", source="vapi_call".',
+    'Regla obligatoria post-cotización: después de cotizar y recibir aceptación, cuando ya tengas nombre, empresa o particular, teléfono confirmado y email opcional (incluyendo "no tengo email"), llamá save_lead_info inmediatamente antes de decir cualquier frase como "te registro", "registré", "quedó guardado", "el equipo te contacta" o "te van a llamar".',
+    'Email opcional estricto: preguntá una sola vez "¿Tenés un email para enviarte la cotización?". Si responde "no tengo email", "no email", "no" o "no quiero dar email", dejá email vacío/null y continuá directo a save_lead_info. No pidas deletrear, no repreguntes email y no bloquees el guardado por email.',
+    'Fraseo español obligatorio para flyers: decí "flyers cuatro por seis", "127 dólares con 50 centavos" y "¿Cuál es tu teléfono de contacto?". Nunca digas "flyers 4 per 6", "120 27", "Call us to teléfono" ni "teléfono de contact".',
     orgId
       ? `get_job_status: sin find_customer antes solo por estado. parameters.required debe tratarse como vacío: no pidas phone ni organization_id al cliente. Backend usa org configurada y Caller ID. No inventes UUID. Opcional: job_number u order_number. Varias órdenes: primary_message_for_caller del primero o aclaración.`
       : 'get_job_status: sin find_customer antes solo por estado. No pidas phone ni organization_id; el backend los resuelve. Opcional: job_number u order_number.',
@@ -239,12 +260,12 @@ export function buildSystemPrompt(input: PromptInput): string {
     'Address, hours, and location: if the caller asks for address, hours, directions, or location and the business data or FAQ in this prompt contains the answer, answer directly in the caller language. If the data is not available in the prompt/tool result, say the team will follow up instead of inventing.',
     'Reglas de números y voz: decí números, teléfonos, cantidades y precios en el idioma de la conversación. En español: $90 "noventa dólares", $100 "cien dólares"; 500 "quinientas" si habla de tarjetas u cantidad femenina o "quinientos" si el contexto lo pide; 1000 "mil"; teléfono ejemplo 7868673165 dígito por dígito en español. En inglés: $90 "ninety dollars", $100 "one hundred dollars"; 500 "five hundred"; 1000 "one thousand"; mismo teléfono dígito por dígito en inglés. No leas al cliente JSON, IDs, UUIDs, nombres de tools, "toolCallId", "E.164", "organization_id", "backend", "webhook", "Supabase", "required", "schema" ni errores técnicos. Si una tool devuelve algo técnico, convertilo a una frase breve y natural para el cliente.',
     'En llamadas en español no uses "Perfect" ni frases en inglés como "in full color". Usá español natural: "Listo", "Perfecto" o directamente la respuesta. Para flyers 4x6, decí "flyers cuatro por seis".',
-    'Correcciones obligatorias en espaÃ±ol: nunca digas "Call us to telÃ©fono" ni "4 per se". Para pedir telÃ©fono decÃ­ "Â¿CuÃ¡l es tu telÃ©fono de contacto?". Para flyers 4x6 decÃ­ "flyers cuatro por seis"; para cantidades podÃ©s decir "quinientas unidades" o "500 unidades".',
+    'Correcciones obligatorias en español: nunca digas "Call us to teléfono" ni "4 per se". Para pedir teléfono decí "¿Cuál es tu teléfono de contacto?". Para flyers 4x6 decí "flyers cuatro por seis"; para cantidades podés decir "quinientas unidades" o "500 unidades".',
     'Conversation style requirements (mandatory): keep replies very brief; one short sentence at a time; ask one question at a time; no filler; conversational but professional.',
     'Natural English quality: in English calls, ask complete natural questions such as "What is your name?" and "What is the company name?". Never append fragments like "I\'m", "The company", or partial sentence stubs after a question. In Spanish calls, use equally complete Spanish questions. Do not mix languages unless the caller switches language.',
-    'Cierre de llamada: despuÃ©s de confirmar un lead guardado o seguimiento y despedirte, si el cliente dice "gracias", "buen dÃ­a", "hasta luego", "bye" o "thank you", respondÃ© una despedida breve y no hagas mÃ¡s preguntas ni continÃºes la conversaciÃ³n.',
+    'Cierre de llamada: después de confirmar un lead guardado o seguimiento y despedirte, si el cliente dice "gracias", "buen día", "hasta luego", "bye" o "thank you", respondé una despedida breve y no hagas más preguntas ni continúes la conversación.',
   ]
-  return `${input.basePrompt}${routingExtra}\n\nReglas operativas:\n- ${policy.join('\n- ')}\n\nFallback: ${input.fallbackMessage}`
+  return cleanPromptMojibake(`${input.basePrompt}${routingExtra}\n\nReglas operativas:\n- ${policy.join('\n- ')}\n\nFallback: ${input.fallbackMessage}`)
 }
 
 

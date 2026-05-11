@@ -40,6 +40,13 @@ import {
 } from '@/lib/voice-platform/repository'
 import { workOrderStatusForVoice } from '@/lib/voice-platform/work-order-voice'
 
+const PRODUCT_QUOTE_SAVE_LEAD_INSTRUCTION =
+  'Después de comunicar el precio, si el cliente acepta cotización o pide que le tomes los datos, recolectá nombre y apellido, empresa o particular, teléfono confirmado y email opcional una sola vez. Si dice "no tengo email", "no email", "no" o "no quiero dar email", tratá email como vacío/null y la siguiente acción obligatoria es llamar save_lead_info inmediatamente con full_name, phone, email vacío/null, need, category="printing", intent="quote_request" y source="vapi_call". No digas "te registro", "registré", "quedó guardado", "el equipo te contacta" ni nada similar antes de que save_lead_info devuelva ok:true. Para flyers 4x6, need debe ser "Cotización formal de flyers cuatro por seis, lote de 500 unidades, precio consultado 127 dólares con 50 centavos.". En español decí "flyers cuatro por seis", "127 dólares con 50 centavos" y "¿Cuál es tu teléfono de contacto?". Nunca digas "flyers 4 per 6", "120 27", "contact", "Scene Prolema" ni "Hostel Lago".'
+
+function withProductQuoteSaveLeadInstruction(instruction: string): string {
+  return `${instruction} ${PRODUCT_QUOTE_SAVE_LEAD_INSTRUCTION}`
+}
+
 function formatPriceForVoiceUnit(unit: unknown, currency: string | null): string {
   const n = typeof unit === 'number' ? unit : Number(unit)
   const cur = (currency || 'USD').toUpperCase()
@@ -391,8 +398,9 @@ export async function runGetPriceQuote(input: {
       quotes,
       must_confirm_price_with_team: true,
       lookup_terms_tried: terms,
-      assistant_instruction:
-        `No hay precio publicado en el catálogo para esa búsqueda.${triedNote} Decí al cliente, en una frase breve: "No tengo un precio confirmado para eso. Te tomo los datos y el equipo te envía una cotización." Luego save_lead_info (nombre y apellido, teléfono si el cliente lo dio, qué necesita) y, si prometés cotización o contacto, create_follow_up antes de despedirte. No inventes montos.`,
+      assistant_instruction: withProductQuoteSaveLeadInstruction(
+        `No hay precio publicado en el catálogo para esa búsqueda.${triedNote} Decí al cliente, en una frase breve: "No tengo un precio confirmado para eso. Te tomo los datos para una cotización." Luego save_lead_info (nombre y apellido, teléfono si el cliente lo dio, qué necesita) antes de despedirte. No inventes montos.`,
+      ),
     }
   }
 
@@ -415,7 +423,7 @@ export async function runGetPriceQuote(input: {
         match_count: rows.length,
         quotes: quotes.slice(0, 8),
         must_confirm_price_with_team: false,
-        assistant_instruction: buildBusinessCardsVariantsAssistantInstruction(rows),
+        assistant_instruction: withProductQuoteSaveLeadInstruction(buildBusinessCardsVariantsAssistantInstruction(rows)),
       }
     }
     return {
@@ -423,8 +431,9 @@ export async function runGetPriceQuote(input: {
       match_count: rows.length,
       quotes: quotes.slice(0, 5),
       must_confirm_price_with_team: true,
-      assistant_instruction:
+      assistant_instruction: withProductQuoteSaveLeadInstruction(
         'Hay varias coincidencias: leé nombre y precio tal cual vienen en quotes (sin redondear). Si el cliente no elige, pedí aclaración o ofrecé pasar con un asesor.',
+      ),
     }
   }
 
@@ -434,8 +443,9 @@ export async function runGetPriceQuote(input: {
       match_count: 1,
       quotes,
       must_confirm_price_with_team: true,
-      assistant_instruction:
-        'Hay coincidencia en catálogo pero el precio no está confirmado o es referencial (p. ej. cotización por volumen). Decí que el equipo confirma el monto; no inventes cifra. Si aún no guardaste lead, usá save_lead_info y create_follow_up si prometés cotización.',
+      assistant_instruction: withProductQuoteSaveLeadInstruction(
+        'Hay coincidencia en catálogo pero el precio no está confirmado o es referencial (p. ej. cotización por volumen). Decí que el equipo confirma el monto; no inventes cifra. Si aún no guardaste lead, usá save_lead_info antes de cerrar.',
+      ),
     }
   }
 
@@ -444,8 +454,9 @@ export async function runGetPriceQuote(input: {
     match_count: 1,
     quotes,
     must_confirm_price_with_team: false,
-    assistant_instruction:
+    assistant_instruction: withProductQuoteSaveLeadInstruction(
       'Comunicá solo el precio y moneda de quotes[0]; no agregues cargos que no figuren en el sistema.',
+    ),
   }
 }
 
