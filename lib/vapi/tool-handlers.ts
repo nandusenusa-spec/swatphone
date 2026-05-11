@@ -9,7 +9,7 @@ import {
   runMarkSpamCall,
   runSaveLeadInfo,
 } from '@/lib/voice-platform/service'
-import { followUpCountForCallLog, getCallLogIdByVapiCallId } from '@/lib/voice-platform/repository'
+import { followUpCountForCallLog, getCallLogIdByVapiCallId, findTeamMemberByPhoneOrName } from '@/lib/voice-platform/repository'
 import {
   persistCallArtifacts,
   persistFollowUp,
@@ -379,15 +379,45 @@ function inferFullNameFromText(text: string): string {
   return capitalized?.[1]?.trim() || ''
 }
 
-function inferConfirmedPhoneFromText(text: string): string {
+function normalizeDictatedDigits(raw: string): string {
+  const digits = (raw || '').replace(/\D/g, '')
+  if (digits.length === 10) return `+1${digits}`
+  if (digits.length === 11 && digits.startsWith('1')) return `+${digits}`
+  return normalizePhone(raw)
+}
+
+function inferDictatedPhoneFromText(text: string): string {
   const raw = text || ''
-  if (!/\b(correcto|correcta|si|sí|confirmo|exacto|ese es)\b/i.test(raw)) return ''
+  const digitWords: Record<string, string> = {
+    zero: '0', cero: '0', oh: '0',
+    one: '1', uno: '1',
+    two: '2', dos: '2',
+    three: '3', tres: '3',
+    four: '4', cuatro: '4',
+    five: '5', cinco: '5',
+    six: '6', seis: '6',
+    seven: '7', siete: '7',
+    eight: '8', ocho: '8',
+    nine: '9', nueve: '9',
+  }
+  const tokens = stripAccentsForMatch(raw)
+    .toLowerCase()
+    .match(/\d|zero|cero|oh|one|uno|two|dos|three|tres|four|cuatro|five|cinco|six|seis|seven|siete|eight|ocho|nine|nueve/g)
+  if (tokens && tokens.length >= 10) {
+    const digits = tokens.map((t) => digitWords[t] || t).join('')
+    const normalized = normalizeDictatedDigits(digits.slice(-10))
+    if (normalized) return normalized
+  }
   const candidates = raw.match(/(?:\+?\d[\d\s().-]{7,}\d)/g) || []
   for (const candidate of candidates.reverse()) {
-    const normalized = normalizePhone(candidate)
+    const normalized = normalizeDictatedDigits(candidate)
     if (normalized) return normalized
   }
   return ''
+}
+
+function inferConfirmedPhoneFromText(text: string): string {
+  return inferDictatedPhoneFromText(text)
 }
 
 function cleanOptionalEmail(raw: unknown): string | undefined {
@@ -605,10 +635,11 @@ export async function executeToolHandler(
         has_context_phone: Boolean(context.phone?.trim()),
       })
       const fallbackText = contextTextForTool(context)
-      const inferredPhone = inferConfirmedPhoneFromText(fallbackText)
-      const argPhone = typeof args.phone === 'string' ? normalizePhone(args.phone) : ''
+      const dictatedPhone = inferConfirmedPhoneFromText(fallbackText)
+      const argPhone = typeof args.phone === 'string' ? normalizeDictatedDigits(args.phone) : ''
       const ctxPhone = context.phone ? normalizePhone(context.phone) : ''
-      const phone = argPhone || ctxPhone || inferredPhone || ''
+      const phone = argPhone || dictatedPhone || ctxPhone || ''
+      const phoneSource = argPhone ? 'tool_args' : dictatedPhone ? 'transcript' : ctxPhone ? 'caller_id' : 'missing'
       if (!phone) {
         return missing(['phone'], 'Me falta un dato para registrar tu solicitud.')
       }
@@ -620,6 +651,8 @@ export async function executeToolHandler(
       const inferredName = inferFullNameFromText(fallbackText)
       const mergedName =
         [first, last].filter(Boolean).join(' ').trim() || full || nameOnly || inferredName || undefined
+      const modelArgsName = [first, last].filter(Boolean).join(' ').trim() || full || nameOnly || ''
+      const nameSource = modelArgsName ? 'tool_args' : inferredName ? 'transcript' : 'missing'
 
       const wrapFallback = inferWrapNeedFromText(fallbackText)
       const productQuoteFallback = inferProductQuoteNeedFromText(fallbackText)
@@ -721,6 +754,17 @@ export async function executeToolHandler(
 
       const metaBlock = buildCommercialMetaBlock(commercial)
       const notesWithMeta = prependCommercialBlockToNotes(metaBlock, mergedNotes)
+      const teamMemberMatch = await findTeamMemberByPhoneOrName({
+        organizationId: context.organizationId,
+        phone,
+        name: mergedName,
+      }).catch((error) => {
+        console.warn('[vapi/save-lead] team_member_match_lookup_failed', {
+          organization_id: context.organizationId,
+          message: error instanceof Error ? error.message : String(error),
+        })
+        return null
+      })
 
       console.info('[vapi/lead-classification]', {
         toolCallId: context.toolCallId || null,
@@ -751,15 +795,27 @@ export async function executeToolHandler(
         console.info('[vapi/save-lead] name_resolution', {
           toolCallId: context.toolCallId ?? null,
           organization_id: context.organizationId,
+          model_args_name: modelArgsName || null,
+          transcript_name: inferredName || null,
+          caller_id_phone: ctxPhone || null,
+          dictated_phone: dictatedPhone || null,
+          existing_customer_name: out.customer?.name ?? null,
+          team_member_match: teamMemberMatch
+            ? {
+                id: (teamMemberMatch as { id?: string }).id ?? null,
+                name: (teamMemberMatch as { name?: string | null }).name ?? null,
+                phone_suffix:
+                  typeof (teamMemberMatch as { phone?: string | null }).phone === 'string'
+                    ? String((teamMemberMatch as { phone?: string }).phone).replace(/\D/g, '').slice(-4)
+                    : null,
+              }
+            : null,
           current_call_name: mergedName ?? null,
           existing_contact_name: out.customer?.name ?? null,
-          final_saved_name: mergedName ?? out.customer?.name ?? null,
-          name_source:
-            [first, last].filter(Boolean).join(' ').trim() || full || nameOnly
-              ? 'tool_args'
-              : inferredName
-                ? 'transcript'
-                : 'existing_or_none',
+          final_saved_name: out.customer?.name ?? mergedName ?? null,
+          final_saved_phone: out.customer?.phone ?? phone,
+          name_source: nameSource,
+          phone_source: phoneSource,
         })
         console.info('[vapi/save-lead]', {
           toolCallId: context.toolCallId ?? null,

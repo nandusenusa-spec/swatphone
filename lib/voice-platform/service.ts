@@ -787,6 +787,12 @@ export async function runSaveLeadInfo(input: {
   vapiCallId?: string | null
 }): Promise<SaveLeadInfoSuccess | SaveLeadInfoFailure> {
   try {
+    console.info('[voice-platform/runSaveLeadInfo] input_identity', {
+      organization_id: input.organizationId,
+      input_name: input.name ?? null,
+      input_phone: input.phone || null,
+      phone_suffix: input.phone ? input.phone.replace(/\D/g, '').slice(-4) : null,
+    })
     const customer = await upsertCustomerLeadInfo({
       organizationId: input.organizationId,
       phone: input.phone,

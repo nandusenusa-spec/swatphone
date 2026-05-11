@@ -369,6 +369,42 @@ export async function createAppointment(input: {
   return data
 }
 
+export async function findTeamMemberByPhoneOrName(input: {
+  organizationId: string
+  phone?: string | null
+  name?: string | null
+}) {
+  const supabase = createServiceRoleClient()
+  const phone = input.phone ? normalizePhone(input.phone) : ''
+  const name = typeof input.name === 'string' ? input.name.trim() : ''
+
+  if (phone) {
+    const { data, error } = await supabase
+      .from('team_members')
+      .select('id, name, phone, extension, role, department')
+      .eq('organization_id', input.organizationId)
+      .eq('phone', phone)
+      .limit(1)
+      .maybeSingle()
+    if (error && error.code !== 'PGRST205') throw error
+    if (data) return data
+  }
+
+  if (name) {
+    const { data, error } = await supabase
+      .from('team_members')
+      .select('id, name, phone, extension, role, department')
+      .eq('organization_id', input.organizationId)
+      .ilike('name', name)
+      .limit(1)
+      .maybeSingle()
+    if (error && error.code !== 'PGRST205') throw error
+    if (data) return data
+  }
+
+  return null
+}
+
 export async function updateAppointmentCalendarSync(input: {
   appointmentId: string
   googleEventId?: string | null

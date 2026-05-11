@@ -242,6 +242,7 @@ export function buildSystemPrompt(input: PromptInput): string {
     'Correcciones obligatorias en espaÃ±ol: nunca digas "Call us to telÃ©fono" ni "4 per se". Para pedir telÃ©fono decÃ­ "Â¿CuÃ¡l es tu telÃ©fono de contacto?". Para flyers 4x6 decÃ­ "flyers cuatro por seis"; para cantidades podÃ©s decir "quinientas unidades" o "500 unidades".',
     'Conversation style requirements (mandatory): keep replies very brief; one short sentence at a time; ask one question at a time; no filler; conversational but professional.',
     'Natural English quality: in English calls, ask complete natural questions such as "What is your name?" and "What is the company name?". Never append fragments like "I\'m", "The company", or partial sentence stubs after a question. In Spanish calls, use equally complete Spanish questions. Do not mix languages unless the caller switches language.',
+    'Cierre de llamada: despuÃ©s de confirmar un lead guardado o seguimiento y despedirte, si el cliente dice "gracias", "buen dÃ­a", "hasta luego", "bye" o "thank you", respondÃ© una despedida breve y no hagas mÃ¡s preguntas ni continÃºes la conversaciÃ³n.',
   ]
   return `${input.basePrompt}${routingExtra}\n\nReglas operativas:\n- ${policy.join('\n- ')}\n\nFallback: ${input.fallbackMessage}`
 }
