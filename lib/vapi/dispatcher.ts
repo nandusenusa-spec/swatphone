@@ -547,8 +547,8 @@ async function autoSaveQuoteLeadFromTranscript(input: {
   if (out.ok) {
     telegramSent = await notifyLeadTelegram({
       temperature: 'hot',
-      customerName: fullName,
-      phone,
+      customerName: out.customer?.name ?? fullName,
+      phone: out.customer?.phone ?? phone,
       email: null,
       need,
       priceRequested: true,
@@ -640,8 +640,8 @@ async function autoSaveWrapQuoteLeadFromTranscript(input: {
   if (out.ok) {
     telegramSent = await notifyLeadTelegram({
       temperature: 'hot',
-      customerName: fullName,
-      phone,
+      customerName: out.customer?.name ?? fullName,
+      phone: out.customer?.phone ?? phone,
       email: null,
       need: wrap.need,
       priceRequested: true,

@@ -1086,9 +1086,43 @@ export async function upsertCallLog(input: {
         !Array.isArray(existing.structured_extraction)
           ? (existing.structured_extraction as Record<string, unknown>)
           : {}
+      const savedLead =
+        prevStructured.latest_saved_lead &&
+        typeof prevStructured.latest_saved_lead === 'object' &&
+        !Array.isArray(prevStructured.latest_saved_lead)
+          ? (prevStructured.latest_saved_lead as Record<string, unknown>)
+          : {}
+      const savedCustomerId =
+        typeof savedLead.customer_id === 'string' ? savedLead.customer_id : null
+      const savedLeadId = typeof savedLead.lead_id === 'string' ? savedLead.lead_id : null
+      const savedCustomerName =
+        typeof savedLead.customer_name === 'string' ? savedLead.customer_name : null
+
       const mergedStructured = { ...prevStructured, ...incomingStructured }
+      if (savedCustomerId || savedLeadId || savedCustomerName) {
+        mergedStructured.latest_saved_lead = {
+          customer_id: savedCustomerId,
+          lead_id: savedLeadId,
+          customer_name: savedCustomerName,
+        }
+        if (savedCustomerName) {
+          mergedStructured.customer_name = savedCustomerName
+        }
+      }
       const minimalUpdate = { ...minimalPayload, structured_extraction: mergedStructured }
       const legacyUpdate = { ...legacyPayload, structured_extraction: mergedStructured }
+      if (savedCustomerId) {
+        ;(minimalUpdate as Record<string, unknown>).customer_id = savedCustomerId
+        ;(legacyUpdate as Record<string, unknown>).customer_id = savedCustomerId
+      }
+      if (savedLeadId) {
+        ;(minimalUpdate as Record<string, unknown>).lead_id = savedLeadId
+        ;(legacyUpdate as Record<string, unknown>).lead_id = savedLeadId
+      }
+      if (savedCustomerName) {
+        ;(minimalUpdate as Record<string, unknown>).customer_name = savedCustomerName
+        ;(legacyUpdate as Record<string, unknown>).customer_name = savedCustomerName
+      }
       let { data, error } = await supabase
         .from('call_logs')
         .update(minimalUpdate)

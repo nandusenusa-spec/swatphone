@@ -640,6 +640,24 @@ export async function runSaveCallOutcome(input: {
     vapiEndedAtIso: input.vapiEndedAtIso ?? undefined,
   })
 
+  const callLogStructured =
+    callLog &&
+    typeof (callLog as Record<string, unknown>).structured_extraction === 'object' &&
+    (callLog as Record<string, unknown>).structured_extraction !== null &&
+    !Array.isArray((callLog as Record<string, unknown>).structured_extraction)
+      ? ((callLog as Record<string, unknown>).structured_extraction as Record<string, unknown>)
+      : {}
+  const latestSavedLead =
+    callLogStructured.latest_saved_lead &&
+    typeof callLogStructured.latest_saved_lead === 'object' &&
+    !Array.isArray(callLogStructured.latest_saved_lead)
+      ? (callLogStructured.latest_saved_lead as Record<string, unknown>)
+      : {}
+  const finalSavedCustomerId =
+    typeof latestSavedLead.customer_id === 'string' ? latestSavedLead.customer_id : null
+  const finalSavedLeadId =
+    typeof latestSavedLead.lead_id === 'string' ? latestSavedLead.lead_id : null
+
   if (input.ended) {
     try {
       await findOrCreateCustomer({
@@ -696,6 +714,8 @@ export async function runSaveCallOutcome(input: {
       const fuRow = await createFollowUp({
         organizationId: input.organizationId,
         callLogId: callLog.id,
+        customerId: finalSavedCustomerId,
+        leadId: finalSavedLeadId,
         title,
         notes: [input.summary, input.nextAction].filter(Boolean).join('\n') || null,
         owner: input.owner || null,

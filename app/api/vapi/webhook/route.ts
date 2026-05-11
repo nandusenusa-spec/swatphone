@@ -40,7 +40,7 @@ import { resolvePhoneForVapiTool } from '@/lib/vapi/vapi-caller-phone'
 import { executeToolHandler } from '@/lib/vapi/tool-handlers'
 import { logVapiToolCallReceived } from '@/lib/vapi/tool-call-logging'
 import { prepareCommercialFollowUpFromArgs } from '@/lib/vapi/commercial-follow-up'
-import { getCallLogIdByVapiCallId } from '@/lib/voice-platform/repository'
+import { getCallLogLeadCustomerContext } from '@/lib/voice-platform/repository'
 
 type JsonRecord = Record<string, unknown>
 
@@ -588,14 +588,35 @@ async function handleToolCalls(request: NextRequest, flat: JsonRecord, rawBody: 
             typeof args.call_log_id === 'string' && args.call_log_id.trim()
               ? args.call_log_id.trim()
               : undefined
+          let savedLink:
+            | {
+                callLogId: string | null
+                customerId: string | null
+                leadId: string | null
+                customerName: string | null
+              }
+            | null = null
           const vapiCid = getCallIdFromPayload(flat) || ''
           if (!callLogId && vapiCid) {
-            callLogId = (await getCallLogIdByVapiCallId(orgId, vapiCid)) || undefined
+            savedLink = await getCallLogLeadCustomerContext({
+              organizationId: orgId,
+              vapiCallId: vapiCid,
+            })
+            callLogId = savedLink.callLogId || undefined
+          }
+          if (!savedLink && vapiCid) {
+            savedLink = await getCallLogLeadCustomerContext({
+              organizationId: orgId,
+              vapiCallId: vapiCid,
+            })
           }
           const out = await runCreateFollowUp({
             organizationId: orgId,
             phone: phoneRaw || (typeof args.phone === 'string' ? args.phone : undefined),
-            customerId: typeof args.customer_id === 'string' ? args.customer_id : undefined,
+            customerId:
+              savedLink?.customerId ||
+              (typeof args.customer_id === 'string' ? args.customer_id : undefined),
+            leadId: savedLink?.leadId || undefined,
             callLogId,
             title: prep.title,
             notes: prep.notesMerged,

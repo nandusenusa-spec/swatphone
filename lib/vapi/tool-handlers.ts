@@ -116,6 +116,8 @@ async function saveAndNotifyTransferRequestLead(input: {
 
   let leadSaved = false
   let leadId: string | null = null
+  let savedCustomerName: string | null = null
+  let savedCustomerPhone: string | null = null
   try {
     const out = await runSaveLeadInfo({
       organizationId: input.organizationId,
@@ -127,6 +129,8 @@ async function saveAndNotifyTransferRequestLead(input: {
     })
     leadSaved = Boolean(out.ok)
     leadId = out.ok ? out.lead?.id ?? null : null
+    savedCustomerName = out.ok ? out.customer?.name ?? null : null
+    savedCustomerPhone = out.ok ? out.customer?.phone ?? null : null
     console.info('[vapi/transfer-request-lead] saved', {
       organization_id: input.organizationId,
       call_id: input.vapiCallId || null,
@@ -136,6 +140,7 @@ async function saveAndNotifyTransferRequestLead(input: {
       lead_id: leadId,
       error: out.ok ? null : out.error,
     })
+    if (!out.ok) return
   } catch (err) {
     console.error('[vapi/transfer-request-lead] save_error', {
       organization_id: input.organizationId,
@@ -143,13 +148,14 @@ async function saveAndNotifyTransferRequestLead(input: {
       requested_department: requestedDepartment,
       error: err instanceof Error ? err.message : String(err),
     })
+    return
   }
 
   try {
     const tgOk = await notifyLeadTelegram({
       temperature: 'lukewarm',
-      customerName: customerName || 'Transfer request',
-      phone,
+      customerName: savedCustomerName || customerName || 'Transfer request',
+      phone: savedCustomerPhone || phone,
       need: requestSummary,
       priceRequested: false,
       category: 'transfer_request',
@@ -957,13 +963,15 @@ export async function executeToolHandler(
         try {
           const tgOk = await notifyLeadTelegram({
             temperature: classifyLeadTemperature({
-              customerName: finalName, phone,
+              customerName: out.customer?.name ?? finalName,
+              phone: out.customer?.phone ?? phone,
               email: cleanedEmail ?? null,
               need: mergedNotes||'',
               priceRequested: commercial.intent==='quote_request',
               dateNeeded: typeof args.date_needed==='string'?args.date_needed:null,
             }),
-            customerName: finalName, phone,
+            customerName: out.customer?.name ?? finalName,
+            phone: out.customer?.phone ?? phone,
             email: cleanedEmail ?? null,
             need: mergedNotes||'',
             priceRequested: commercial.intent==='quote_request',
