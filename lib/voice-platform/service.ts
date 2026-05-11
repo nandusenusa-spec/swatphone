@@ -40,28 +40,53 @@ import {
 } from '@/lib/voice-platform/repository'
 import { workOrderStatusForVoice } from '@/lib/voice-platform/work-order-voice'
 
+export type QuoteContext = {
+  service_name: string
+  unit_price: unknown
+  currency: string
+  description: string | null
+  catalog_source: string
+  catalog_updated_at: string | null
+  primary_message_for_caller: string
+  need_for_lead: string
+}
+
 const PRODUCT_QUOTE_SAVE_LEAD_INSTRUCTION =
-  'Después de comunicar el precio, si el cliente acepta cotización o pide que le tomes los datos, recolectá nombre y apellido, empresa o particular, teléfono confirmado y email opcional una sola vez. Si dice "no tengo email", "no email", "no" o "no quiero dar email", tratá email como vacío/null y la siguiente acción obligatoria es llamar save_lead_info inmediatamente con full_name, phone, email vacío/null, need, category="printing", intent="quote_request" y source="vapi_call". No confirmes registro, guardado ni contacto humano antes de que save_lead_info devuelva ok:true. Para flyers 4x6, need debe ser "Cotización formal de flyers cuatro por seis, lote de 500 unidades, precio consultado 127 dólares con 50 centavos.". En español usá solo español natural para producto, precio y teléfono.'
+  'Repeat primary_message_for_caller exactly. If the caller accepts a formal quote, collect name, company or individual, confirmed phone, and optional email once, then call save_lead_info with quote_context.need_for_lead, category="catalog_quote", intent="quote_request", source="vapi_call". Do not confirm registration before save_lead_info returns ok:true.'
 
 function withProductQuoteSaveLeadInstruction(instruction: string): string {
   return `${instruction} ${PRODUCT_QUOTE_SAVE_LEAD_INSTRUCTION}`
 }
 
-function productQuotePrimaryMessage(row: QuoteRow | undefined, inputName: string): string | null {
-  if (!row) return null
-  const normalized = normalizeVoiceProductQuery(`${inputName} ${row.service_name}`).toLowerCase()
-  const isFlyers4x6 =
-    /\bflyers?\b/.test(normalized) &&
-    (/\b4\s*(x|por|by)\s*6\b/.test(normalized) ||
-      /\bcuatro\s*(por|x)\s*seis\b/.test(normalized))
-  const price = typeof row.unit_price === 'number' ? row.unit_price : Number(row.unit_price)
-  if (isFlyers4x6 && Number.isFinite(price)) {
-    const dollars = Math.trunc(price)
-    const cents = Math.round((price - dollars) * 100)
-    const centsPart = cents > 0 ? ` con ${cents} centavos` : ''
-    return `Los flyers cuatro por seis cuestan ${dollars} dólares${centsPart} por un lote de 500 unidades.`
+function formatCatalogPriceForLead(unit: unknown, currency: string | null): string {
+  const cur = (currency || 'USD').toUpperCase()
+  const n = typeof unit === 'number' ? unit : Number(unit)
+  if (!Number.isFinite(n)) return `precio a confirmar ${cur}`
+  const fixed = Number.isInteger(n) ? String(n) : n.toFixed(2).replace(/0$/, '').replace(/\.0$/, '')
+  if (cur === 'USD') {
+    const dollars = Math.trunc(n)
+    const cents = Math.round((n - dollars) * 100)
+    return cents > 0 ? `${dollars} dólares con ${cents} centavos` : `${dollars} dólares`
   }
-  return null
+  return `${fixed} ${cur}`
+}
+
+function buildQuoteContext(row: QuoteRow | undefined): QuoteContext | null {
+  if (!row) return null
+  const currency = (row.currency || 'USD').toUpperCase()
+  const formattedPrice = formatCatalogPriceForLead(row.unit_price, currency)
+  const serviceName = row.service_name.trim()
+  const primary = `${serviceName} cuesta ${formattedPrice}.`
+  return {
+    service_name: serviceName,
+    unit_price: row.unit_price,
+    currency,
+    description: row.description ?? null,
+    catalog_source: row.source,
+    catalog_updated_at: row.source_updated_at ?? null,
+    primary_message_for_caller: primary,
+    need_for_lead: `Cotización formal de ${serviceName}, precio consultado ${formattedPrice}.`,
+  }
 }
 
 function formatPriceForVoiceUnit(unit: unknown, currency: string | null): string {
@@ -403,7 +428,7 @@ export async function runGetPriceQuote(input: {
     catalog_source: r.source,
     catalog_updated_at: r.source_updated_at,
   }))
-  const primaryMessageForCaller = productQuotePrimaryMessage(first, inputName)
+  const quoteContext = buildQuoteContext(first)
 
   if (rows.length === 0) {
     const triedNote =
@@ -441,6 +466,7 @@ export async function runGetPriceQuote(input: {
         match_count: rows.length,
         quotes: quotes.slice(0, 8),
         must_confirm_price_with_team: false,
+        quote_contexts: rows.slice(0, 8).map((row) => buildQuoteContext(row)).filter(Boolean),
         assistant_instruction: withProductQuoteSaveLeadInstruction(buildBusinessCardsVariantsAssistantInstruction(rows)),
       }
     }
@@ -448,6 +474,7 @@ export async function runGetPriceQuote(input: {
       found: true,
       match_count: rows.length,
       quotes: quotes.slice(0, 5),
+      quote_contexts: rows.slice(0, 5).map((row) => buildQuoteContext(row)).filter(Boolean),
       must_confirm_price_with_team: true,
       assistant_instruction: withProductQuoteSaveLeadInstruction(
         'Hay varias coincidencias: leé nombre y precio tal cual vienen en quotes (sin redondear). Si el cliente no elige, pedí aclaración o ofrecé pasar con un asesor.',
@@ -460,6 +487,7 @@ export async function runGetPriceQuote(input: {
       found: true,
       match_count: 1,
       quotes,
+      quote_context: quoteContext,
       must_confirm_price_with_team: true,
       assistant_instruction: withProductQuoteSaveLeadInstruction(
         'Hay coincidencia en catálogo pero el precio no está confirmado o es referencial (p. ej. cotización por volumen). Decí que el equipo confirma el monto; no inventes cifra. Si aún no guardaste lead, usá save_lead_info antes de cerrar.',
@@ -472,9 +500,10 @@ export async function runGetPriceQuote(input: {
     match_count: 1,
     quotes,
     must_confirm_price_with_team: false,
-    primary_message_for_caller: primaryMessageForCaller,
+    primary_message_for_caller: quoteContext?.primary_message_for_caller ?? null,
+    quote_context: quoteContext,
     assistant_instruction: withProductQuoteSaveLeadInstruction(
-      primaryMessageForCaller
+      quoteContext
         ? 'Decí primary_message_for_caller exactamente, sin cambiar producto, cantidad, moneda ni precio.'
         : 'Comunicá solo el precio y moneda de quotes[0]; no agregues cargos que no figuren en el sistema.',
     ),

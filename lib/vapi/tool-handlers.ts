@@ -346,25 +346,19 @@ function contextTextForTool(context: ToolContext, ...extra: string[]): string {
 }
 
 function inferProductNameFromText(text: string): string {
-  const normalized = stripAccentsForMatch(text || '')
+  let normalized = stripAccentsForMatch(text || '')
     .toLowerCase()
     .replace(/\s+/g, ' ')
     .trim()
   if (!normalized) return ''
-  const mentionsFourBySix =
-    /\b4\s*(x|por|by)\s*6\b/.test(normalized) ||
-    /\bcuatro\s*(por|x)\s*seis\b/.test(normalized)
-  const priceContext =
-    /\b(cuanto|cuestan|cuesta|precio|cotizar|cotizacion|quote|price)\b/.test(normalized)
-  if (/\bflyers?\b/.test(normalized)) {
-    if (mentionsFourBySix) {
-      return 'flyers 4x6'
-    }
-    return 'flyers'
-  }
-  if (mentionsFourBySix && priceContext) return 'flyers 4x6'
-  if (/\bbusiness cards?\b|\btc\b|\btarjetas?\b/.test(normalized)) return 'business cards'
-  return ''
+  normalized = normalized
+    .replace(/\b4\s*(x|por|by)\s*6\b/g, '4x6')
+    .replace(/\bcuatro\s*(por|x)\s*seis\b/g, '4x6')
+    .replace(/[¿?¡!.,;:"]/g, ' ')
+    .replace(/\b(cuanto|cuantos|cuestan|cuesta|sale|salen|precio|precios|cotizar|cotizacion|quote|price|the|los|las|el|la|un|una|de|del|por favor)\b/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+  return normalized.length >= 2 ? normalized : ''
 }
 
 function inferFullNameFromText(text: string): string {
@@ -445,37 +439,17 @@ function callerDeclinedEmail(text: string): boolean {
   return /\b(no tengo email|no tengo correo|no email|sin email|sin correo|no quiero dar email|no quiero dar correo)\b/.test(normalized)
 }
 
-function inferProductQuoteNeedFromText(text: string): {
-  need: string
-  category: string
-  intent: string
-  source: string
-  summary: string
-  nextAction: string
+function quoteContextFromArgs(args: Record<string, unknown>): {
+  serviceName: string
+  needForLead: string
 } | null {
-  const normalized = stripAccentsForMatch(text || '')
-    .toLowerCase()
-    .replace(/\s+/g, ' ')
-    .trim()
-  if (!normalized) return null
-  const mentionsFlyers4x6 =
-    /\bflyers?\b/.test(normalized) &&
-    (/\b4\s*(x|por|by)\s*6\b/.test(normalized) ||
-      /\bcuatro\s*(por|x)\s*seis\b/.test(normalized))
-  const quoteAccepted =
-    /\bcotizacion\b|\bcotizar\b|\bpresupuesto\b|\btomar los datos\b|\bte doy mis datos\b|\bno tengo email\b|\bno tengo correo\b/.test(normalized) ||
-    /\b(si|see|correcto|dale|claro|ok|esta bien)\b/.test(normalized)
-  if (!mentionsFlyers4x6 || !quoteAccepted) return null
-  const need =
-    'Cotización formal de flyers cuatro por seis, lote de 500 unidades, precio consultado 127 dólares con 50 centavos.'
-  return {
-    need,
-    category: 'printing',
-    intent: 'quote_request',
-    source: 'vapi_call',
-    summary: need,
-    nextAction: 'Enviar cotización formal de flyers cuatro por seis.',
-  }
+  const raw = args.quote_context
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) return null
+  const rec = raw as Record<string, unknown>
+  const serviceName = typeof rec.service_name === 'string' ? rec.service_name.trim() : ''
+  const needForLead = typeof rec.need_for_lead === 'string' ? rec.need_for_lead.trim() : ''
+  if (!serviceName || !needForLead) return null
+  return { serviceName, needForLead }
 }
 
 function inferWrapNeedFromText(text: string): {
@@ -668,13 +642,13 @@ export async function executeToolHandler(
       const nameSource = modelArgsName ? 'tool_args' : inferredName ? 'transcript' : 'missing'
 
       const wrapFallback = inferWrapNeedFromText(fallbackText)
-      const productQuoteFallback = inferProductQuoteNeedFromText(fallbackText)
+      const quoteContext = quoteContextFromArgs(args)
       const noteParts = [
         typeof args.notes === 'string' ? args.notes.trim() : '',
         typeof args.need === 'string' ? args.need.trim() : '',
         typeof args.motivo === 'string' ? args.motivo.trim() : '',
         typeof args.reason === 'string' ? args.reason.trim() : '',
-        productQuoteFallback?.need || '',
+        quoteContext?.needForLead || '',
         wrapFallback?.need || '',
       ].filter(Boolean)
       const mergedNotes = noteParts.join('\n').trim() || undefined
@@ -742,16 +716,16 @@ export async function executeToolHandler(
           design_help_needed: wrapFallback?.designHelp ?? commercial.design_help_needed,
           timeline: wrapFallback?.timeline || commercial.timeline,
         }
-      } else if (productQuoteFallback) {
+      } else if (quoteContext) {
         commercial = {
           ...commercial,
-          category: commercial.category || productQuoteFallback.category,
-          intent: commercial.intent || productQuoteFallback.intent,
+          category: commercial.category || 'catalog_quote',
+          intent: commercial.intent || 'quote_request',
           priority: commercial.priority || 'normal',
           estimated_value_level: commercial.estimated_value_level || 'low_medium',
-          summary: commercial.summary || productQuoteFallback.summary,
-          next_action: commercial.next_action || productQuoteFallback.nextAction,
-          source: commercial.source || productQuoteFallback.source,
+          summary: commercial.summary || quoteContext.needForLead,
+          next_action: commercial.next_action || `Enviar cotización formal de ${quoteContext.serviceName}.`,
+          source: commercial.source || 'vapi_call',
           callback_required: commercial.callback_required ?? true,
         }
       } else if (!commercial.category && sniff) {

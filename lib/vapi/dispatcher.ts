@@ -3,7 +3,12 @@ import { getOrganizationRuntimeConfig } from '@/lib/vapi/runtime-config'
 import { executeToolHandler } from '@/lib/vapi/tool-handlers'
 import { persistCallArtifacts, persistSpamRejection } from '@/lib/vapi/persistence'
 import { getTranscriberConfigForVapi, resolveOpenAiVoiceForOrganization } from '@/lib/vapi/voice-for-vapi'
-import { shouldRejectByValidation } from '@/lib/voice-platform/service'
+import {
+  runCreateFollowUp,
+  runSaveLeadInfo,
+  shouldRejectByValidation,
+  type QuoteContext,
+} from '@/lib/voice-platform/service'
 import {
   isWarmTransferFailureEndedReason,
   onStatusUpdate,
@@ -41,7 +46,6 @@ import { textSuggestsPromisedCallback } from '@/lib/voice-platform/callback-heur
 import { normalizePhone } from '@/lib/phone'
 import { logVapiToolCallReceived } from '@/lib/vapi/tool-call-logging'
 import { notifyLeadTelegram } from '@/lib/notifications/telegram'
-import { runSaveLeadInfo } from '@/lib/voice-platform/service'
 
 type JsonRecord = Record<string, unknown>
 
@@ -220,30 +224,167 @@ function hasDeclinedEmail(transcript: string): boolean {
   return /\b(no tengo email|no tengo correo|no email|sin email|sin correo|no quiero dar email|no quiero dar correo)\b/.test(t)
 }
 
-function isFlyersQuoteFlow(transcript: string, summary: string): boolean {
-  const t = stripAccentsForMatch(`${summary}\n${transcript}`).toLowerCase().replace(/\s+/g, ' ')
-  const hasFlyers = /\bflyers?\b/.test(t)
-  const hasSize = /\b4\s*(x|por|by)\s*6\b/.test(t) || /\bcuatro\s*(por|x)\s*seis\b/.test(t)
-  const quoteIntent = /\b(cotizacion|cotizar|precio|cuestan|cuesta|presupuesto|127|ciento veintisiete)\b/.test(t)
-  return hasFlyers && hasSize && quoteIntent
+function inferWrapQuoteNeedFromTranscript(transcript: string): {
+  need: string
+  vehicleType: string | null
+  coverage: string | null
+  designHelp: boolean
+  timeline: string | null
+} | null {
+  const normalized = stripAccentsForMatch(transcript || '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!normalized) return null
+  const hasWrap =
+    /\bwrap\b/.test(normalized) ||
+    /\bvehicle wrap\b/.test(normalized) ||
+    /\bcar wrap\b/.test(normalized) ||
+    /\bwrap vehicular\b/.test(normalized) ||
+    /\brotulacion vehicular\b/.test(normalized) ||
+    /\bvinilo vehicular\b/.test(normalized) ||
+    /\bgrafica vehicular\b/.test(normalized) ||
+    /\blettering vehicular\b/.test(normalized) ||
+    /\bfleet graphics\b/.test(normalized)
+  if (!hasWrap) return null
+
+  const vehicleType = /\b(auto|carro|coche|car|vehiculo|sedan)\b/.test(normalized)
+    ? 'auto'
+    : /\b(camioneta|truck|pickup|van|furgoneta)\b/.test(normalized)
+      ? 'camioneta'
+      : /\b(flota|fleet)\b/.test(normalized)
+        ? 'flota'
+        : null
+  const coverage = /\b(completo|full|total)\b/.test(normalized)
+    ? 'completo'
+    : /\b(parcial|partial)\b/.test(normalized)
+      ? 'parcial'
+      : null
+  const designHelp =
+    /\b(diseno|design|arte|artwork)\b/.test(normalized) &&
+    /\b(ayuda|help|necesito|necesita|sin|no tengo|hacer)\b/.test(normalized)
+  const timeline = /\b(esta semana|this week)\b/.test(normalized)
+    ? 'esta semana'
+    : /\b(urgente|urgent|cuanto antes|as soon as possible)\b/.test(normalized)
+      ? 'urgente'
+      : null
+
+  const details = [
+    vehicleType ? `vehículo: ${vehicleType}` : null,
+    coverage ? `alcance: ${coverage}` : null,
+    designHelp ? 'necesita ayuda con diseño' : null,
+    timeline ? `plazo: ${timeline}` : null,
+  ].filter(Boolean)
+  return {
+    need: `Cotización de wrap vehicular${details.length ? `; ${details.join('; ')}` : ''}.`,
+    vehicleType,
+    coverage,
+    designHelp,
+    timeline,
+  }
 }
 
-async function autoSaveFlyersQuoteLeadFromTranscript(input: {
+function quoteContextFromUnknown(value: unknown): QuoteContext | null {
+  if (!value || typeof value !== 'object' || Array.isArray(value)) return null
+  const rec = value as Record<string, unknown>
+  const serviceName = typeof rec.service_name === 'string' ? rec.service_name.trim() : ''
+  const primary = typeof rec.primary_message_for_caller === 'string' ? rec.primary_message_for_caller.trim() : ''
+  const need = typeof rec.need_for_lead === 'string' ? rec.need_for_lead.trim() : ''
+  if (!serviceName || !primary || !need) return null
+  return {
+    service_name: serviceName,
+    unit_price: rec.unit_price,
+    currency: typeof rec.currency === 'string' ? rec.currency : 'USD',
+    description: typeof rec.description === 'string' ? rec.description : null,
+    catalog_source: typeof rec.catalog_source === 'string' ? rec.catalog_source : 'unknown',
+    catalog_updated_at: typeof rec.catalog_updated_at === 'string' ? rec.catalog_updated_at : null,
+    primary_message_for_caller: primary,
+    need_for_lead: need,
+  }
+}
+
+function quoteContextFromToolResult(out: unknown): QuoteContext | null {
+  if (!out || typeof out !== 'object') return null
+  const rec = out as Record<string, unknown>
+  return quoteContextFromUnknown(rec.quote_context)
+}
+
+async function persistQuoteContextForCall(input: {
+  organizationId: string
+  vapiCallId: string
+  phone: string
+  quoteContext: QuoteContext
+}) {
+  if (!input.vapiCallId || !input.phone) return
+  const supabase = createServiceRoleClient()
+  const { data: rows } = await supabase
+    .from('call_logs')
+    .select('id, structured_extraction')
+    .eq('organization_id', input.organizationId)
+    .eq('vapi_call_id', input.vapiCallId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+  const existing = rows?.[0]
+  const prev =
+    existing?.structured_extraction &&
+    typeof existing.structured_extraction === 'object' &&
+    !Array.isArray(existing.structured_extraction)
+      ? (existing.structured_extraction as Record<string, unknown>)
+      : {}
+  const structured = { ...prev, quote_context: input.quoteContext }
+  if (existing?.id) {
+    await supabase.from('call_logs').update({ structured_extraction: structured }).eq('id', existing.id)
+    return
+  }
+  await supabase.from('call_logs').insert({
+    organization_id: input.organizationId,
+    vapi_call_id: input.vapiCallId,
+    phone: input.phone,
+    structured_extraction: structured,
+    validation_status: 'pending',
+    spam_score: 0,
+  })
+}
+
+async function getStoredQuoteContext(input: {
+  organizationId: string
+  vapiCallId: string
+}): Promise<QuoteContext | null> {
+  if (!input.vapiCallId) return null
+  const supabase = createServiceRoleClient()
+  const { data } = await supabase
+    .from('call_logs')
+    .select('structured_extraction')
+    .eq('organization_id', input.organizationId)
+    .eq('vapi_call_id', input.vapiCallId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  const rec =
+    data?.structured_extraction &&
+    typeof data.structured_extraction === 'object' &&
+    !Array.isArray(data.structured_extraction)
+      ? (data.structured_extraction as Record<string, unknown>)
+      : {}
+  return quoteContextFromUnknown(rec.quote_context)
+}
+
+async function autoSaveQuoteLeadFromTranscript(input: {
   organizationId: string
   transcript: string
-  summary: string
   vapiCallId: string
+  quoteContext: QuoteContext | null
 }) {
-  if (!isFlyersQuoteFlow(input.transcript, input.summary)) return null
+  if (!input.quoteContext) return null
   const fullName = inferCurrentCallNameFromTranscript(input.transcript)
   const phone = inferDictatedPhoneFromTranscript(input.transcript)
   const emailDeclined = hasDeclinedEmail(input.transcript)
-  const need =
-    'Cotización formal de flyers cuatro por seis, lote de 500 unidades, precio consultado 127 dólares con 50 centavos.'
+  const need = input.quoteContext.need_for_lead
   if (!fullName || !phone || !emailDeclined) {
     console.info('[vapi/quote-lead-autosave] skipped', {
       organization_id: input.organizationId,
       call_id: input.vapiCallId || null,
+      service_name: input.quoteContext.service_name,
       has_name: Boolean(fullName),
       has_dictated_phone: Boolean(phone),
       email_declined: emailDeclined,
@@ -257,13 +398,13 @@ async function autoSaveFlyersQuoteLeadFromTranscript(input: {
     email: undefined,
     notes: need,
     commercialSnapshot: {
-      category: 'printing',
+      category: 'catalog_quote',
       intent: 'quote_request',
       priority: 'normal',
       estimated_value_level: 'low_medium',
       source: 'vapi_call',
       summary: need,
-      next_action: 'Enviar cotización formal de flyers cuatro por seis.',
+      next_action: `Enviar cotización formal de ${input.quoteContext.service_name}.`,
       callback_required: true,
     },
     vapiCallId: input.vapiCallId || null,
@@ -277,9 +418,9 @@ async function autoSaveFlyersQuoteLeadFromTranscript(input: {
       email: null,
       need,
       priceRequested: true,
-      category: 'printing',
+      category: 'catalog_quote',
       summary: need,
-      nextAction: 'Enviar cotización formal de flyers cuatro por seis.',
+      nextAction: `Enviar cotización formal de ${input.quoteContext.service_name}.`,
     })
   }
   console.info('[vapi/quote-lead-autosave] result', {
@@ -293,6 +434,86 @@ async function autoSaveFlyersQuoteLeadFromTranscript(input: {
     error: out.ok ? null : out.error,
   })
   return { out, telegramSent }
+}
+
+async function autoSaveWrapQuoteLeadFromTranscript(input: {
+  organizationId: string
+  transcript: string
+  vapiCallId: string
+  callLogId?: string | null
+}) {
+  const wrap = inferWrapQuoteNeedFromTranscript(input.transcript)
+  if (!wrap) return null
+  const fullName = inferCurrentCallNameFromTranscript(input.transcript)
+  const phone = inferDictatedPhoneFromTranscript(input.transcript)
+  if (!fullName || !phone) {
+    console.info('[vapi/wrap-lead-autosave] skipped', {
+      organization_id: input.organizationId,
+      call_id: input.vapiCallId || null,
+      has_name: Boolean(fullName),
+      has_dictated_phone: Boolean(phone),
+    })
+    return null
+  }
+  const commercial = {
+    category: 'wrap',
+    intent: 'quote_request',
+    priority: 'high',
+    estimated_value_level: 'high',
+    source: 'vapi_call',
+    summary: wrap.need,
+    next_action: 'Llamar para revisar vehículo, alcance del trabajo y preparar cotización.',
+    callback_required: true,
+    ...(wrap.vehicleType ? { vehicle_type: wrap.vehicleType } : {}),
+    ...(wrap.coverage ? { wrap_scope: wrap.coverage } : {}),
+    ...(wrap.designHelp ? { design_help_needed: true } : {}),
+    ...(wrap.timeline ? { timeline: wrap.timeline } : {}),
+  }
+  const out = await runSaveLeadInfo({
+    organizationId: input.organizationId,
+    phone,
+    name: fullName,
+    notes: wrap.need,
+    commercialSnapshot: commercial,
+    vapiCallId: input.vapiCallId || null,
+  })
+  let telegramSent = false
+  let followUpCreated = false
+  if (out.ok) {
+    telegramSent = await notifyLeadTelegram({
+      temperature: 'hot',
+      customerName: fullName,
+      phone,
+      email: null,
+      need: wrap.need,
+      priceRequested: true,
+      category: 'wrap',
+      summary: wrap.need,
+      nextAction: commercial.next_action,
+    })
+    const followUp = await runCreateFollowUp({
+      organizationId: input.organizationId,
+      callLogId: input.callLogId || undefined,
+      phone,
+      title: 'Llamar por cotización de wrap',
+      notes: [`Cliente: ${fullName}`, `Tel: ${phone}`, wrap.need].join('\n'),
+      priority: 'high',
+      callbackRequired: true,
+    })
+    followUpCreated = Boolean(followUp)
+  }
+  console.info('[vapi/wrap-lead-autosave] result', {
+    organization_id: input.organizationId,
+    call_id: input.vapiCallId || null,
+    ok: out.ok,
+    lead_id: out.ok ? out.lead?.id ?? null : null,
+    final_name: fullName,
+    final_phone_suffix: phone.replace(/\D/g, '').slice(-4),
+    telegram_sent: telegramSent,
+    follow_up_created: followUpCreated,
+    error: out.ok ? null : out.error,
+  })
+  return { out, telegramSent, followUpCreated }
 }
 
 
@@ -612,6 +833,36 @@ export async function dispatchVapiEvent(input: {
         const toolCallId = str(tc, 'toolCallId') || str(tc, 'id')
         const name = parseToolName(tc)
         const args = parseToolArgs(tc)
+        if (name === 'save_lead_info' && vapiCallId) {
+          const storedQuote = await getStoredQuoteContext({
+            organizationId: input.organizationId,
+            vapiCallId,
+          })
+          const currentNeed =
+            typeof args.need === 'string'
+              ? args.need.trim()
+              : typeof args.notes === 'string'
+                ? args.notes.trim()
+                : ''
+          if (storedQuote && currentNeed.length < 12) {
+            args.need = storedQuote.need_for_lead
+            args.category = typeof args.category === 'string' && args.category.trim() ? args.category : 'catalog_quote'
+            args.intent = typeof args.intent === 'string' && args.intent.trim() ? args.intent : 'quote_request'
+            args.source = typeof args.source === 'string' && args.source.trim() ? args.source : 'vapi_call'
+            args.summary = typeof args.summary === 'string' && args.summary.trim() ? args.summary : storedQuote.need_for_lead
+            args.next_action =
+              typeof args.next_action === 'string' && args.next_action.trim()
+                ? args.next_action
+                : `Enviar cotización formal de ${storedQuote.service_name}.`
+            args.quote_context = storedQuote
+            console.info('[vapi/quote-context] applied_to_save_lead', {
+              organization_id: input.organizationId,
+              call_id: vapiCallId,
+              service_name: storedQuote.service_name,
+              need_from_quote_context: true,
+            })
+          }
+        }
         console.log('[vapi/tool-call]', {
           callId: vapiCallId || null,
           toolName: name,
@@ -659,6 +910,24 @@ export async function dispatchVapiEvent(input: {
             latestUserText: latestUserText || null,
             callSummary: summary || null,
           })
+          if ((name === 'get_price_quote' || name === 'get_product_price') && vapiCallId) {
+            const quoteContext = quoteContextFromToolResult(out)
+            if (quoteContext) {
+              await persistQuoteContextForCall({
+                organizationId: input.organizationId,
+                vapiCallId,
+                phone: phoneForToolContext || resolvedPhone,
+                quoteContext,
+              })
+              console.info('[vapi/quote-context] stored', {
+                organization_id: input.organizationId,
+                call_id: vapiCallId,
+                service_name: quoteContext.service_name,
+                catalog_source: quoteContext.catalog_source,
+                catalog_updated_at: quoteContext.catalog_updated_at,
+              })
+            }
+          }
           const failed =
             out &&
             typeof out === 'object' &&
@@ -910,11 +1179,23 @@ export async function dispatchVapiEvent(input: {
 
   const quoteLeadAutosave =
     ended && transcriptFinal.trim()
-      ? await autoSaveFlyersQuoteLeadFromTranscript({
+      ? await autoSaveQuoteLeadFromTranscript({
           organizationId: input.organizationId,
           transcript: transcriptFinal,
-          summary: summary || '',
           vapiCallId,
+          quoteContext: await getStoredQuoteContext({
+            organizationId: input.organizationId,
+            vapiCallId,
+          }),
+        })
+      : null
+  const wrapLeadAutosave =
+    ended && transcriptFinal.trim()
+      ? await autoSaveWrapQuoteLeadFromTranscript({
+          organizationId: input.organizationId,
+          transcript: transcriptFinal,
+          vapiCallId,
+          callLogId: persisted.call_log_id,
         })
       : null
 
@@ -930,6 +1211,14 @@ export async function dispatchVapiEvent(input: {
         ? {
             ok: quoteLeadAutosave.out.ok,
             telegram_sent: quoteLeadAutosave.telegramSent,
+          }
+        : undefined,
+    wrap_lead_autosave:
+      wrapLeadAutosave
+        ? {
+            ok: wrapLeadAutosave.out.ok,
+            telegram_sent: wrapLeadAutosave.telegramSent,
+            follow_up_created: wrapLeadAutosave.followUpCreated,
           }
         : undefined,
   }
