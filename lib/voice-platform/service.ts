@@ -769,6 +769,7 @@ export async function runCreateFollowUp(input: {
   callLogId?: string
   phone?: string
   customerId?: string
+  leadId?: string
   title: string
   notes?: string
   owner?: string
@@ -789,6 +790,7 @@ export async function runCreateFollowUp(input: {
     organizationId: input.organizationId,
     callLogId: input.callLogId,
     customerId,
+    leadId: input.leadId,
     title: input.title,
     notes: input.notes,
     owner: input.owner,

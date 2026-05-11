@@ -9,7 +9,13 @@ import {
   runMarkSpamCall,
   runSaveLeadInfo,
 } from '@/lib/voice-platform/service'
-import { followUpCountForCallLog, getCallLogIdByVapiCallId, findTeamMemberByPhoneOrName } from '@/lib/voice-platform/repository'
+import {
+  followUpCountForCallLog,
+  getCallLogIdByVapiCallId,
+  findTeamMemberByPhoneOrName,
+  getCallLogLeadCustomerContext,
+  patchCallLogLeadCustomer,
+} from '@/lib/voice-platform/repository'
 import {
   persistCallArtifacts,
   persistFollowUp,
@@ -37,7 +43,8 @@ function leadFullNameValid(name: string | undefined): boolean {
   if (blocked) return false
   const parts = name.trim().split(/\s+/).filter((p) => p.length > 0)
   return (
-    parts.length === 2 &&
+    parts.length >= 1 &&
+    parts.length <= 2 &&
     parts.every((part) => /^[\p{L}'-]{2,}$/u.test(part))
   )
 }
@@ -246,6 +253,7 @@ async function tryAutoFollowUpAfterLeadSave(input: {
       organizationId: input.organizationId,
       callLogId,
       phone: input.phone,
+      leadId: input.leadId || undefined,
       title,
       notes,
       dueAt,
@@ -881,6 +889,33 @@ export async function executeToolHandler(
       })
 
       if (out.ok) {
+        let callLogLink:
+          | {
+              callLogId: string | null
+              beforeCustomerId: string | null
+              afterCustomerId: string | null
+              afterLeadId: string | null
+            }
+          | null = null
+        if (context.vapiCallId && out.customer?.id) {
+          callLogLink = await patchCallLogLeadCustomer({
+            organizationId: context.organizationId,
+            vapiCallId: context.vapiCallId,
+            customerId: out.customer.id,
+            leadId: out.lead?.id ?? null,
+            customerName: out.customer.name ?? finalName,
+          }).catch((error) => {
+            console.warn('[vapi/save-lead] call_log_link_failed', {
+              toolCallId: context.toolCallId ?? null,
+              organization_id: context.organizationId,
+              vapi_call_id: context.vapiCallId || null,
+              saved_customer_id: out.customer?.id ?? null,
+              saved_lead_id: out.lead?.id ?? null,
+              message: error instanceof Error ? error.message : String(error),
+            })
+            return null
+          })
+        }
         console.info('[vapi/save-lead] name_resolution', {
           toolCallId: context.toolCallId ?? null,
           organization_id: context.organizationId,
@@ -905,6 +940,11 @@ export async function executeToolHandler(
           final_saved_phone: out.customer?.phone ?? phone,
           name_source: namePresent ? nameSource : 'fallback_sin_nombre',
           phone_source: phoneSource,
+          saved_customer_id: out.customer?.id ?? null,
+          saved_lead_id: out.lead?.id ?? null,
+          call_log_customer_id_before: callLogLink?.beforeCustomerId ?? null,
+          call_log_customer_id_after: callLogLink?.afterCustomerId ?? null,
+          call_log_lead_id_after: callLogLink?.afterLeadId ?? null,
         })
         console.info('[vapi/save-lead]', {
           toolCallId: context.toolCallId ?? null,
@@ -1233,17 +1273,41 @@ export async function executeToolHandler(
         typeof args.call_log_id === 'string' && args.call_log_id.trim()
           ? args.call_log_id.trim()
           : undefined
+      let savedLink:
+        | {
+            callLogId: string | null
+            customerId: string | null
+            leadId: string | null
+            customerName: string | null
+          }
+        | null = null
       if (!callLogId && context.vapiCallId) {
-        callLogId =
-          (await getCallLogIdByVapiCallId(context.organizationId, context.vapiCallId)) || undefined
+        savedLink = await getCallLogLeadCustomerContext({
+          organizationId: context.organizationId,
+          vapiCallId: context.vapiCallId,
+        })
+        callLogId = savedLink.callLogId || undefined
       }
+      if (!savedLink && context.vapiCallId) {
+        savedLink = await getCallLogLeadCustomerContext({
+          organizationId: context.organizationId,
+          vapiCallId: context.vapiCallId,
+        })
+      }
+      const explicitCustomerId =
+        typeof args.customer_id === 'string' && args.customer_id.trim()
+          ? args.customer_id.trim()
+          : undefined
+      const finalCustomerId = savedLink?.customerId || explicitCustomerId
+      const finalLeadId = savedLink?.leadId || undefined
 
       try {
         const out = await persistFollowUp({
           organizationId: context.organizationId,
           callLogId,
           phone: typeof args.phone === 'string' ? args.phone : context.phone,
-          customerId: typeof args.customer_id === 'string' ? args.customer_id : undefined,
+          customerId: finalCustomerId,
+          leadId: finalLeadId,
           title: prep.title,
           notes: prep.notesMerged,
           owner: typeof args.owner === 'string' ? args.owner : undefined,
@@ -1266,6 +1330,18 @@ export async function executeToolHandler(
           followUpId: fu?.id ?? null,
           table: 'follow_ups',
           error: null,
+          saved_customer_id: savedLink?.customerId ?? null,
+          saved_lead_id: savedLink?.leadId ?? null,
+          follow_up_customer_id_before: explicitCustomerId ?? null,
+          follow_up_customer_id_after:
+            typeof (out as { follow_up?: { customer_id?: string | null } }).follow_up?.customer_id === 'string'
+              ? (out as { follow_up?: { customer_id?: string } }).follow_up?.customer_id
+              : finalCustomerId ?? null,
+          follow_up_lead_id_after:
+            typeof (out as { follow_up?: { lead_id?: string | null } }).follow_up?.lead_id === 'string'
+              ? (out as { follow_up?: { lead_id?: string } }).follow_up?.lead_id
+              : finalLeadId ?? null,
+          follow_up_title_final: prep.title,
         })
         return out
       } catch (e) {
@@ -1284,6 +1360,12 @@ export async function executeToolHandler(
           followUpId: null,
           table: 'follow_ups',
           error: msg.slice(0, 400),
+          saved_customer_id: savedLink?.customerId ?? null,
+          saved_lead_id: savedLink?.leadId ?? null,
+          follow_up_customer_id_before: explicitCustomerId ?? null,
+          follow_up_customer_id_after: finalCustomerId ?? null,
+          follow_up_lead_id_after: finalLeadId ?? null,
+          follow_up_title_final: prep.title,
         })
         return {
           ok: false as const,

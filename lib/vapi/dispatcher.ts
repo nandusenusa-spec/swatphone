@@ -46,6 +46,7 @@ import { textSuggestsPromisedCallback } from '@/lib/voice-platform/callback-heur
 import { normalizePhone } from '@/lib/phone'
 import { logVapiToolCallReceived } from '@/lib/vapi/tool-call-logging'
 import { notifyLeadTelegram } from '@/lib/notifications/telegram'
+import { patchCallLogLeadCustomer } from '@/lib/voice-platform/repository'
 
 type JsonRecord = Record<string, unknown>
 
@@ -191,7 +192,7 @@ function validCallerName(raw: string): boolean {
     /\b(nombre|apellido|telefono|cotizacion|wrap|vehicular|semana|particular|gracias|chau)\b/i.test(normalized)
   if (blocked) return false
   const parts = raw.trim().split(/\s+/).filter(Boolean)
-  return parts.length === 2 && parts.every((part) => /^[\p{L}'-]{2,}$/u.test(part))
+  return parts.length >= 1 && parts.length <= 2 && parts.every((part) => /^[\p{L}'-]{2,}$/u.test(part))
 }
 
 function cleanNameCandidate(raw: string): string {
@@ -519,6 +520,25 @@ async function autoSaveQuoteLeadFromTranscript(input: {
     },
     vapiCallId: input.vapiCallId || null,
   })
+  let callLogLink: Awaited<ReturnType<typeof patchCallLogLeadCustomer>> | null = null
+  if (out.ok && input.vapiCallId && out.customer?.id) {
+    callLogLink = await patchCallLogLeadCustomer({
+      organizationId: input.organizationId,
+      vapiCallId: input.vapiCallId,
+      customerId: out.customer.id,
+      leadId: out.lead?.id ?? null,
+      customerName: out.customer.name ?? fullName,
+    }).catch((error) => {
+      console.warn('[vapi/quote-lead-autosave] call_log_link_failed', {
+        organization_id: input.organizationId,
+        call_id: input.vapiCallId || null,
+        saved_customer_id: out.customer?.id ?? null,
+        saved_lead_id: out.lead?.id ?? null,
+        message: error instanceof Error ? error.message : String(error),
+      })
+      return null
+    })
+  }
   let telegramSent = false
   if (out.ok) {
     telegramSent = await notifyLeadTelegram({
@@ -541,6 +561,11 @@ async function autoSaveQuoteLeadFromTranscript(input: {
     final_name: fullName,
     final_phone_suffix: phone.replace(/\D/g, '').slice(-4),
     telegram_sent: telegramSent,
+    saved_customer_id: out.ok ? out.customer?.id ?? null : null,
+    saved_lead_id: out.ok ? out.lead?.id ?? null : null,
+    call_log_customer_id_before: callLogLink?.beforeCustomerId ?? null,
+    call_log_customer_id_after: callLogLink?.afterCustomerId ?? null,
+    call_log_lead_id_after: callLogLink?.afterLeadId ?? null,
     error: out.ok ? null : out.error,
   })
   return { out, telegramSent }
@@ -587,6 +612,25 @@ async function autoSaveWrapQuoteLeadFromTranscript(input: {
     commercialSnapshot: commercial,
     vapiCallId: input.vapiCallId || null,
   })
+  let callLogLink: Awaited<ReturnType<typeof patchCallLogLeadCustomer>> | null = null
+  if (out.ok && input.vapiCallId && out.customer?.id) {
+    callLogLink = await patchCallLogLeadCustomer({
+      organizationId: input.organizationId,
+      vapiCallId: input.vapiCallId,
+      customerId: out.customer.id,
+      leadId: out.lead?.id ?? null,
+      customerName: out.customer.name ?? fullName,
+    }).catch((error) => {
+      console.warn('[vapi/wrap-lead-autosave] call_log_link_failed', {
+        organization_id: input.organizationId,
+        call_id: input.vapiCallId || null,
+        saved_customer_id: out.customer?.id ?? null,
+        saved_lead_id: out.lead?.id ?? null,
+        message: error instanceof Error ? error.message : String(error),
+      })
+      return null
+    })
+  }
   let telegramSent = false
   let followUpCreated = false
   if (out.ok) {
@@ -605,6 +649,8 @@ async function autoSaveWrapQuoteLeadFromTranscript(input: {
       organizationId: input.organizationId,
       callLogId: input.callLogId || undefined,
       phone,
+      customerId: out.customer?.id,
+      leadId: out.lead?.id ?? undefined,
       title: 'Llamar por cotización de wrap vehicular',
       notes: [`Cliente: ${fullName}`, `Tel: ${phone}`, wrap.need].join('\n'),
       priority: 'high',
@@ -621,6 +667,11 @@ async function autoSaveWrapQuoteLeadFromTranscript(input: {
     final_phone_suffix: phone.replace(/\D/g, '').slice(-4),
     telegram_sent: telegramSent,
     follow_up_created: followUpCreated,
+    saved_customer_id: out.ok ? out.customer?.id ?? null : null,
+    saved_lead_id: out.ok ? out.lead?.id ?? null : null,
+    call_log_customer_id_before: callLogLink?.beforeCustomerId ?? null,
+    call_log_customer_id_after: callLogLink?.afterCustomerId ?? null,
+    call_log_lead_id_after: callLogLink?.afterLeadId ?? null,
     error: out.ok ? null : out.error,
   })
   return { out, telegramSent, followUpCreated }

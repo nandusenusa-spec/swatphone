@@ -64,6 +64,7 @@ export async function persistFollowUp(input: {
   callLogId?: string
   phone?: string
   customerId?: string
+  leadId?: string
   title: string
   notes?: string
   owner?: string
@@ -76,6 +77,7 @@ export async function persistFollowUp(input: {
     callLogId: input.callLogId,
     phone: input.phone,
     customerId: input.customerId,
+    leadId: input.leadId,
     title: input.title,
     notes: input.notes,
     owner: input.owner,

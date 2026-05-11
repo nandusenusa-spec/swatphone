@@ -1162,6 +1162,7 @@ export async function createFollowUp(input: {
   organizationId: string
   callLogId?: string | null
   customerId?: string | null
+  leadId?: string | null
   title: string
   notes?: string | null
   owner?: string | null
@@ -1176,9 +1177,13 @@ export async function createFollowUp(input: {
     organization_id: input.organizationId,
     call_log_id: input.callLogId || null,
     customer_id: input.customerId || null,
+    lead_id: input.leadId || null,
+    title: input.title,
     notes: notesBody || null,
     owner: input.owner || null,
     due_at: input.dueAt || null,
+    priority: input.priority || 'normal',
+    callback_required: input.callbackRequired === true,
     status: 'pending',
   }
 
@@ -1186,6 +1191,7 @@ export async function createFollowUp(input: {
     organization_id: input.organizationId,
     call_log_id: input.callLogId || null,
     customer_id: input.customerId || null,
+    lead_id: input.leadId || null,
     title: input.title,
     notes: input.notes || null,
     owner: input.owner || null,
@@ -1198,10 +1204,192 @@ export async function createFollowUp(input: {
   let { data, error } = await supabase.from('follow_ups').insert(minimalRow).select('*').single()
   if (error) {
     const retry = await supabase.from('follow_ups').insert(legacyRow).select('*').single()
+    if (retry.error && String(retry.error.message || '').includes('lead_id')) {
+      const { lead_id, ...legacyNoLead } = legacyRow
+      const noLeadRetry = await supabase.from('follow_ups').insert(legacyNoLead).select('*').single()
+      if (noLeadRetry.error) throw noLeadRetry.error
+      return noLeadRetry.data
+    }
     if (retry.error) throw retry.error
     data = retry.data
   }
   return data
+}
+
+export async function getCallLogLeadCustomerContext(input: {
+  organizationId: string
+  vapiCallId: string
+}): Promise<{
+  callLogId: string | null
+  customerId: string | null
+  leadId: string | null
+  customerName: string | null
+}> {
+  if (!input.vapiCallId) {
+    return { callLogId: null, customerId: null, leadId: null, customerName: null }
+  }
+  const supabase = createServiceRoleClient()
+  const query = supabase
+    .from('call_logs')
+    .select('id, customer_id, lead_id, structured_extraction')
+    .eq('organization_id', input.organizationId)
+    .eq('vapi_call_id', input.vapiCallId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+
+  let { data, error } = await query
+  if (error) {
+    const retry = await supabase
+      .from('call_logs')
+      .select('id, structured_extraction')
+      .eq('organization_id', input.organizationId)
+      .eq('vapi_call_id', input.vapiCallId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+    if (retry.error) return { callLogId: null, customerId: null, leadId: null, customerName: null }
+    data = retry.data
+  }
+  const row = data?.[0] as Record<string, unknown> | undefined
+  const structured =
+    row?.structured_extraction &&
+    typeof row.structured_extraction === 'object' &&
+    !Array.isArray(row.structured_extraction)
+      ? (row.structured_extraction as Record<string, unknown>)
+      : {}
+  const saved =
+    structured.latest_saved_lead &&
+    typeof structured.latest_saved_lead === 'object' &&
+    !Array.isArray(structured.latest_saved_lead)
+      ? (structured.latest_saved_lead as Record<string, unknown>)
+      : {}
+  return {
+    callLogId: typeof row?.id === 'string' ? row.id : null,
+    customerId:
+      typeof saved.customer_id === 'string'
+        ? saved.customer_id
+        : typeof row?.customer_id === 'string'
+          ? row.customer_id
+          : null,
+    leadId:
+      typeof saved.lead_id === 'string'
+        ? saved.lead_id
+        : typeof row?.lead_id === 'string'
+          ? row.lead_id
+          : null,
+    customerName:
+      typeof saved.customer_name === 'string'
+        ? saved.customer_name
+        : null,
+  }
+}
+
+export async function patchCallLogLeadCustomer(input: {
+  organizationId: string
+  vapiCallId: string
+  customerId: string
+  leadId?: string | null
+  customerName?: string | null
+}): Promise<{
+  callLogId: string | null
+  beforeCustomerId: string | null
+  afterCustomerId: string | null
+  afterLeadId: string | null
+}> {
+  if (!input.vapiCallId || !input.customerId) {
+    return { callLogId: null, beforeCustomerId: null, afterCustomerId: null, afterLeadId: null }
+  }
+  const supabase = createServiceRoleClient()
+  const { data: rows, error: findErr } = await supabase
+    .from('call_logs')
+    .select('id, customer_id, lead_id, structured_extraction')
+    .eq('organization_id', input.organizationId)
+    .eq('vapi_call_id', input.vapiCallId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+  if (findErr) {
+    const retry = await supabase
+      .from('call_logs')
+      .select('id, structured_extraction')
+      .eq('organization_id', input.organizationId)
+      .eq('vapi_call_id', input.vapiCallId)
+      .order('created_at', { ascending: false })
+      .limit(1)
+    if (retry.error || !retry.data?.[0]) {
+      return { callLogId: null, beforeCustomerId: null, afterCustomerId: null, afterLeadId: null }
+    }
+    const row = retry.data[0] as Record<string, unknown>
+    const prev =
+      row.structured_extraction &&
+      typeof row.structured_extraction === 'object' &&
+      !Array.isArray(row.structured_extraction)
+        ? (row.structured_extraction as Record<string, unknown>)
+        : {}
+    await supabase
+      .from('call_logs')
+      .update({
+        structured_extraction: {
+          ...prev,
+          latest_saved_lead: {
+            customer_id: input.customerId,
+            lead_id: input.leadId || null,
+            customer_name: input.customerName || null,
+          },
+        },
+        updated_at: new Date().toISOString(),
+      })
+      .eq('id', row.id)
+    return {
+      callLogId: typeof row.id === 'string' ? row.id : null,
+      beforeCustomerId: null,
+      afterCustomerId: input.customerId,
+      afterLeadId: input.leadId || null,
+    }
+  }
+  const row = rows?.[0] as Record<string, unknown> | undefined
+  if (!row?.id) return { callLogId: null, beforeCustomerId: null, afterCustomerId: null, afterLeadId: null }
+  const prev =
+    row.structured_extraction &&
+    typeof row.structured_extraction === 'object' &&
+    !Array.isArray(row.structured_extraction)
+      ? (row.structured_extraction as Record<string, unknown>)
+      : {}
+  const structured = {
+    ...prev,
+    latest_saved_lead: {
+      customer_id: input.customerId,
+      lead_id: input.leadId || null,
+      customer_name: input.customerName || null,
+    },
+  }
+  const patch = {
+    customer_id: input.customerId,
+    lead_id: input.leadId || null,
+    structured_extraction: structured,
+    updated_at: new Date().toISOString(),
+  }
+  let { data, error } = await supabase
+    .from('call_logs')
+    .update(patch)
+    .eq('id', row.id)
+    .select('id, customer_id, lead_id')
+    .single()
+  if (error) {
+    const { customer_id, lead_id, ...withoutLinks } = patch
+    const retry = await supabase
+      .from('call_logs')
+      .update(withoutLinks)
+      .eq('id', row.id)
+      .select('id')
+      .single()
+    if (retry.error) throw retry.error
+    data = { id: retry.data.id, customer_id: input.customerId, lead_id: input.leadId || null }
+  }
+  return {
+    callLogId: String(data?.id || row.id),
+    beforeCustomerId: typeof row.customer_id === 'string' ? row.customer_id : null,
+    afterCustomerId: typeof data?.customer_id === 'string' ? data.customer_id : input.customerId,
+    afterLeadId: typeof data?.lead_id === 'string' ? data.lead_id : input.leadId || null,
+  }
 }
 
 export async function followUpCountForCallLog(callLogId: string): Promise<number> {
