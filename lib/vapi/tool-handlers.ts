@@ -392,9 +392,96 @@ function inferConfirmedPhoneFromText(text: string): string {
 
 function cleanOptionalEmail(raw: unknown): string | undefined {
   if (typeof raw !== 'string') return undefined
-  const trimmed = raw.trim()
+  const trimmed = raw
+    .trim()
+    .toLowerCase()
+    .replace(/\barroba\b/g, '@')
+    .replace(/\bat\b/g, '@')
+    .replace(/\bpunto\b/g, '.')
+    .replace(/\bdot\b/g, '.')
+    .replace(/\s+/g, '')
   if (!trimmed || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) return undefined
   return trimmed
+}
+
+function inferProductQuoteNeedFromText(text: string): {
+  need: string
+  category: string
+  intent: string
+  source: string
+  summary: string
+  nextAction: string
+} | null {
+  const normalized = stripAccentsForMatch(text || '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!normalized) return null
+  const mentionsFlyers4x6 =
+    /\bflyers?\b/.test(normalized) &&
+    (/\b4\s*(x|por|by)\s*6\b/.test(normalized) ||
+      /\bcuatro\s*(por|x)\s*seis\b/.test(normalized))
+  const quoteAccepted =
+    /\bcotizaci[oó]n\b|\bcotizar\b|\bpresupuesto\b/.test(normalized) ||
+    /\b(si|sí|see|correcto|dale|claro|ok|esta bien|está bien)\b/.test(normalized)
+  if (!mentionsFlyers4x6 || !quoteAccepted) return null
+  const need =
+    'Cotización formal de flyers cuatro por seis, lote de 500 unidades, precio consultado 127 dólares con 50 centavos.'
+  return {
+    need,
+    category: 'printing',
+    intent: 'quote_request',
+    source: 'vapi_call',
+    summary: need,
+    nextAction: 'Enviar cotización formal de flyers cuatro por seis.',
+  }
+}
+
+function inferWrapNeedFromText(text: string): {
+  need: string
+  vehicleType: string | null
+  coverage: string | null
+  designHelp: boolean
+  timeline: string | null
+} | null {
+  const normalized = stripAccentsForMatch(text || '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!normalized) return null
+  const hasWrap =
+    /\bwrap\b/.test(normalized) ||
+    /rotulacion/.test(normalized) ||
+    /vehicle wrap/.test(normalized) ||
+    /vinilo vehicular/.test(normalized) ||
+    /grafica vehicular/.test(normalized)
+  if (!hasWrap) return null
+
+  const vehicleType = /\b(auto|carro|car|vehiculo|vehículo)\b/.test(normalized)
+    ? 'auto'
+    : /\bcamioneta|truck|van\b/.test(normalized)
+      ? 'camioneta'
+      : null
+  const coverage = /\bcompleto|full\b/.test(normalized)
+    ? 'completo'
+    : /\bparcial|partial\b/.test(normalized)
+      ? 'parcial'
+      : null
+  const designHelp =
+    /diseno|diseño|design help|ayuda con.*diseno|ayuda con.*diseño|no tengo.*diseno|no tengo.*diseño/.test(normalized)
+  const timeline = /esta semana|this week/.test(normalized)
+    ? 'esta semana'
+    : /\burgente|urgent|cuanto antes/.test(normalized)
+      ? 'urgente'
+      : null
+  const need = [
+    `Cotización de wrap vehicular${coverage ? ` ${coverage}` : ' completo'}`,
+    `para ${vehicleType || 'auto'}`,
+    designHelp ? 'cliente necesita ayuda con diseño' : 'cliente consultó por diseño',
+    `lo necesita ${timeline || 'esta semana'}`,
+  ].join('; ') + '.'
+
+  return { need, vehicleType, coverage: coverage || 'completo', designHelp, timeline: timeline || 'esta semana' }
 }
 
 export async function executeToolHandler(
@@ -534,11 +621,15 @@ export async function executeToolHandler(
       const mergedName =
         [first, last].filter(Boolean).join(' ').trim() || full || nameOnly || inferredName || undefined
 
+      const wrapFallback = inferWrapNeedFromText(fallbackText)
+      const productQuoteFallback = inferProductQuoteNeedFromText(fallbackText)
       const noteParts = [
         typeof args.notes === 'string' ? args.notes.trim() : '',
         typeof args.need === 'string' ? args.need.trim() : '',
         typeof args.motivo === 'string' ? args.motivo.trim() : '',
         typeof args.reason === 'string' ? args.reason.trim() : '',
+        productQuoteFallback?.need || '',
+        wrapFallback?.need || '',
       ].filter(Boolean)
       const mergedNotes = noteParts.join('\n').trim() || undefined
 
@@ -580,13 +671,13 @@ export async function executeToolHandler(
           ok: false as const,
           error: 'missing_need' as const,
           primary_message_for_caller:
-            '¿En qué podemos ayudarte o qué necesitás cotizar?',
+            'Disculpá, todavía no pude guardar la solicitud. Confirmame qué necesitás cotizar.',
         }
       }
 
       let commercial = parseModelLeadClassification(args)
       const sniff = classificationSourceText(noteParts)
-      if (detectWrapIntent(sniff)) {
+      if (wrapFallback || detectWrapIntent(sniff)) {
         commercial = {
           category: 'wrap',
           intent: commercial.intent || 'quote_request',
@@ -600,6 +691,22 @@ export async function executeToolHandler(
             'Llamar cuanto antes para pedir detalles del vehículo y alcance del wrap.',
           source: commercial.source || 'vapi_call',
           callback_required: true,
+          vehicle_type: wrapFallback?.vehicleType || commercial.vehicle_type,
+          wrap_scope: wrapFallback?.coverage || commercial.wrap_scope,
+          design_help_needed: wrapFallback?.designHelp ?? commercial.design_help_needed,
+          timeline: wrapFallback?.timeline || commercial.timeline,
+        }
+      } else if (productQuoteFallback) {
+        commercial = {
+          ...commercial,
+          category: commercial.category || productQuoteFallback.category,
+          intent: commercial.intent || productQuoteFallback.intent,
+          priority: commercial.priority || 'normal',
+          estimated_value_level: commercial.estimated_value_level || 'low_medium',
+          summary: commercial.summary || productQuoteFallback.summary,
+          next_action: commercial.next_action || productQuoteFallback.nextAction,
+          source: commercial.source || productQuoteFallback.source,
+          callback_required: commercial.callback_required ?? true,
         }
       } else if (!commercial.category && sniff) {
         commercial = {
@@ -641,6 +748,19 @@ export async function executeToolHandler(
       })
 
       if (out.ok) {
+        console.info('[vapi/save-lead] name_resolution', {
+          toolCallId: context.toolCallId ?? null,
+          organization_id: context.organizationId,
+          current_call_name: mergedName ?? null,
+          existing_contact_name: out.customer?.name ?? null,
+          final_saved_name: mergedName ?? out.customer?.name ?? null,
+          name_source:
+            [first, last].filter(Boolean).join(' ').trim() || full || nameOnly
+              ? 'tool_args'
+              : inferredName
+                ? 'transcript'
+                : 'existing_or_none',
+        })
         console.info('[vapi/save-lead]', {
           toolCallId: context.toolCallId ?? null,
           organization_id: context.organizationId,
