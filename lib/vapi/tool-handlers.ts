@@ -398,11 +398,20 @@ function userOnlyText(text: string): string {
 }
 
 function cleanNameCandidate(raw: string): string {
-  return raw
+  let cleaned = raw
     .replace(/[.,;:!?¿¡"]/g, ' ')
-    .replace(/\b(?:me llamo|mi nombre es|soy|es|nombre y apellido|nombre|apellido)\b/giu, ' ')
     .replace(/\s+/g, ' ')
     .trim()
+  for (let i = 0; i < 3; i += 1) {
+    const next = cleaned
+      .replace(/^(?:si|sí|claro|correcto|ok|dale)\s+/iu, '')
+      .replace(/^(?:me llamo|mi nombre es|soy|nombre y apellido|nombre|apellido|es)\s+/iu, '')
+      .replace(/\s+/g, ' ')
+      .trim()
+    if (next === cleaned) break
+    cleaned = next
+  }
+  return cleaned
 }
 
 function titleCaseName(raw: string): string {
