@@ -16,6 +16,7 @@ export type PriceLookupLogInput = {
   resultCount: number
   matchedName?: string | null
   matchedId?: string | null
+  matchedUpdatedAt?: string | null
   mustConfirmPriceWithTeam: boolean
   termsTried: string[]
   winningTerm?: string
@@ -33,6 +34,7 @@ export function logPriceLookup(input: PriceLookupLogInput) {
     resultCount: input.resultCount,
     matchedName: input.matchedName ?? null,
     matchedId: input.matchedId ?? null,
+    matchedUpdatedAt: input.matchedUpdatedAt ?? null,
     mustConfirmPriceWithTeam: input.mustConfirmPriceWithTeam,
     termsTried: input.termsTried,
     winningTerm: input.winningTerm ?? null,

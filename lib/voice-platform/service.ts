@@ -273,6 +273,7 @@ export async function runGetPriceQuote(input: {
     resultCount: rows.length,
     matchedName: first?.service_name ?? null,
     matchedId: first?.source_row_id ?? null,
+    matchedUpdatedAt: first?.source_updated_at ?? null,
     mustConfirmPriceWithTeam,
     termsTried: terms,
     winningTerm: winningTerm || undefined,
@@ -284,6 +285,7 @@ export async function runGetPriceQuote(input: {
     currency: r.currency,
     description: r.description,
     catalog_source: r.source,
+    catalog_updated_at: r.source_updated_at,
   }))
 
   if (rows.length === 0) {

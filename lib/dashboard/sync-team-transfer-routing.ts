@@ -51,7 +51,7 @@ export async function syncOrganizationRoutingFromTeam(
 ): Promise<{ destinations_count: number }> {
   const { data: members, error: mErr } = await supabase
     .from('team_members')
-    .select('name, phone, extension, is_available')
+    .select('name, phone, extension, is_available, role, department')
     .eq('organization_id', organizationId)
   if (mErr) throw mErr
 
@@ -80,6 +80,11 @@ export async function syncOrganizationRoutingFromTeam(
     })
     if (error) throw error
   }
+
+  console.info('[dashboard/sync-team-transfer]', {
+    organization_id: organizationId,
+    destinations_count: transfer_destinations.length,
+  })
 
   return { destinations_count: transfer_destinations.length }
 }

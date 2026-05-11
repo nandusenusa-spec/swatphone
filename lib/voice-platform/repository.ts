@@ -113,7 +113,7 @@ export async function upsertCustomerLeadInfo(input: {
   const patch: Record<string, unknown> = {
     updated_at: new Date().toISOString(),
   }
-  if (incomingName && (!existing.name || String(existing.name).trim().toLowerCase() === 'cliente')) {
+  if (incomingName && String(existing.name || '').trim() !== incomingName) {
     patch.name = incomingName
   }
   if (incomingEmail) patch.email = incomingEmail
@@ -416,6 +416,7 @@ export type QuoteRow = {
   source: 'products' | 'organization_catalog' | 'price_catalog'
   /** id de fila en `products` u otra tabla según `source` */
   source_row_id: string | null
+  source_updated_at: string | null
 }
 
 function catalogRowActive(r: Record<string, unknown>): boolean {
@@ -431,12 +432,13 @@ function mapProductRowToQuote(r: Record<string, unknown>): QuoteRow {
     description: (r.description as string) || null,
     source: 'products',
     source_row_id: typeof r.id === 'string' ? r.id : null,
+    source_updated_at: typeof r.updated_at === 'string' ? r.updated_at : null,
   }
 }
 
 /** Columnas alineadas con admin `products` (sin category ni otras si no existen en todas las DB). */
 const PRODUCTS_SELECT_ADMIN =
-  'id, organization_id, name, description, price, currency, is_active' as const
+  'id, organization_id, name, description, price, currency, is_active, updated_at' as const
 
 function isValidOrganizationUuid(id: string): boolean {
   return /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(id)
@@ -849,6 +851,7 @@ export async function getPriceQuote(input: {
         description: (r.description as string) || null,
         source: 'organization_catalog',
         source_row_id: typeof r.id === 'string' ? r.id : null,
+        source_updated_at: typeof r.updated_at === 'string' ? r.updated_at : null,
       }),
     )
     return {
@@ -886,6 +889,7 @@ export async function getPriceQuote(input: {
       description: (r.description as string) || null,
       source: 'price_catalog',
       source_row_id: typeof r.id === 'string' ? r.id : null,
+      source_updated_at: typeof r.updated_at === 'string' ? r.updated_at : null,
     }),
   )
   if (pcRows.length) {
