@@ -32,8 +32,8 @@ function leadFullNameValid(name: string | undefined): boolean {
   if (!name?.trim()) return false
   const normalized = stripAccentsForMatch(name).toLowerCase().replace(/\s+/g, ' ').trim()
   const blocked =
-    /^(y apellido|es jos|esta semana|particular|empresa|no tengo email|sin email)$/i.test(normalized) ||
-    /\b(nombre|apellido|telefono|cotizacion|wrap|vehicular|semana|particular)\b/i.test(normalized)
+    /^(y apellido|es jos|esta semana|particular|empresa|no tengo email|sin email|muchas gracias|gracias|buen dia|hasta luego|chau|corta|ok|correcto|perfecto)$/i.test(normalized) ||
+    /\b(nombre|apellido|telefono|cotizacion|wrap|vehicular|semana|particular|gracias|chau)\b/i.test(normalized)
   if (blocked) return false
   const parts = name.trim().split(/\s+/).filter((p) => p.length > 0)
   return (
@@ -430,21 +430,7 @@ function inferNameAfterAssistantPrompt(transcript: string): string {
 }
 
 function inferFullNameFromText(text: string): string {
-  const raw = userOnlyText(text).replace(/\s+/g, ' ').trim()
-  if (!raw) return ''
-  const patterns = [
-    /\b(?:me llamo|mi nombre es|soy)\s+([\p{L}'-]+(?:\s+[\p{L}'-]+){1,3})/iu,
-    /\b(?:nombre y apellido|nombre)\s+(?:es|:)?\s*([\p{L}'-]+(?:\s+[\p{L}'-]+){1,3})/iu,
-  ]
-  for (const pattern of patterns) {
-    const match = raw.match(pattern)
-    if (match?.[1]) {
-      const candidate = titleCaseName(cleanNameCandidate(match[1]))
-      if (leadFullNameValid(candidate)) return candidate
-    }
-  }
-  const capitalized = raw.match(/\b([\p{Lu}][\p{L}'-]{2,}\s+[\p{Lu}][\p{L}'-]{2,})\b/u)
-  const candidate = titleCaseName(cleanNameCandidate(capitalized?.[1] || ''))
+  const candidate = inferNameAfterAssistantPrompt(text)
   return leadFullNameValid(candidate) ? candidate : ''
 }
 
@@ -754,6 +740,7 @@ export async function executeToolHandler(
 
       const needPresent = Boolean(mergedNotes && mergedNotes.trim().length >= 3)
       const namePresent = leadFullNameValid(mergedName)
+      const finalName = namePresent ? mergedName : 'Sin nombre'
 
       if (!namePresent) {
         console.info('[vapi/save-lead]', {
@@ -763,17 +750,20 @@ export async function executeToolHandler(
           phone_present: true,
           need_present: needPresent,
           inferred_name_present: Boolean(inferredName),
-          saved: false,
+          saved: needPresent,
           leadId: null,
-          error: 'missing_name',
+          error: needPresent ? null : 'missing_name',
+          fallback_name: needPresent ? finalName : null,
         })
-        return {
-          ok: false as const,
-          error: 'missing_name' as const,
-          primary_message_for_caller:
-            'Disculpá, no pude guardar la solicitud todavía. Confirmame tu nombre y apellido.',
-          assistant_instruction:
-            'Say only primary_message_for_caller. Do not say the request was registered.',
+        if (!needPresent) {
+          return {
+            ok: false as const,
+            error: 'missing_name' as const,
+            primary_message_for_caller:
+              'Disculpá, no pude guardar la solicitud todavía. Confirmame tu nombre y apellido.',
+            assistant_instruction:
+              'Say only primary_message_for_caller. Do not say the request was registered.',
+          }
         }
       }
 
@@ -873,7 +863,7 @@ export async function executeToolHandler(
       const out = await runSaveLeadInfo({
         organizationId: context.organizationId,
         phone,
-        name: mergedName,
+        name: finalName,
         email: cleanedEmail,
         company: typeof args.company === 'string' ? args.company : undefined,
         notes: notesWithMeta || mergedNotes,
@@ -900,11 +890,11 @@ export async function executeToolHandler(
                     : null,
               }
             : null,
-          current_call_name: mergedName ?? null,
+          current_call_name: namePresent ? mergedName ?? null : null,
           existing_contact_name: out.customer?.name ?? null,
-          final_saved_name: out.customer?.name ?? mergedName ?? null,
+          final_saved_name: out.customer?.name ?? finalName,
           final_saved_phone: out.customer?.phone ?? phone,
-          name_source: nameSource,
+          name_source: namePresent ? nameSource : 'fallback_sin_nombre',
           phone_source: phoneSource,
         })
         console.info('[vapi/save-lead]', {
@@ -920,13 +910,13 @@ export async function executeToolHandler(
         try {
           const tgOk = await notifyLeadTelegram({
             temperature: classifyLeadTemperature({
-              customerName: mergedName, phone,
+              customerName: finalName, phone,
               email: cleanedEmail ?? null,
               need: mergedNotes||'',
               priceRequested: commercial.intent==='quote_request',
               dateNeeded: typeof args.date_needed==='string'?args.date_needed:null,
             }),
-            customerName: mergedName||'Sin nombre', phone,
+            customerName: finalName, phone,
             email: cleanedEmail ?? null,
             need: mergedNotes||'',
             priceRequested: commercial.intent==='quote_request',
@@ -946,7 +936,7 @@ export async function executeToolHandler(
           toolCallId: context.toolCallId ?? null,
           leadId: out.lead?.id ?? null,
           commercial,
-          customerName: mergedName,
+          customerName: finalName,
           args,
         })
       } else {

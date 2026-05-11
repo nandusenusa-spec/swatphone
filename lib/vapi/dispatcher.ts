@@ -158,6 +158,24 @@ function transcriptUserLines(transcript: string): string[] {
     .filter(Boolean)
 }
 
+type TranscriptLine = { speaker: 'assistant' | 'user' | 'unknown'; text: string }
+
+function parseTranscriptLines(transcript: string): TranscriptLine[] {
+  return (transcript || '')
+    .split(/\r?\n/)
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => {
+      const match = line.match(/^(Assistant|Bot|Agente|Asistente|User|Caller|Customer|Cliente|Usuario)\s*:\s*(.+)$/i)
+      if (!match) return { speaker: 'unknown' as const, text: line }
+      const rawSpeaker = match[1].toLowerCase()
+      return {
+        speaker: /assistant|bot|agente|asistente/.test(rawSpeaker) ? 'assistant' as const : 'user' as const,
+        text: match[2].trim(),
+      }
+    })
+}
+
 function titleCaseName(raw: string): string {
   return raw
     .trim()
@@ -166,16 +184,35 @@ function titleCaseName(raw: string): string {
     .join(' ')
 }
 
+function validCallerName(raw: string): boolean {
+  const normalized = stripAccentsForMatch(raw).toLowerCase().replace(/\s+/g, ' ').trim()
+  const blocked =
+    /^(y apellido|es jos|esta semana|particular|empresa|no tengo email|sin email|muchas gracias|gracias|buen dia|hasta luego|chau|corta|ok|correcto|perfecto)$/i.test(normalized) ||
+    /\b(nombre|apellido|telefono|cotizacion|wrap|vehicular|semana|particular|gracias|chau)\b/i.test(normalized)
+  if (blocked) return false
+  const parts = raw.trim().split(/\s+/).filter(Boolean)
+  return parts.length === 2 && parts.every((part) => /^[\p{L}'-]{2,}$/u.test(part))
+}
+
+function cleanNameCandidate(raw: string): string {
+  return raw
+    .replace(/[.,;:!?¿¡"]/g, ' ')
+    .replace(/\b(?:me llamo|mi nombre es|soy|es|nombre y apellido|nombre|apellido)\b/giu, ' ')
+    .replace(/\s+/g, ' ')
+    .trim()
+}
+
 function inferCurrentCallNameFromTranscript(transcript: string): string {
-  const lines = transcriptUserLines(transcript)
-  const blocked = /\b(flyers?|cuatro|seis|telefono|teléfono|email|correo|particular|empresa|cotizacion|cotización|precio|cuestan|confirmado|si|sí|no)\b/i
-  for (let i = lines.length - 1; i >= 0; i -= 1) {
-    const line = lines[i].replace(/[.,;:!?¿¡"]/g, ' ').replace(/\s+/g, ' ').trim()
-    const explicit = line.match(/\b(?:me llamo|mi nombre es|soy)\s+([\p{L}'-]+(?:\s+[\p{L}'-]+){1,3})\b/iu)
-    const candidate = (explicit?.[1] || line).trim()
-    if (blocked.test(candidate)) continue
-    if (/^[\p{L}'-]{3,}(?:\s+[\p{L}'-]{3,}){1,3}$/u.test(candidate)) {
-      return titleCaseName(candidate)
+  const lines = parseTranscriptLines(transcript)
+  for (let i = 0; i < lines.length - 1; i += 1) {
+    const current = stripAccentsForMatch(lines[i].text).toLowerCase()
+    if (
+      lines[i].speaker === 'assistant' &&
+      /\b(nombre y apellido|nombre completo|me das tu nombre|cual es tu nombre|cuál es tu nombre)\b/.test(current)
+    ) {
+      const nextUser = lines.slice(i + 1).find((line) => line.speaker === 'user')
+      const candidate = titleCaseName(cleanNameCandidate(nextUser?.text || ''))
+      if (validCallerName(candidate)) return candidate
     }
   }
   return ''
@@ -308,13 +345,69 @@ function quoteContextFromToolResult(out: unknown): QuoteContext | null {
   return quoteContextFromUnknown(rec.quote_context)
 }
 
+function quoteContextsFromToolResult(out: unknown): QuoteContext[] {
+  if (!out || typeof out !== 'object') return []
+  const rec = out as Record<string, unknown>
+  const raw = rec.quote_contexts
+  if (!Array.isArray(raw)) return []
+  return raw.map((item) => quoteContextFromUnknown(item)).filter((item): item is QuoteContext => Boolean(item))
+}
+
+function mergeQuoteContexts(existing: QuoteContext[], incoming: QuoteContext[]): QuoteContext[] {
+  const merged = [...existing]
+  for (const ctx of incoming) {
+    const key = `${ctx.service_name.toLowerCase()}::${String(ctx.unit_price)}`
+    const already = merged.some((item) => `${item.service_name.toLowerCase()}::${String(item.unit_price)}` === key)
+    if (!already) merged.push(ctx)
+  }
+  return merged.slice(-12)
+}
+
+function quoteContextListFromUnknown(value: unknown): QuoteContext[] {
+  if (!Array.isArray(value)) return []
+  return value.map((item) => quoteContextFromUnknown(item)).filter((item): item is QuoteContext => Boolean(item))
+}
+
+function selectQuoteContextFromText(contexts: QuoteContext[], text: string): QuoteContext | null {
+  if (contexts.length === 0) return null
+  const normalized = stripAccentsForMatch(text || '')
+    .toLowerCase()
+    .replace(/\bmil\b/g, '1000')
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!normalized) return contexts[contexts.length - 1] || null
+  let best: { ctx: QuoteContext; score: number } | null = null
+  for (const ctx of contexts) {
+    const service = stripAccentsForMatch(ctx.service_name).toLowerCase()
+    const price = String(ctx.unit_price ?? '').toLowerCase()
+    let score = 0
+    const serviceNumbers = service.match(/\d+/g) || []
+    for (const n of serviceNumbers) {
+      if (new RegExp(`\\b${n}\\b`).test(normalized)) score += 10
+    }
+    if (price && new RegExp(`\\b${price.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}\\b`).test(normalized)) score += 4
+    for (const word of service.split(/[^a-z0-9]+/).filter((w) => w.length >= 4)) {
+      if (normalized.includes(word)) score += 1
+    }
+    if (!best || score > best.score) best = { ctx, score }
+  }
+  return best && best.score > 0 ? best.ctx : contexts[contexts.length - 1] || null
+}
+
 async function persistQuoteContextForCall(input: {
   organizationId: string
   vapiCallId: string
   phone: string
-  quoteContext: QuoteContext
+  quoteContext?: QuoteContext | null
+  quoteContexts?: QuoteContext[]
 }) {
-  if (!input.vapiCallId || !input.phone) return
+  if (!input.vapiCallId) return
+  const incomingContexts = input.quoteContexts?.length
+    ? input.quoteContexts
+    : input.quoteContext
+      ? [input.quoteContext]
+      : []
+  if (incomingContexts.length === 0) return
   const supabase = createServiceRoleClient()
   const { data: rows } = await supabase
     .from('call_logs')
@@ -330,7 +423,13 @@ async function persistQuoteContextForCall(input: {
     !Array.isArray(existing.structured_extraction)
       ? (existing.structured_extraction as Record<string, unknown>)
       : {}
-  const structured = { ...prev, quote_context: input.quoteContext }
+  const prevContexts = quoteContextListFromUnknown(prev.quote_contexts)
+  const mergedContexts = mergeQuoteContexts(prevContexts, incomingContexts)
+  const structured = {
+    ...prev,
+    quote_context: input.quoteContext || incomingContexts[incomingContexts.length - 1],
+    quote_contexts: mergedContexts,
+  }
   if (existing?.id) {
     await supabase.from('call_logs').update({ structured_extraction: structured }).eq('id', existing.id)
     return
@@ -338,7 +437,7 @@ async function persistQuoteContextForCall(input: {
   await supabase.from('call_logs').insert({
     organization_id: input.organizationId,
     vapi_call_id: input.vapiCallId,
-    phone: input.phone,
+    phone: input.phone || unknownCallerPlaceholderE164(),
     structured_extraction: structured,
     validation_status: 'pending',
     spam_score: 0,
@@ -348,6 +447,7 @@ async function persistQuoteContextForCall(input: {
 async function getStoredQuoteContext(input: {
   organizationId: string
   vapiCallId: string
+  selectionText?: string
 }): Promise<QuoteContext | null> {
   if (!input.vapiCallId) return null
   const supabase = createServiceRoleClient()
@@ -365,7 +465,9 @@ async function getStoredQuoteContext(input: {
     !Array.isArray(data.structured_extraction)
       ? (data.structured_extraction as Record<string, unknown>)
       : {}
-  return quoteContextFromUnknown(rec.quote_context)
+  const contexts = quoteContextListFromUnknown(rec.quote_contexts)
+  const selected = selectQuoteContextFromText(contexts, input.selectionText || '')
+  return selected || quoteContextFromUnknown(rec.quote_context)
 }
 
 async function autoSaveQuoteLeadFromTranscript(input: {
@@ -375,16 +477,16 @@ async function autoSaveQuoteLeadFromTranscript(input: {
   quoteContext: QuoteContext | null
 }) {
   if (!input.quoteContext) return null
-  const fullName = inferCurrentCallNameFromTranscript(input.transcript)
+  const fullName = inferCurrentCallNameFromTranscript(input.transcript) || 'Sin nombre'
   const phone = inferDictatedPhoneFromTranscript(input.transcript)
   const emailDeclined = hasDeclinedEmail(input.transcript)
   const need = input.quoteContext.need_for_lead
-  if (!fullName || !phone || !emailDeclined) {
+  if (!phone || !emailDeclined) {
     console.info('[vapi/quote-lead-autosave] skipped', {
       organization_id: input.organizationId,
       call_id: input.vapiCallId || null,
       service_name: input.quoteContext.service_name,
-      has_name: Boolean(fullName),
+      has_name: fullName !== 'Sin nombre',
       has_dictated_phone: Boolean(phone),
       email_declined: emailDeclined,
     })
@@ -443,13 +545,13 @@ async function autoSaveWrapQuoteLeadFromTranscript(input: {
 }) {
   const wrap = inferWrapQuoteNeedFromTranscript(input.transcript)
   if (!wrap) return null
-  const fullName = inferCurrentCallNameFromTranscript(input.transcript)
+  const fullName = inferCurrentCallNameFromTranscript(input.transcript) || 'Sin nombre'
   const phone = inferDictatedPhoneFromTranscript(input.transcript)
-  if (!fullName || !phone) {
+  if (!phone) {
     console.info('[vapi/wrap-lead-autosave] skipped', {
       organization_id: input.organizationId,
       call_id: input.vapiCallId || null,
-      has_name: Boolean(fullName),
+      has_name: fullName !== 'Sin nombre',
       has_dictated_phone: Boolean(phone),
     })
     return null
@@ -833,9 +935,22 @@ export async function dispatchVapiEvent(input: {
         const name = parseToolName(tc)
         const args = parseToolArgs(tc)
         if (name === 'save_lead_info' && vapiCallId) {
+          const quoteSelectionText = [
+            latestUserText || '',
+            transcriptFinal || '',
+            summary || '',
+            typeof args.need === 'string' ? args.need : '',
+            typeof args.notes === 'string' ? args.notes : '',
+            typeof args.summary === 'string' ? args.summary : '',
+            typeof args.product_name === 'string' ? args.product_name : '',
+            typeof args.service_name === 'string' ? args.service_name : '',
+          ]
+            .filter(Boolean)
+            .join('\n')
           const storedQuote = await getStoredQuoteContext({
             organizationId: input.organizationId,
             vapiCallId,
+            selectionText: quoteSelectionText,
           })
           const currentNeed =
             typeof args.need === 'string'
@@ -843,7 +958,15 @@ export async function dispatchVapiEvent(input: {
               : typeof args.notes === 'string'
                 ? args.notes.trim()
                 : ''
-          if (storedQuote && currentNeed.length < 12) {
+          const hasExplicitNeed =
+            typeof args.need === 'string' && args.need.trim().length >= 12
+          const currentNeedLooksUseful =
+            /\b(cotizacion|cotización|quote|business|cards|tarjeta|tarjetas|flyer|banner|print|impresion|impresión|wrap)\b/i.test(
+              stripAccentsForMatch(currentNeed),
+            )
+          const currentNeedWeak =
+            !hasExplicitNeed || currentNeed.length < 20 || !currentNeedLooksUseful
+          if (storedQuote && currentNeedWeak) {
             args.need = storedQuote.need_for_lead
             args.category = typeof args.category === 'string' && args.category.trim() ? args.category : 'catalog_quote'
             args.intent = typeof args.intent === 'string' && args.intent.trim() ? args.intent : 'quote_request'
@@ -858,7 +981,30 @@ export async function dispatchVapiEvent(input: {
               organization_id: input.organizationId,
               call_id: vapiCallId,
               service_name: storedQuote.service_name,
+              need_preview: storedQuote.need_for_lead.slice(0, 180),
               need_from_quote_context: true,
+            })
+          }
+        }
+        if (name === 'create_follow_up' && vapiCallId && !args.title) {
+          const storedQuote = await getStoredQuoteContext({
+            organizationId: input.organizationId,
+            vapiCallId,
+            selectionText: [latestUserText || '', transcriptFinal || '', summary || ''].filter(Boolean).join('\n'),
+          })
+          if (storedQuote) {
+            args.title = 'Seguimiento: cotización solicitada'
+            args.category = typeof args.category === 'string' && args.category.trim() ? args.category : 'catalog_quote'
+            args.intent = typeof args.intent === 'string' && args.intent.trim() ? args.intent : 'quote_request'
+            args.notes =
+              typeof args.notes === 'string' && args.notes.trim()
+                ? args.notes
+                : storedQuote.need_for_lead
+            console.info('[vapi/quote-context] applied_to_follow_up', {
+              organization_id: input.organizationId,
+              call_id: vapiCallId,
+              service_name: storedQuote.service_name,
+              title: args.title,
             })
           }
         }
@@ -911,19 +1057,23 @@ export async function dispatchVapiEvent(input: {
           })
           if ((name === 'get_price_quote' || name === 'get_product_price') && vapiCallId) {
             const quoteContext = quoteContextFromToolResult(out)
-            if (quoteContext) {
+            const quoteContexts = quoteContextsFromToolResult(out)
+            if (quoteContext || quoteContexts.length > 0) {
               await persistQuoteContextForCall({
                 organizationId: input.organizationId,
                 vapiCallId,
                 phone: phoneForToolContext || resolvedPhone,
                 quoteContext,
+                quoteContexts,
               })
               console.info('[vapi/quote-context] stored', {
                 organization_id: input.organizationId,
                 call_id: vapiCallId,
-                service_name: quoteContext.service_name,
-                catalog_source: quoteContext.catalog_source,
-                catalog_updated_at: quoteContext.catalog_updated_at,
+                service_name: quoteContext?.service_name ?? null,
+                quote_contexts_count: quoteContexts.length,
+                quote_context_names: quoteContexts.map((ctx) => ctx.service_name).slice(0, 8),
+                catalog_source: quoteContext?.catalog_source ?? quoteContexts[0]?.catalog_source ?? null,
+                catalog_updated_at: quoteContext?.catalog_updated_at ?? quoteContexts[0]?.catalog_updated_at ?? null,
               })
             }
           }
