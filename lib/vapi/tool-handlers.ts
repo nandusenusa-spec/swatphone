@@ -334,6 +334,69 @@ function inferTransferDestinationFromText(text: string): {
   }
 }
 
+function contextTextForTool(context: ToolContext, ...extra: string[]): string {
+  return [
+    context.latestUserText || '',
+    context.transcript || '',
+    context.callSummary || '',
+    ...extra,
+  ]
+    .filter(Boolean)
+    .join('\n')
+}
+
+function inferProductNameFromText(text: string): string {
+  const normalized = stripAccentsForMatch(text || '')
+    .toLowerCase()
+    .replace(/\s+/g, ' ')
+    .trim()
+  if (!normalized) return ''
+  if (/\bflyers?\b/.test(normalized)) {
+    if (
+      /\b4\s*(x|por|by)\s*6\b/.test(normalized) ||
+      /\bcuatro\s*(por|x)\s*seis\b/.test(normalized)
+    ) {
+      return 'flyers 4x6'
+    }
+    return 'flyers'
+  }
+  if (/\bbusiness cards?\b|\btc\b|\btarjetas?\b/.test(normalized)) return 'business cards'
+  return ''
+}
+
+function inferFullNameFromText(text: string): string {
+  const raw = (text || '').replace(/\s+/g, ' ').trim()
+  if (!raw) return ''
+  const patterns = [
+    /\b(?:me llamo|mi nombre es|soy)\s+([A-Z][A-Za-z'-]+(?:\s+[A-Z][A-Za-z'-]+){1,3})/i,
+    /\b(?:nombre y apellido|nombre)\s+(?:es|:)?\s*([A-Z][A-Za-z'-]+(?:\s+[A-Z][A-Za-z'-]+){1,3})/i,
+  ]
+  for (const pattern of patterns) {
+    const match = raw.match(pattern)
+    if (match?.[1]) return match[1].trim()
+  }
+  const capitalized = raw.match(/\b([A-Z][a-z'-]{2,}\s+[A-Z][a-z'-]{2,})\b/)
+  return capitalized?.[1]?.trim() || ''
+}
+
+function inferConfirmedPhoneFromText(text: string): string {
+  const raw = text || ''
+  if (!/\b(correcto|correcta|si|sí|confirmo|exacto|ese es)\b/i.test(raw)) return ''
+  const candidates = raw.match(/(?:\+?\d[\d\s().-]{7,}\d)/g) || []
+  for (const candidate of candidates.reverse()) {
+    const normalized = normalizePhone(candidate)
+    if (normalized) return normalized
+  }
+  return ''
+}
+
+function cleanOptionalEmail(raw: unknown): string | undefined {
+  if (typeof raw !== 'string') return undefined
+  const trimmed = raw.trim()
+  if (!trimmed || !/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(trimmed)) return undefined
+  return trimmed
+}
+
 export async function executeToolHandler(
   toolName: string,
   args: Record<string, unknown>,
@@ -397,10 +460,15 @@ export async function executeToolHandler(
           typeof args.issue_description === 'string' ? args.issue_description : undefined,
       })
     case 'get_price_quote':
+      if (!args.service_name) {
+        const inferred = inferProductNameFromText(contextTextForTool(context))
+        if (inferred) args.service_name = inferred
+      }
       console.info('[vapi/tool-call] get_price_quote', {
         organization_id: context.organizationId,
         vapi_call_id: context.vapiCallId || null,
         service_name_preview: String(args.service_name ?? '').slice(0, 120),
+        inferred_from_context: !args.service_name ? false : typeof args.service_name === 'string',
       })
       if (!args.service_name) return missing(['service_name'])
       return runGetPriceQuote({
@@ -409,6 +477,10 @@ export async function executeToolHandler(
         logContext: { toolCallId: context.vapiCallId || null, toolName: 'get_price_quote' },
       })
     case 'get_product_price': {
+      if (!args.product_name && !args.service_name) {
+        const inferred = inferProductNameFromText(contextTextForTool(context))
+        if (inferred) args.product_name = inferred
+      }
       const name =
         typeof args.product_name === 'string'
           ? args.product_name
@@ -419,6 +491,7 @@ export async function executeToolHandler(
         organization_id: context.organizationId,
         vapi_call_id: context.vapiCallId || null,
         product_name_preview: name.slice(0, 120),
+        inferred_from_context: Boolean(name && !('product_name' in args || 'service_name' in args)),
       })
       if (!name.trim()) return missing(['product_name'])
       return runGetPriceQuote({
@@ -444,9 +517,11 @@ export async function executeToolHandler(
         ),
         has_context_phone: Boolean(context.phone?.trim()),
       })
+      const fallbackText = contextTextForTool(context)
+      const inferredPhone = inferConfirmedPhoneFromText(fallbackText)
       const argPhone = typeof args.phone === 'string' ? normalizePhone(args.phone) : ''
       const ctxPhone = context.phone ? normalizePhone(context.phone) : ''
-      const phone = argPhone || ctxPhone || ''
+      const phone = argPhone || ctxPhone || inferredPhone || ''
       if (!phone) {
         return missing(['phone'], 'Me falta un dato para registrar tu solicitud.')
       }
@@ -455,8 +530,9 @@ export async function executeToolHandler(
       const last = typeof args.last_name === 'string' ? args.last_name.trim() : ''
       const full = typeof args.full_name === 'string' ? args.full_name.trim() : ''
       const nameOnly = typeof args.name === 'string' ? args.name.trim() : ''
+      const inferredName = inferFullNameFromText(fallbackText)
       const mergedName =
-        [first, last].filter(Boolean).join(' ').trim() || full || nameOnly || undefined
+        [first, last].filter(Boolean).join(' ').trim() || full || nameOnly || inferredName || undefined
 
       const noteParts = [
         typeof args.notes === 'string' ? args.notes.trim() : '',
@@ -476,6 +552,7 @@ export async function executeToolHandler(
           full_name_present: false,
           phone_present: true,
           need_present: needPresent,
+          inferred_name_present: Boolean(inferredName),
           saved: false,
           leadId: null,
           error: 'missing_name',
@@ -483,7 +560,8 @@ export async function executeToolHandler(
         return {
           ok: false as const,
           error: 'missing_name' as const,
-          primary_message_for_caller: '¿Cuál es tu nombre y apellido?',
+          primary_message_for_caller:
+            'Disculpá, no pude guardar la solicitud todavía. Confirmame tu nombre y apellido.',
         }
       }
 
@@ -555,7 +633,7 @@ export async function executeToolHandler(
         organizationId: context.organizationId,
         phone,
         name: mergedName,
-        email: typeof args.email === 'string' ? args.email : undefined,
+        email: cleanOptionalEmail(args.email),
         company: typeof args.company === 'string' ? args.company : undefined,
         notes: notesWithMeta || mergedNotes,
         commercialSnapshot: commercial,
@@ -577,13 +655,13 @@ export async function executeToolHandler(
           const tgOk = await notifyLeadTelegram({
             temperature: classifyLeadTemperature({
               customerName: mergedName, phone,
-              email: typeof args.email==='string'?args.email:null,
+              email: cleanOptionalEmail(args.email) ?? null,
               need: mergedNotes||'',
               priceRequested: commercial.intent==='quote_request',
               dateNeeded: typeof args.date_needed==='string'?args.date_needed:null,
             }),
             customerName: mergedName||'Sin nombre', phone,
-            email: typeof args.email==='string'?args.email:null,
+            email: cleanOptionalEmail(args.email) ?? null,
             need: mergedNotes||'',
             priceRequested: commercial.intent==='quote_request',
             dateNeeded: typeof args.date_needed==='string'?args.date_needed:null,
@@ -616,6 +694,13 @@ export async function executeToolHandler(
           leadId: null,
           error: out.error,
         })
+        return {
+          ...out,
+          primary_message_for_caller:
+            out.error === 'missing_name'
+              ? 'Disculpá, no pude guardar la solicitud todavía. Confirmame tu nombre y apellido.'
+              : 'Disculpá, no pude guardar la solicitud todavía. Confirmame los datos para intentarlo de nuevo.',
+        }
       }
 
       return out
