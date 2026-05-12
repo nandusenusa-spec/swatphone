@@ -591,6 +591,51 @@ function callerDeclinedEmail(text: string): boolean {
   return /\b(no tengo email|no tengo correo|no email|sin email|sin correo|no quiero dar email|no quiero dar correo)\b/.test(normalized)
 }
 
+/** Email dicho "at gmail dot com" o literal en turnos de usuario. */
+function inferSpokenEmailFromTranscript(transcript: string): string | undefined {
+  const normalized = (transcript || '').replace(/\r?\n/g, ' ').replace(/\s+/g, ' ')
+  const spokenGmail = normalized.match(
+    /\b([a-z0-9][a-z0-9._\s-]{1,48}[a-z0-9])\s+at\s+gmail\s+dot\s+com\b/i,
+  )
+  if (spokenGmail) {
+    const local = spokenGmail[1].replace(/\s+/g, '').toLowerCase()
+    if (local.length >= 3) return cleanOptionalEmail(`${local}@gmail.com`)
+  }
+  const spokenYahoo = normalized.match(
+    /\b([a-z0-9][a-z0-9._\s-]{1,48}[a-z0-9])\s+at\s+yahoo\s+dot\s+com\b/i,
+  )
+  if (spokenYahoo) {
+    const local = spokenYahoo[1].replace(/\s+/g, '').toLowerCase()
+    if (local.length >= 3) return cleanOptionalEmail(`${local}@yahoo.com`)
+  }
+  const direct = normalized.match(/\b[A-Za-z0-9._%+-]+@[A-Za-z0-9.-]+\.[A-Za-z]{2,}\b/)
+  if (direct) return cleanOptionalEmail(direct[0])
+  return undefined
+}
+
+function inferCompanyFromTranscript(transcript: string): string | undefined {
+  const lines = parseTranscriptLines(transcript)
+  for (let i = 0; i < lines.length - 1; i += 1) {
+    if (lines[i].speaker !== 'assistant') continue
+    const a = stripAccentsForMatch(lines[i].text).toLowerCase()
+    const companyQ =
+      /\b(what'?s the company name|what is the company name|company name)\b/.test(a) ||
+      /\b(what'?s your business name|your business name|business name)\b/.test(a) ||
+      /\b(nombre de la empresa|como se llama la empresa)\b/.test(a)
+    if (!companyQ) continue
+    const next = lines.slice(i + 1).find((line) => line.speaker === 'user')
+    if (!next) return undefined
+    const raw = cleanNameCandidate(next.text)
+    if (!raw || raw.length > 80) continue
+    if (/^\d[\d\s-]+$/.test(raw)) continue
+    if (/@|\bat\s+gmail|\bgmail\s+dot|\bdot\s+com\b/i.test(raw)) continue
+    const parts = raw.split(/\s+/).filter(Boolean)
+    if (parts.length > 6) continue
+    return titleCaseName(raw)
+  }
+  return undefined
+}
+
 function quoteContextFromArgs(args: Record<string, unknown>): {
   serviceName: string
   needForLead: string
@@ -850,6 +895,16 @@ export async function executeToolHandler(
       const phoneSource = dictatedPhone ? 'transcript' : argPhone ? 'tool_args' : ctxPhone ? 'caller_id' : 'missing'
       const emailDeclined = callerDeclinedEmail(fallbackText)
       const cleanedEmail = emailDeclined ? undefined : cleanOptionalEmail(args.email)
+      const inferredEmailFromTx = emailDeclined
+        ? undefined
+        : inferSpokenEmailFromTranscript(context.transcript || '')
+      const effectiveEmail = cleanedEmail || inferredEmailFromTx
+      const argCompanyTrim = typeof args.company === 'string' ? args.company.trim() : ''
+      const inferredCompanyFromTx = inferCompanyFromTranscript(context.transcript || '')
+      const effectiveCompany =
+        argCompanyTrim || inferredCompanyFromTx
+          ? argCompanyTrim || inferredCompanyFromTx
+          : undefined
       if (!phone) {
         return missing(['phone'], 'Me falta un dato para registrar tu solicitud.')
       }
@@ -1025,8 +1080,8 @@ export async function executeToolHandler(
         organizationId: context.organizationId,
         phone,
         name: finalName,
-        email: cleanedEmail,
-        company: typeof args.company === 'string' ? args.company : undefined,
+        email: effectiveEmail,
+        company: effectiveCompany,
         notes: notesWithMeta || mergedNotes,
         commercialSnapshot: commercial,
         vapiCallId: context.vapiCallId ?? null,
@@ -1122,14 +1177,16 @@ export async function executeToolHandler(
               temperature: classifyLeadTemperature({
                 customerName: displayCustomerName,
                 phone: out.customer?.phone ?? phone,
-                email: cleanedEmail ?? null,
+                email: effectiveEmail ?? null,
+                company: effectiveCompany ?? null,
                 need: mergedNotes || '',
                 priceRequested: commercial.intent === 'quote_request',
                 dateNeeded: typeof args.date_needed === 'string' ? args.date_needed : null,
               }),
               customerName: displayCustomerName,
               phone: out.customer?.phone ?? phone,
-              email: cleanedEmail ?? null,
+              email: effectiveEmail ?? null,
+              company: effectiveCompany ?? null,
               need: mergedNotes || '',
               priceRequested: commercial.intent === 'quote_request',
               dateNeeded: typeof args.date_needed === 'string' ? args.date_needed : null,

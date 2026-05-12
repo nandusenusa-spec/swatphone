@@ -1,7 +1,10 @@
 export type LeadTemperature = 'hot' | 'lukewarm'
 export type TelegramLeadPayload = {
   temperature: LeadTemperature; customerName: string; phone: string
-  email?: string | null; need: string; priceRequested?: boolean
+  email?: string | null
+  /** Empresa u org (ayuda a notificar cuando el nombre es solo de pila). */
+  company?: string | null
+  need: string; priceRequested?: boolean
   dateNeeded?: string | null; category?: string | null
   summary?: string | null; nextAction?: string | null; organizationName?: string
 }
@@ -21,9 +24,16 @@ async function sendMsg(chatId: string, text: string): Promise<boolean> {
 }
 export function classifyLeadTemperature(p:{
   customerName?:string|null, phone?:string|null, email?:string|null,
+  company?:string|null,
   need?:string|null, priceRequested?:boolean, dateNeeded?:string|null
 }): LeadTemperature {
-  const hasName=(p.customerName||'').trim().split(/\s+/).length>=2
+  const nameWords = (p.customerName||'').trim().split(/\s+/).filter(Boolean).length
+  const hasName =
+    nameWords >= 2 ||
+    (nameWords === 1 &&
+      ((p.email || '').trim().length > 5 ||
+        (p.company || '').trim().length > 1 ||
+        (p.need || '').trim().length >= 25))
   const hasPhone=!!(p.phone||'').trim()
   const hasNeed=(p.need||'').trim().length>=5
   const hasExtra=!!(p.email||p.priceRequested||p.dateNeeded)
@@ -37,18 +47,46 @@ function dashboardCallsUrl(): string | null {
   return `${base.replace(/\/$/, '')}/dashboard/calls`
 }
 
+function telegramCallerDisplayName(payload: TelegramLeadPayload): string {
+  const fullName = (payload.customerName || '').trim()
+  const words = fullName.split(/\s+/).filter(Boolean)
+  if (words.length >= 2) return fullName
+  const company = (payload.company || '').trim()
+  const email = (payload.email || '').trim()
+  if (company) return `${fullName} (${company})`
+  if (email.includes('@')) return `${fullName} (${email})`
+  return fullName
+}
+
 export async function notifyLeadTelegram(payload: TelegramLeadPayload): Promise<boolean> {
   const chatId=process.env.TELEGRAM_CHAT_ID?.trim()
   if(!chatId){ console.warn('[telegram] TELEGRAM_CHAT_ID no configurado'); return false }
   const fullName = (payload.customerName || '').trim()
   const words = fullName.split(/\s+/).filter(Boolean)
-  if (!fullName || fullName.toLowerCase() === 'sin nombre' || words.length < 2) {
+  const emailTrim = (payload.email || '').trim()
+  const companyTrim = (payload.company || '').trim()
+  const needTrim = (payload.need || '').trim()
+  const hasStrongContextForSingleName =
+    emailTrim.length > 5 ||
+    companyTrim.length > 1 ||
+    needTrim.length >= 20 ||
+    Boolean(payload.priceRequested) ||
+    Boolean((payload.dateNeeded || '').trim())
+  if (!fullName || fullName.toLowerCase() === 'sin nombre') {
+    console.warn('[telegram] skip_notify_missing_name', { preview: fullName.slice(0, 48) })
+    return false
+  }
+  if (words.length < 2 && !hasStrongContextForSingleName) {
     console.warn('[telegram] skip_notify_incomplete_caller_name', {
       preview: fullName.slice(0, 48),
       words: words.length,
+      has_email: emailTrim.length > 0,
+      has_company: companyTrim.length > 0,
+      need_len: needTrim.length,
     })
     return false
   }
+  const displayName = telegramCallerDisplayName(payload)
   const isHot = payload.temperature==='hot'
   const org=esc(payload.organizationName||'SWATWORKS')
   const header = isHot ? '🔥 *LEAD — '+org+'*' : '⚠️ *Lead — '+org+'*'
@@ -60,7 +98,7 @@ export async function notifyLeadTelegram(payload: TelegramLeadPayload): Promise<
   const subject = subjectRaw.length > 600 ? subjectRaw.slice(0, 597) + '…' : subjectRaw
   const lines=[
     header,'',
-    '👤 '+esc(fullName),
+    '👤 '+esc(displayName),
     '📋 '+esc(subject),
     '',
     '⏰ _'+esc(nowStr())+'_',
