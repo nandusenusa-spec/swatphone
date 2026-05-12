@@ -41,14 +41,26 @@ function leadFullNameValid(name: string | undefined): boolean {
   const normalized = stripAccentsForMatch(name).toLowerCase().replace(/\s+/g, ' ').trim()
   const blocked =
     /^(y apellido|es jos|esta semana|particular|empresa|no tengo email|sin email|muchas gracias|gracias|buen dia|hasta luego|chau|corta|ok|correcto|perfecto)$/i.test(normalized) ||
-    /\b(nombre|apellido|telefono|cotizacion|wrap|vehicular|semana|particular|gracias|chau)\b/i.test(normalized)
+    /\b(nombre|apellido|telefono|cotizacion|semana|particular|gracias|chau)\b/i.test(normalized)
   if (blocked) return false
   const parts = name.trim().split(/\s+/).filter((p) => p.length > 0)
   return (
     parts.length >= 1 &&
-    parts.length <= 2 &&
+    parts.length <= 4 &&
     parts.every((part) => /^[\p{L}'-]{2,}$/u.test(part))
   )
+}
+
+/** Corta colas tipo " from Katy Magic" que el modelo mete en full_name. */
+function stripTrailingCompanyFromPersonName(raw: string): string {
+  let s = raw.trim()
+  const cutFrom = s.search(/\s+from\s+/i)
+  if (cutFrom > 4) s = s.slice(0, cutFrom).trim()
+  const cutDe = s.search(/\s+de\s+(la\s+)?(empresa|mi negocio)\b/i)
+  if (cutDe > 4) s = s.slice(0, cutDe).trim()
+  const cutPara = s.search(/\s+para\s+(mi|el)\s+/i)
+  if (cutPara > 6) s = s.slice(0, cutPara).trim()
+  return s.replace(/\s+/g, ' ').trim()
 }
 
 function strArg(args: Record<string, unknown>, key: string): string {
@@ -442,12 +454,18 @@ function inferNameAfterAssistantPrompt(transcript: string): string {
   const lines = parseTranscriptLines(transcript)
   for (let i = 0; i < lines.length - 1; i += 1) {
     const current = stripAccentsForMatch(lines[i].text).toLowerCase()
-    if (
-      lines[i].speaker === 'assistant' &&
-      /\b(nombre y apellido|nombre completo|me das tu nombre|cual es tu nombre)\b/.test(current)
-    ) {
+    if (lines[i].speaker !== 'assistant') continue
+    const namePrompt =
+      /\b(nombre y apellido|nombre completo|me das tu nombre|cual es tu nombre)\b/.test(current) ||
+      /\bwhat'?s your name\b/.test(current) ||
+      /\bwhat is your name\b/.test(current) ||
+      /\btell me your name\b/.test(current) ||
+      /\bmay i have your name\b/.test(current)
+    if (namePrompt) {
       const nextUser = lines.slice(i + 1).find((line) => line.speaker === 'user')
-      const candidate = titleCaseName(cleanNameCandidate(nextUser?.text || ''))
+      const candidate = stripTrailingCompanyFromPersonName(
+        titleCaseName(cleanNameCandidate(nextUser?.text || '')),
+      )
       if (leadFullNameValid(candidate)) return candidate
     }
   }
@@ -457,6 +475,57 @@ function inferNameAfterAssistantPrompt(transcript: string): string {
 function inferFullNameFromText(text: string): string {
   const candidate = inferNameAfterAssistantPrompt(text)
   return leadFullNameValid(candidate) ? candidate : ''
+}
+
+/** Nombre + apellido cuando el modelo no los pasa bien (inglés: nombre y apellido en turnos separados). */
+function inferFullNameFromConversation(transcript: string): string {
+  const lines = parseTranscriptLines(transcript)
+  const hasLabels = lines.some((line) => line.speaker !== 'unknown')
+  if (!hasLabels) {
+    const m = transcript.match(/\bmy name is\s+([^.?\n]+)/i)
+    if (m) {
+      const t = stripTrailingCompanyFromPersonName(titleCaseName(cleanNameCandidate(m[1])))
+      if (leadFullNameValid(t)) return t
+    }
+    return ''
+  }
+
+  for (let i = 0; i < lines.length; i += 1) {
+    if (lines[i].speaker !== 'user') continue
+    const mm =
+      lines[i].text.match(/\bmy name is\s+([^.?\n]+)/i) ||
+      lines[i].text.match(/\bmi nombre es\s+([^.?\n]+)/i) ||
+      lines[i].text.match(/\b(?:soy|me llamo)\s+([^.?\n]+)/i)
+    if (!mm) continue
+    let first = stripTrailingCompanyFromPersonName(titleCaseName(cleanNameCandidate(mm[1])))
+    if (leadFullNameValid(first)) return first
+    const firstTok = first.split(/\s+/).filter(Boolean)[0] || ''
+    if (firstTok.length < 2) continue
+
+    for (let j = i + 1; j < Math.min(lines.length, i + 10); j += 1) {
+      if (lines[j].speaker !== 'assistant') continue
+      const aj = stripAccentsForMatch(lines[j].text).toLowerCase()
+      if (!/\blast name\b|\bapellido\b/i.test(aj)) continue
+      const nextU = lines.slice(j + 1).find((line) => line.speaker === 'user')
+      if (!nextU) break
+      const lastRaw = titleCaseName(cleanNameCandidate(nextU.text))
+      const lastTok = lastRaw.split(/\s+/).filter(Boolean)[0] || ''
+      if (!lastTok || !/^[\p{L}'-]{2,}$/u.test(lastTok)) break
+      const full = `${firstTok} ${lastTok}`.trim()
+      if (leadFullNameValid(full)) return full
+      break
+    }
+  }
+
+  for (const L of lines) {
+    if (L.speaker !== 'assistant') continue
+    const m = L.text.match(/\b(?:Perfect|Perfecto)[^.!?\n]{0,100}?\b([A-Z][a-z]{1,24})\s+([A-Z][a-z]{1,24})\b/)
+    if (m) {
+      const full = `${m[1]} ${m[2]}`.trim()
+      if (leadFullNameValid(full)) return full
+    }
+  }
+  return ''
 }
 
 function normalizeDictatedDigits(raw: string): string {
@@ -535,9 +604,12 @@ function quoteContextFromArgs(args: Record<string, unknown>): {
   return { serviceName, needForLead }
 }
 
-/** Señales de pedido comercial en lo que dijo el cliente (cartelería, rotulación, impresión, etc.). */
+/** Señales de pedido comercial (ES + EN): cartelería, letreros, cotización, etc. */
 const LEAD_NEED_TOPIC =
-  /\b(cartel|carteles|luminoso|luminosos|rótulo|rotulo|senaletica|señalética|restaurant|restaurante|impres|imprenta|banner|vinilo|letrero|ne[oó]n|neon|backlit|fachada|avenida|cotiz|cotización|presupuest|gran formato|wide\s*format|lettering|señal|tablero)\b/i
+  /\b(cartel|carteles|luminoso|luminosos|rótulo|rotulo|senaletica|señalética|restaurant|restaurante|impres|imprenta|banner|vinilo|letrero|ne[oó]n|neon|backlit|fachada|avenida|cotiz|cotización|presupuest|gran formato|wide\s*format|lettering|señal|tablero|sign|signs|signage|billboard|storefront|store\s+front|awning|facade|outdoor|indoor|acrylic|aluminum|metal|wood|plywood|pvc|size|format|black\s*cat|graphic|logo|printed|printing|business\s+owner|my business|front of my|for my business|make a|need a|need an|would like|looking for|trying to|get a|order a|quote|pricing|estimate)\b/i
+
+const COMMERCIAL_NEED_FALLBACK =
+  /\b(need|want|would like|looking for|trying to|make|get|order|buy|quote|estimate|sign|signage|cartel|luminoso|outdoor|indoor|large|big|small|custom|printed|wrap|vehicle|restaurant|store|shop|cat|avenue|front)\b/i
 
 function stripLikelyPromptLeak(text: string): string {
   const idx = text.search(
@@ -551,17 +623,35 @@ function stripLikelyPromptLeak(text: string): string {
  * Si la tool va sin need/notes pero el cliente ya describió el trabajo en la llamada, usa esas frases.
  * Evita loops de missing_need cuando el modelo olvida pasar need en los argumentos.
  */
+function inferLeadNeedFromRecapLines(transcript: string | null | undefined): string | null {
+  const lines = parseTranscriptLines(transcript || '')
+  for (const L of lines) {
+    if (L.speaker !== 'assistant' && L.speaker !== 'unknown') continue
+    const t = L.text
+    if (!/\b(recap|summarize|resumen|so to recap|entonces|outdoor|indoor|sign|cartel|luminoso|quote)\b/i.test(t)) {
+      continue
+    }
+    if (!LEAD_NEED_TOPIC.test(t) && !COMMERCIAL_NEED_FALLBACK.test(t)) continue
+    const cleaned = stripLikelyPromptLeak(t).trim()
+    if (cleaned.length >= 24) return cleaned.slice(0, 2000)
+  }
+  return null
+}
+
 function inferLeadNeedFromTranscript(transcript: string | null | undefined): string | null {
   const raw = (transcript || '').trim()
   if (raw.length < 15) return null
   const userLines = userOnlyText(raw)
     .split(/\r?\n+/)
     .map((s) => s.trim())
-    .filter((s) => s.length >= 12)
+    .filter((s) => s.length >= 8)
   const hits = userLines.filter((s) => LEAD_NEED_TOPIC.test(s))
-  const picked = hits.length ? hits : userLines.filter((s) => s.length >= 35)
+  let picked = hits.length ? hits : userLines.filter((s) => s.length >= 28)
+  if (!picked.length) {
+    picked = userLines.filter((s) => COMMERCIAL_NEED_FALLBACK.test(s) && s.length >= 14)
+  }
   if (!picked.length) return null
-  const merged = stripLikelyPromptLeak(picked.slice(-8).join('\n')).trim()
+  const merged = stripLikelyPromptLeak(picked.slice(-10).join('\n')).trim()
   return merged.length >= 3 ? merged.slice(0, 2000) : null
 }
 
@@ -769,14 +859,18 @@ export async function executeToolHandler(
       const full = typeof args.full_name === 'string' ? args.full_name.trim() : ''
       const nameOnly = typeof args.name === 'string' ? args.name.trim() : ''
       const promptAnswerName = inferNameAfterAssistantPrompt(context.transcript || '')
-      const inferredName = promptAnswerName || inferFullNameFromText(fallbackText)
-      const modelArgsName = [first, last].filter(Boolean).join(' ').trim() || full || nameOnly || ''
+      const inferredFromPattern = inferFullNameFromText(fallbackText)
+      const inferredFromConvo = inferFullNameFromConversation(context.transcript || '')
+      const inferredName = promptAnswerName || inferredFromPattern || inferredFromConvo
+      const modelArgsNameRaw = [first, last].filter(Boolean).join(' ').trim() || full || nameOnly || ''
+      const modelArgsName = stripTrailingCompanyFromPersonName(modelArgsNameRaw)
       const modelNameLooksLikeFragment = /\b(es|soy|nombre|llamo|jos)\b/i.test(modelArgsName)
       const transcriptNameWins =
         leadFullNameValid(inferredName) && (!leadFullNameValid(modelArgsName) || modelNameLooksLikeFragment)
-      const mergedName = transcriptNameWins
+      let mergedName = transcriptNameWins
         ? inferredName
         : modelArgsName || inferredName || undefined
+      mergedName = mergedName ? stripTrailingCompanyFromPersonName(mergedName) : undefined
       const nameSource = transcriptNameWins ? 'transcript' : modelArgsName ? 'tool_args' : inferredName ? 'transcript' : 'missing'
 
       const wrapFallback = inferWrapNeedFromText(fallbackText)
@@ -797,6 +891,10 @@ export async function executeToolHandler(
       if (!mergedNotes || mergedNotes.trim().length < 3) {
         const fromTranscript = inferLeadNeedFromTranscript(context.transcript || '')
         if (fromTranscript) mergedNotes = fromTranscript
+      }
+      if (!mergedNotes || mergedNotes.trim().length < 3) {
+        const fromRecap = inferLeadNeedFromRecapLines(context.transcript || '')
+        if (fromRecap) mergedNotes = fromRecap
       }
 
       const needPresent = Boolean(mergedNotes && mergedNotes.trim().length >= 3)
