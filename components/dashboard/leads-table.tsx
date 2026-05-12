@@ -72,7 +72,6 @@ const statusConfig: Record<string, { label: string; color: string }> = {
 
 export function LeadsTable({ leads, teamMembers }: { leads: Lead[]; teamMembers: TeamMember[] }) {
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null)
-  const [deletingId, setDeletingId] = useState<string | null>(null)
   const router = useRouter()
   const supabase = createClient()
 
@@ -108,31 +107,6 @@ export function LeadsTable({ leads, teamMembers }: { leads: Lead[]; teamMembers:
 
   const effScore = (lead: Lead) =>
     typeof lead.display_score === 'number' ? lead.display_score : lead.score
-
-  const handleDeleteLead = async (leadId: string) => {
-    const confirmed = window.confirm('¿Seguro que querés borrar este lead?')
-    if (!confirmed) return
-    setDeletingId(leadId)
-    try {
-      const res = await fetch(`/api/dashboard/leads/${leadId}`, {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-      })
-      const data = (await res.json().catch(() => ({}))) as { error?: string; message?: string }
-      if (!res.ok) {
-        const msg = data?.message || data?.error || 'No se pudo borrar el lead'
-        toast.error('No se pudo borrar el lead', { description: msg })
-        return
-      }
-      toast.success('Lead borrado')
-      router.refresh()
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : 'Error de red al borrar el lead'
-      toast.error('No se pudo borrar el lead', { description: msg })
-    } finally {
-      setDeletingId(null)
-    }
-  }
 
   const getScoreColor = (score: number) => {
     if (score >= 70) return 'text-green-600'
@@ -273,15 +247,6 @@ export function LeadsTable({ leads, teamMembers }: { leads: Lead[]; teamMembers:
                       </a>
                     </Button>
                   )}
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    disabled={deletingId === lead.id}
-                    onClick={() => handleDeleteLead(lead.id)}
-                    title="Borrar lead"
-                  >
-                    <Trash2 className="h-4 w-4 text-destructive" />
-                  </Button>
                 </div>
               </TableCell>
             </TableRow>

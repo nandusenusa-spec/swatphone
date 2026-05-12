@@ -19,12 +19,10 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { PhoneIncoming, PhoneOutgoing, Play, FileText, Download, Loader, Trash2 } from 'lucide-react'
+import { PhoneIncoming, PhoneOutgoing, Play, FileText, Download, Loader } from 'lucide-react'
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { cn } from '@/lib/utils'
-import { useRouter } from 'next/navigation'
-import { toast } from 'sonner'
 
 interface Call {
   id: string
@@ -78,9 +76,6 @@ export function CallsTable({ calls }: { calls: Call[] }) {
   const [selectedCall, setSelectedCall] = useState<Call | null>(null)
   const [isPlayingAudio, setIsPlayingAudio] = useState(false)
   const [audioLoading, setAudioLoading] = useState(false)
-  const [deletingId, setDeletingId] = useState<string | null>(null)
-  const [deleteError, setDeleteError] = useState<string | null>(null)
-  const router = useRouter()
 
   const formatDuration = (seconds: number) => {
     const mins = Math.floor(seconds / 60)
@@ -104,34 +99,6 @@ export function CallsTable({ calls }: { calls: Call[] }) {
     window.open(recordingUrl, '_blank')
   }
 
-  const handleDeleteCall = async (callId: string) => {
-    const confirmed = window.confirm('¿Seguro que querés borrar esta llamada?')
-    if (!confirmed) return
-    setDeleteError(null)
-    setDeletingId(callId)
-    try {
-      const res = await fetch(`/api/dashboard/calls/${callId}`, {
-        method: 'DELETE',
-        headers: { 'Content-Type': 'application/json' },
-      })
-      const data = (await res.json().catch(() => ({}))) as { error?: string; message?: string }
-      if (!res.ok) {
-        const msg = data?.message || data?.error || 'No se pudo borrar la llamada'
-        setDeleteError(msg)
-        toast.error('No se pudo borrar la llamada', { description: msg })
-        return
-      }
-      toast.success('Llamada borrada')
-      router.refresh()
-    } catch (error) {
-      const msg = error instanceof Error ? error.message : 'Error de red al borrar la llamada'
-      setDeleteError(msg)
-      toast.error('No se pudo borrar la llamada', { description: msg })
-    } finally {
-      setDeletingId(null)
-    }
-  }
-
   if (calls.length === 0) {
     return (
       <div className="flex h-32 items-center justify-center text-sm text-muted-foreground">
@@ -142,11 +109,6 @@ export function CallsTable({ calls }: { calls: Call[] }) {
 
   return (
     <>
-      {deleteError ? (
-        <div className="mb-3 rounded-md border border-destructive/40 bg-destructive/10 p-2 text-sm text-destructive">
-          {deleteError}
-        </div>
-      ) : null}
       <Table>
         <TableHeader>
           <TableRow>
@@ -248,15 +210,6 @@ export function CallsTable({ calls }: { calls: Call[] }) {
                       <FileText className="h-4 w-4" />
                     </Button>
                   )}
-                  <Button
-                    size="sm"
-                    variant="ghost"
-                    onClick={() => handleDeleteCall(call.id)}
-                    disabled={deletingId === call.id}
-                    title="Borrar llamada"
-                  >
-                    <Trash2 className="h-4 w-4 text-destructive" />
-                  </Button>
                 </div>
               </TableCell>
             </TableRow>
