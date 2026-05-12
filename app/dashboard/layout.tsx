@@ -10,11 +10,11 @@ export default async function DashboardLayout({
   const { profile, demoMode } = await loadDashboardLayoutProfile()
 
   return (
-    <div className="flex h-screen bg-background">
+    <div className="flex min-h-dvh flex-col bg-background md:h-screen md:flex-row">
       <DashboardSidebar profile={profile} demoMode={demoMode} />
-      <div className="flex flex-1 flex-col overflow-hidden">
+      <div className="flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden">
         <DashboardHeader profile={profile} demoMode={demoMode} />
-        <main className="flex-1 overflow-y-auto p-6">
+        <main className="flex-1 overflow-y-auto p-3 sm:p-6">
           {children}
         </main>
       </div>

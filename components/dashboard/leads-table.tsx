@@ -178,7 +178,8 @@ export function LeadsTable({ leads, teamMembers }: { leads: Lead[]; teamMembers:
 
   return (
     <>
-      <Table>
+      <div className="w-full overflow-x-auto">
+        <Table className="min-w-[900px]">
         <TableHeader>
           <TableRow>
             <TableHead>Contacto</TableHead>
@@ -323,10 +324,11 @@ export function LeadsTable({ leads, teamMembers }: { leads: Lead[]; teamMembers:
           ))}
         </TableBody>
       </Table>
+      </div>
 
       {/* Lead details dialog */}
       <Dialog open={!!selectedLead} onOpenChange={() => setSelectedLead(null)}>
-        <DialogContent className="max-w-lg">
+        <DialogContent className="max-h-[90vh] max-w-[calc(100vw-1rem)] overflow-y-auto sm:max-w-lg">
           <DialogHeader>
             <DialogTitle>{selectedLead?.name || 'Lead'}</DialogTitle>
             <DialogDescription>
@@ -335,7 +337,7 @@ export function LeadsTable({ leads, teamMembers }: { leads: Lead[]; teamMembers:
           </DialogHeader>
           {selectedLead && (
             <div className="space-y-4">
-              <div className="grid grid-cols-2 gap-4">
+              <div className="grid grid-cols-1 gap-4 sm:grid-cols-2">
                 <div>
                   <p className="text-sm text-muted-foreground">Telefono</p>
                   <p className="font-medium">{selectedLead.phone}</p>

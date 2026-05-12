@@ -85,7 +85,8 @@ export function ProductsTable({ products, onToggled, onDeleted, onUpdated }: Pro
   }
 
   return (
-    <Table>
+    <div className="w-full overflow-x-auto">
+      <Table className="min-w-[520px]">
       <TableHeader>
         <TableRow>
           <TableHead>Producto</TableHead>
@@ -137,5 +138,6 @@ export function ProductsTable({ products, onToggled, onDeleted, onUpdated }: Pro
         ))}
       </TableBody>
     </Table>
+    </div>
   )
 }

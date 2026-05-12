@@ -56,7 +56,8 @@ export function TeamTable({ members }: { members: TeamMember[] }) {
   }
 
   return (
-    <Table>
+    <div className="w-full overflow-x-auto">
+      <Table className="min-w-[640px]">
       <TableHeader>
         <TableRow>
           <TableHead>Nombre</TableHead>
@@ -129,5 +130,6 @@ export function TeamTable({ members }: { members: TeamMember[] }) {
         ))}
       </TableBody>
     </Table>
+    </div>
   )
 }

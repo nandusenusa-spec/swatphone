@@ -145,7 +145,8 @@ export function CallsTable({ calls }: { calls: Call[] }) {
 
   return (
     <>
-      <Table>
+      <div className="w-full overflow-x-auto">
+        <Table className="min-w-[720px]">
         <TableHeader>
           <TableRow>
             <TableHead>Tipo</TableHead>
@@ -261,6 +262,7 @@ export function CallsTable({ calls }: { calls: Call[] }) {
           ))}
         </TableBody>
       </Table>
+      </div>
 
       {/* Audio Player Dialog */}
       <Dialog open={isPlayingAudio && !!selectedCall} onOpenChange={(open) => {
@@ -269,7 +271,7 @@ export function CallsTable({ calls }: { calls: Call[] }) {
           setIsPlayingAudio(false)
         }
       }}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-h-[90vh] max-w-[calc(100vw-1rem)] overflow-y-auto sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>Reproducir Grabación</DialogTitle>
             <DialogDescription>
@@ -321,7 +323,7 @@ export function CallsTable({ calls }: { calls: Call[] }) {
       <Dialog open={!isPlayingAudio && !!selectedCall} onOpenChange={(open) => {
         if (!open) setSelectedCall(null)
       }}>
-        <DialogContent className="max-w-2xl">
+        <DialogContent className="max-h-[90vh] max-w-[calc(100vw-1rem)] overflow-y-auto sm:max-w-2xl">
           <DialogHeader>
             <DialogTitle>Transcripcion de Llamada</DialogTitle>
             <DialogDescription>
