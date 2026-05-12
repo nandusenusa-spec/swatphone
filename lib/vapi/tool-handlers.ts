@@ -535,6 +535,36 @@ function quoteContextFromArgs(args: Record<string, unknown>): {
   return { serviceName, needForLead }
 }
 
+/** Señales de pedido comercial en lo que dijo el cliente (cartelería, rotulación, impresión, etc.). */
+const LEAD_NEED_TOPIC =
+  /\b(cartel|carteles|luminoso|luminosos|rótulo|rotulo|senaletica|señalética|restaurant|restaurante|impres|imprenta|banner|vinilo|letrero|ne[oó]n|neon|backlit|fachada|avenida|cotiz|cotización|presupuest|gran formato|wide\s*format|lettering|señal|tablero)\b/i
+
+function stripLikelyPromptLeak(text: string): string {
+  const idx = text.search(
+    /\binterno\s*(108|90|100)\b|seg[uú]i el flujo de captura|transferencias internas|system\s+sos\s+recepcionista/i,
+  )
+  if (idx > 80) return text.slice(0, idx).trim()
+  return text
+}
+
+/**
+ * Si la tool va sin need/notes pero el cliente ya describió el trabajo en la llamada, usa esas frases.
+ * Evita loops de missing_need cuando el modelo olvida pasar need en los argumentos.
+ */
+function inferLeadNeedFromTranscript(transcript: string | null | undefined): string | null {
+  const raw = (transcript || '').trim()
+  if (raw.length < 15) return null
+  const userLines = userOnlyText(raw)
+    .split(/\r?\n+/)
+    .map((s) => s.trim())
+    .filter((s) => s.length >= 12)
+  const hits = userLines.filter((s) => LEAD_NEED_TOPIC.test(s))
+  const picked = hits.length ? hits : userLines.filter((s) => s.length >= 35)
+  if (!picked.length) return null
+  const merged = stripLikelyPromptLeak(picked.slice(-8).join('\n')).trim()
+  return merged.length >= 3 ? merged.slice(0, 2000) : null
+}
+
 function inferWrapNeedFromText(text: string): {
   need: string
   vehicleType: string | null
@@ -754,12 +784,20 @@ export async function executeToolHandler(
       const noteParts = [
         typeof args.notes === 'string' ? args.notes.trim() : '',
         typeof args.need === 'string' ? args.need.trim() : '',
+        typeof args.summary === 'string' ? args.summary.trim() : '',
+        typeof args.description === 'string' ? args.description.trim() : '',
+        typeof args.project === 'string' ? args.project.trim() : '',
+        typeof args.work_needed === 'string' ? args.work_needed.trim() : '',
         typeof args.motivo === 'string' ? args.motivo.trim() : '',
         typeof args.reason === 'string' ? args.reason.trim() : '',
         quoteContext?.needForLead || '',
         wrapFallback?.need || '',
       ].filter(Boolean)
-      const mergedNotes = noteParts.join('\n').trim() || undefined
+      let mergedNotes = noteParts.join('\n').trim() || undefined
+      if (!mergedNotes || mergedNotes.trim().length < 3) {
+        const fromTranscript = inferLeadNeedFromTranscript(context.transcript || '')
+        if (fromTranscript) mergedNotes = fromTranscript
+      }
 
       const needPresent = Boolean(mergedNotes && mergedNotes.trim().length >= 3)
       const namePresent = leadFullNameValid(mergedName)
@@ -812,7 +850,9 @@ export async function executeToolHandler(
       }
 
       let commercial = parseModelLeadClassification(args)
-      const sniff = classificationSourceText(noteParts)
+      const sniff = classificationSourceText(
+        mergedNotes ? [...noteParts, mergedNotes] : noteParts,
+      )
       if (wrapFallback || detectWrapIntent(sniff)) {
         commercial = {
           category: 'wrap',
