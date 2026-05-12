@@ -186,16 +186,34 @@ export async function upsertLeadByPhone(input: {
 
   const scoreBoost = scoreHintFromCommercial(input.commercialSnapshot)
 
-  const { data: rows, error: findErr } = await supabase
-    .from('leads')
-    .select('*')
-    .eq('organization_id', input.organizationId)
-    .eq('phone', phone)
-    .order('created_at', { ascending: false })
-    .limit(1)
-  if (findErr?.code === 'PGRST205') return null
-  if (findErr) throw findErr
-  const existing = rows?.[0]
+  let existing: Record<string, unknown> | undefined
+
+  if (input.vapiCallId?.trim()) {
+    const vid = input.vapiCallId.trim()
+    const { data: vapiRows, error: vapiErr } = await supabase
+      .from('leads')
+      .select('*')
+      .eq('organization_id', input.organizationId)
+      .eq('metadata->>related_vapi_call_id', vid)
+      .order('created_at', { ascending: false })
+      .limit(1)
+    if (!vapiErr && vapiRows?.[0]) {
+      existing = vapiRows[0] as Record<string, unknown>
+    }
+  }
+
+  if (!existing) {
+    const { data: rows, error: findErr } = await supabase
+      .from('leads')
+      .select('*')
+      .eq('organization_id', input.organizationId)
+      .eq('phone', phone)
+      .order('created_at', { ascending: false })
+      .limit(1)
+    if (findErr?.code === 'PGRST205') return null
+    if (findErr) throw findErr
+    existing = rows?.[0] as Record<string, unknown> | undefined
+  }
 
   if (!existing) {
     const metaRow = mergeLeadMetadata(undefined)
@@ -223,6 +241,10 @@ export async function upsertLeadByPhone(input: {
   const patch: Record<string, unknown> = {
     updated_at: new Date().toISOString(),
   }
+  const existingPhoneNorm = normalizePhone(String((existing as { phone?: string }).phone || ''))
+  if (existingPhoneNorm && existingPhoneNorm !== phone) {
+    patch.phone = phone
+  }
   if (incomingName) patch.name = incomingName
   if (incomingEmail) patch.email = incomingEmail
   if (incomingCompany) patch.company = incomingCompany
@@ -248,6 +270,7 @@ export async function upsertLeadByPhone(input: {
   const metaChanged = mergedMetaPlain !== prevMetaPlain && Object.keys(mergedMeta).length > 0
 
   const hasSubstantivePatch =
+    Boolean(patch.phone) ||
     Boolean(incomingName) ||
     Boolean(incomingEmail) ||
     Boolean(incomingCompany) ||

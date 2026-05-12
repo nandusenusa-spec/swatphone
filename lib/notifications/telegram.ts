@@ -29,27 +29,65 @@ export function classifyLeadTemperature(p:{
   const hasExtra=!!(p.email||p.priceRequested||p.dateNeeded)
   return hasName&&hasPhone&&hasNeed&&hasExtra?'hot':'lukewarm'
 }
+function dashboardCallsUrl(): string | null {
+  const base =
+    process.env.NEXT_PUBLIC_APP_URL?.trim() ||
+    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL.trim()}` : '')
+  if (!base) return null
+  return `${base.replace(/\/$/, '')}/dashboard/calls`
+}
+
 export async function notifyLeadTelegram(payload: TelegramLeadPayload): Promise<boolean> {
   const chatId=process.env.TELEGRAM_CHAT_ID?.trim()
   if(!chatId){ console.warn('[telegram] TELEGRAM_CHAT_ID no configurado'); return false }
   const isHot = payload.temperature==='hot'
   const org=esc(payload.organizationName||'SWATWORKS')
-  const header = isHot ? '🔥 *LEAD CALIENTE — '+org+'*' : '⚠️ *Lead tibio — '+org+'*'
+  const header = isHot ? '🔥 *LEAD — '+org+'*' : '⚠️ *Lead — '+org+'*'
+  const fullName = (payload.customerName || '').trim() || 'Sin nombre'
+  const subjectRaw =
+    (payload.need || '').trim() ||
+    (payload.summary || '').trim() ||
+    (payload.nextAction || '').trim() ||
+    'Consulta'
+  const subject = subjectRaw.length > 600 ? subjectRaw.slice(0, 597) + '…' : subjectRaw
   const lines=[
     header,'',
-    '👤 *Nombre:* '+esc(payload.customerName),
-    '📞 *Teléfono:* '+esc(payload.phone),
+    '👤 '+esc(fullName),
+    '📋 '+esc(subject),
+    '',
+    '⏰ _'+esc(nowStr())+'_',
   ]
-  if(payload.email) lines.push('📧 *Email:* '+esc(payload.email))
-  lines.push('','💬 *Necesita:* '+esc(payload.need))
-  if(payload.category) lines.push('🏷️ *Categoría:* '+esc(payload.category))
-  if(payload.dateNeeded) lines.push('📅 *Cuándo:* '+esc(payload.dateNeeded))
-  if(payload.priceRequested) lines.push('💰 *Pidió cotización: SÍ*')
-  if(isHot && payload.nextAction) lines.push('','➡️ *Acción:* '+esc(payload.nextAction))
-  if(isHot && payload.summary) lines.push('','📝 '+esc(payload.summary))
-  if(!isHot) lines.push('','_Información mínima — revisar en CRM_')
-  lines.push('','⏰ _'+esc(nowStr())+'_')
-  return sendMsg(chatId, lines.join('\n'))
+  const panelUrl = dashboardCallsUrl()
+  const body: Record<string, unknown> = {
+    chat_id: chatId,
+    text: lines.join('\n'),
+    parse_mode: 'MarkdownV2',
+  }
+  if (panelUrl) {
+    body.reply_markup = {
+      inline_keyboard: [[{ text: 'Abrir panel de llamadas', url: panelUrl }]],
+    }
+  }
+  const token = process.env.TELEGRAM_BOT_TOKEN?.trim()
+  if (!token) {
+    console.warn('[telegram] TELEGRAM_BOT_TOKEN no configurado')
+    return false
+  }
+  try {
+    const res = await fetch('https://api.telegram.org/bot' + token + '/sendMessage', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify(body),
+    })
+    if (!res.ok) {
+      console.error('[telegram] error', res.status)
+      return false
+    }
+    return true
+  } catch (e) {
+    console.error('[telegram]', e)
+    return false
+  }
 }
 export async function notifyJobCompleteTelegram(params:{
   customerName:string, phone:string, jobTitle:string, organizationName?:string

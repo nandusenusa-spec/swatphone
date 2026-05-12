@@ -2,6 +2,7 @@
 
 import { useState } from 'react'
 import Link from 'next/link'
+import { useRouter } from 'next/navigation'
 import {
   Table,
   TableBody,
@@ -19,10 +20,21 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
-import { PhoneIncoming, PhoneOutgoing, Play, FileText, Download, Loader } from 'lucide-react'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import { PhoneIncoming, PhoneOutgoing, Play, FileText, Download, Loader, Trash2 } from 'lucide-react'
 import { format } from 'date-fns'
 import { es } from 'date-fns/locale'
 import { cn } from '@/lib/utils'
+import { toast } from 'sonner'
 
 interface Call {
   id: string
@@ -73,9 +85,12 @@ const sentimentColors: Record<string, string> = {
 }
 
 export function CallsTable({ calls }: { calls: Call[] }) {
+  const router = useRouter()
   const [selectedCall, setSelectedCall] = useState<Call | null>(null)
   const [isPlayingAudio, setIsPlayingAudio] = useState(false)
   const [audioLoading, setAudioLoading] = useState(false)
+  const [deleteTarget, setDeleteTarget] = useState<Call | null>(null)
+  const [deleteBusy, setDeleteBusy] = useState(false)
 
   const formatDuration = (seconds: number) => {
     const mins = Math.floor(seconds / 60)
@@ -91,12 +106,33 @@ export function CallsTable({ calls }: { calls: Call[] }) {
   }
 
   const handleTranscriptClick = (call: Call) => {
-    setSelectedCall(call)
     setIsPlayingAudio(false)
+    setSelectedCall(call)
   }
 
   const handleDownload = (recordingUrl: string) => {
     window.open(recordingUrl, '_blank')
+  }
+
+  const handleDeleteConfirm = async () => {
+    if (!deleteTarget?.id) return
+    setDeleteBusy(true)
+    try {
+      const res = await fetch(`/api/dashboard/calls/${deleteTarget.id}`, { method: 'DELETE' })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast.error(typeof body.error === 'string' ? body.error : 'No se pudo eliminar la llamada')
+        return
+      }
+      toast.success('Llamada eliminada del historial')
+      setDeleteTarget(null)
+      setSelectedCall((c) => (c?.id === deleteTarget.id ? null : c))
+      router.refresh()
+    } catch {
+      toast.error('Error de red al eliminar')
+    } finally {
+      setDeleteBusy(false)
+    }
   }
 
   if (calls.length === 0) {
@@ -210,6 +246,15 @@ export function CallsTable({ calls }: { calls: Call[] }) {
                       <FileText className="h-4 w-4" />
                     </Button>
                   )}
+                  <Button
+                    size="sm"
+                    variant="ghost"
+                    className="text-muted-foreground hover:text-destructive"
+                    onClick={() => setDeleteTarget(call)}
+                    title="Eliminar del historial"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
                 </div>
               </TableCell>
             </TableRow>
@@ -237,9 +282,11 @@ export function CallsTable({ calls }: { calls: Call[] }) {
                 key={selectedCall.id}
                 controls
                 autoPlay
+                crossOrigin="anonymous"
                 className="w-full"
                 onLoadStart={() => setAudioLoading(true)}
                 onCanPlay={() => setAudioLoading(false)}
+                onError={() => setAudioLoading(false)}
               >
                 <source src={selectedCall.recording_url} type="audio/mpeg" />
                 Tu navegador no soporta reproducción de audio.
@@ -250,6 +297,10 @@ export function CallsTable({ calls }: { calls: Call[] }) {
                   Cargando grabación...
                 </div>
               )}
+              <p className="text-xs text-muted-foreground">
+                Si no reproduce en el navegador, usá «Descargar» o abrí el enlace desde el resumen
+                (ícono de documento).
+              </p>
               <div className="flex gap-2">
                 <Button
                   variant="outline"
@@ -355,6 +406,36 @@ export function CallsTable({ calls }: { calls: Call[] }) {
           </div>
         </DialogContent>
       </Dialog>
+
+      <AlertDialog open={!!deleteTarget} onOpenChange={(open) => !open && !deleteBusy && setDeleteTarget(null)}>
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Eliminar llamada</AlertDialogTitle>
+            <AlertDialogDescription>
+              Se borra solo el registro de esta llamada en el panel (transcripción, resumen, vínculo a
+              grabación). No elimina al cliente ni el lead en «Leads».
+              {deleteTarget && (
+                <span className="mt-2 block font-medium text-foreground">
+                  {deleteTarget.leads?.name || deleteTarget.customer_name || deleteTarget.phone_number}
+                </span>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteBusy}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={deleteBusy}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={(e) => {
+                e.preventDefault()
+                void handleDeleteConfirm()
+              }}
+            >
+              {deleteBusy ? 'Eliminando…' : 'Eliminar'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   )
 }
