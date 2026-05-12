@@ -10,6 +10,7 @@ export default async function FollowUpsPage() {
   if (orgId) {
     const filtersBase = { organization_id: orgId, limit: 100, order: 'created_at desc' }
     const attempts = [
+      'id, organization_id, title, notes, due_at, status, priority, category, callback_required, metadata, created_at, customer_id, call_log_id, customers(name, phone)',
       'id, organization_id, title, notes, due_at, status, priority, category, callback_required, metadata, created_at, customer_id, call_log_id',
       'id, title, notes, owner, status, due_at, priority, callback_required, created_at',
       'id, title, notes, status, due_at, created_at',

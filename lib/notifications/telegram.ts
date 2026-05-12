@@ -40,10 +40,18 @@ function dashboardCallsUrl(): string | null {
 export async function notifyLeadTelegram(payload: TelegramLeadPayload): Promise<boolean> {
   const chatId=process.env.TELEGRAM_CHAT_ID?.trim()
   if(!chatId){ console.warn('[telegram] TELEGRAM_CHAT_ID no configurado'); return false }
+  const fullName = (payload.customerName || '').trim()
+  const words = fullName.split(/\s+/).filter(Boolean)
+  if (!fullName || fullName.toLowerCase() === 'sin nombre' || words.length < 2) {
+    console.warn('[telegram] skip_notify_incomplete_caller_name', {
+      preview: fullName.slice(0, 48),
+      words: words.length,
+    })
+    return false
+  }
   const isHot = payload.temperature==='hot'
   const org=esc(payload.organizationName||'SWATWORKS')
   const header = isHot ? '🔥 *LEAD — '+org+'*' : '⚠️ *Lead — '+org+'*'
-  const fullName = (payload.customerName || '').trim() || 'Sin nombre'
   const subjectRaw =
     (payload.need || '').trim() ||
     (payload.summary || '').trim() ||

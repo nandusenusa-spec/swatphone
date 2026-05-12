@@ -1,11 +1,22 @@
 'use client'
 
-import { useState } from 'react'
-import { createClient } from '@/lib/supabase/client'
+import { useEffect, useState } from 'react'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { extractSwatCommercialPreview } from '@/lib/vapi/lead-classification'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
+import { Trash2 } from 'lucide-react'
+import { toast } from 'sonner'
 
 type CustomerJoin = { name: string | null; phone: string | null } | null
 
@@ -43,27 +54,69 @@ function humanizeFollowUpText(item: FollowUp) {
   return base
 }
 
+function toDatetimeLocalValue(iso: string | null | undefined): string {
+  if (!iso) return ''
+  const d = new Date(iso)
+  if (Number.isNaN(d.getTime())) return ''
+  const p = (n: number) => String(n).padStart(2, '0')
+  return `${d.getFullYear()}-${p(d.getMonth() + 1)}-${p(d.getDate())}T${p(d.getHours())}:${p(d.getMinutes())}`
+}
+
 export function FollowUpsClient({ initialFollowUps }: { initialFollowUps: FollowUp[] }) {
   const [rows, setRows] = useState(initialFollowUps)
   const [savingId, setSavingId] = useState<string | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<FollowUp | null>(null)
+  const [deleteBusy, setDeleteBusy] = useState(false)
   const router = useRouter()
-  const supabase = createClient()
+
+  useEffect(() => {
+    setRows(initialFollowUps)
+  }, [initialFollowUps])
 
   const saveRow = async (row: FollowUp) => {
+    setSavingId(row.id)
     try {
-      setSavingId(row.id)
-      await supabase
-        .from('follow_ups')
-        .update({
+      const res = await fetch(`/api/dashboard/follow-ups/${row.id}`, {
+        method: 'PATCH',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
           status: row.status || 'pending',
-          notes: row.notes || null,
-          due_at: row.due_at || null,
-          updated_at: new Date().toISOString(),
-        })
-        .eq('id', row.id)
+          notes: row.notes ?? null,
+          due_at: row.due_at && String(row.due_at).trim() ? row.due_at : null,
+        }),
+      })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast.error(typeof body.error === 'string' ? body.error : 'No se pudo guardar')
+        return
+      }
+      toast.success('Seguimiento guardado')
       router.refresh()
+    } catch {
+      toast.error('Error de red al guardar')
     } finally {
       setSavingId(null)
+    }
+  }
+
+  const confirmDelete = async () => {
+    if (!deleteTarget) return
+    setDeleteBusy(true)
+    try {
+      const res = await fetch(`/api/dashboard/follow-ups/${deleteTarget.id}`, { method: 'DELETE' })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast.error(typeof body.error === 'string' ? body.error : 'No se pudo eliminar')
+        return
+      }
+      toast.success('Seguimiento eliminado')
+      setDeleteTarget(null)
+      setRows((prev) => prev.filter((r) => r.id !== deleteTarget.id))
+      router.refresh()
+    } catch {
+      toast.error('Error de red')
+    } finally {
+      setDeleteBusy(false)
     }
   }
 
@@ -77,8 +130,20 @@ export function FollowUpsClient({ initialFollowUps }: { initialFollowUps: Follow
         const cust = customerFromRow(item)
         const commercial = extractSwatCommercialPreview(item.notes)
         return (
-          <div key={item.id} className="rounded-lg border border-border p-3 space-y-2">
-            <p className="font-medium">{humanizeFollowUpText(item)}</p>
+          <div key={item.id} className="space-y-2 rounded-lg border border-border p-3">
+            <div className="flex flex-wrap items-start justify-between gap-2">
+              <p className="font-medium">{humanizeFollowUpText(item)}</p>
+              <Button
+                type="button"
+                size="sm"
+                variant="ghost"
+                className="text-muted-foreground hover:text-destructive"
+                title="Eliminar seguimiento"
+                onClick={() => setDeleteTarget(item)}
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            </div>
             {(cust.name || cust.phone) && (
               <p className="text-sm text-muted-foreground">
                 Cliente: {[cust.name, cust.phone].filter(Boolean).join(' · ') || '—'}
@@ -100,9 +165,7 @@ export function FollowUpsClient({ initialFollowUps }: { initialFollowUps: Follow
               )}
             </div>
             {commercial && (
-              <p className="text-xs text-muted-foreground border-l-2 border-primary/40 pl-2">
-                {commercial}
-              </p>
+              <p className="border-l-2 border-primary/40 pl-2 text-xs text-muted-foreground">{commercial}</p>
             )}
             <p className="text-xs text-muted-foreground">Owner: {item.owner || 'Sin asignar'}</p>
             <div className="grid gap-2 md:grid-cols-3">
@@ -121,15 +184,23 @@ export function FollowUpsClient({ initialFollowUps }: { initialFollowUps: Follow
                 <option value="cancelled">cancelled</option>
               </select>
               <Input
-                value={item.due_at || ''}
+                value={toDatetimeLocalValue(item.due_at)}
                 type="datetime-local"
-                onChange={(e) =>
+                onChange={(e) => {
+                  const v = e.target.value
                   setRows((prev) =>
-                    prev.map((r) => (r.id === item.id ? { ...r, due_at: e.target.value } : r)),
+                    prev.map((r) =>
+                      r.id === item.id
+                        ? {
+                            ...r,
+                            due_at: v ? new Date(v).toISOString() : null,
+                          }
+                        : r,
+                    ),
                   )
-                }
+                }}
               />
-              <Button disabled={savingId === item.id} onClick={() => saveRow(item)}>
+              <Button type="button" disabled={savingId === item.id} onClick={() => void saveRow(item)}>
                 {savingId === item.id ? 'Guardando...' : 'Guardar'}
               </Button>
             </div>
@@ -145,6 +216,33 @@ export function FollowUpsClient({ initialFollowUps }: { initialFollowUps: Follow
           </div>
         )
       })}
+
+      <AlertDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => !open && !deleteBusy && setDeleteTarget(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>Eliminar seguimiento</AlertDialogTitle>
+            <AlertDialogDescription>
+              Se borra esta tarea de la lista. No elimina al cliente ni el lead.
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteBusy}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={deleteBusy}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={(e) => {
+                e.preventDefault()
+                void confirmDelete()
+              }}
+            >
+              {deleteBusy ? 'Eliminando…' : 'Eliminar'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </div>
   )
 }

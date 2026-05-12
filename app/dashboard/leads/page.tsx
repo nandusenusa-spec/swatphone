@@ -6,6 +6,7 @@ import {
   parseCommercialFieldsFromNotes,
   scoreHintFromCommercial,
 } from '@/lib/vapi/lead-classification'
+import { normalizePhone } from '@/lib/phone'
 import { Users, UserCheck, Star } from 'lucide-react'
 
 export const dynamic = 'force-dynamic'
@@ -66,6 +67,7 @@ export default async function LeadsPage() {
 
   const fromCustomers = customers.map((c: Record<string, unknown>) => ({
     id: String(c.id),
+    rowKind: 'customer' as const,
     name: typeof c.name === 'string' ? c.name : null,
     phone: String(c.phone || ''),
     email: typeof c.email === 'string' ? c.email : null,
@@ -90,6 +92,7 @@ export default async function LeadsPage() {
     const displayScore = Math.max(rawScore, scoreHintFromCommercial(comm))
     return {
       id: String(c.id),
+      rowKind: 'lead' as const,
       name: typeof c.name === 'string' ? c.name : null,
       phone: String(c.phone || ''),
       email: typeof c.email === 'string' ? c.email : null,
@@ -109,18 +112,53 @@ export default async function LeadsPage() {
     }
   })
 
-  const existingPhones = new Set(
-    [...fromLeads, ...fromCustomers]
-      .map((x) => (typeof x.phone === 'string' ? x.phone.trim() : ''))
-      .filter(Boolean),
-  )
+  const phoneKey = (raw: string) => {
+    const n = normalizePhone(raw)
+    return n || raw.trim()
+  }
+
+  /** Un lead real por teléfono (mayor score / más reciente). Evita dos filas por la misma llamada en `leads`. */
+  const dedupeLeadRowsByPhone = <
+    T extends {
+      id: string
+      phone: string
+      created_at: string
+      score: number
+      display_score?: number
+    },
+  >(
+    rows: T[],
+  ): T[] => {
+    const m = new Map<string, T>()
+    for (const r of rows) {
+      const k = phoneKey(r.phone)
+      if (!k) continue
+      const prev = m.get(k)
+      if (!prev) {
+        m.set(k, r)
+        continue
+      }
+      const sc = (x: T) => (typeof x.display_score === 'number' ? x.display_score : x.score) || 0
+      const next = sc(r) > sc(prev) ? r : sc(r) < sc(prev) ? prev : new Date(r.created_at) > new Date(prev.created_at) ? r : prev
+      m.set(k, next)
+    }
+    return [...m.values()]
+  }
+
+  const dedupedCrmLeads = dedupeLeadRowsByPhone(fromLeads)
+
+  const leadPhones = new Set(dedupedCrmLeads.map((x) => phoneKey(x.phone)))
+  const customersOnly = fromCustomers.filter((c) => !leadPhones.has(phoneKey(c.phone)))
+  const customerAndLeadPhones = new Set([...leadPhones, ...customersOnly.map((c) => phoneKey(c.phone))])
+
   const fromCalls = callLogs
     .filter((r: Record<string, unknown>) => {
       const phone = typeof r.phone === 'string' ? r.phone.trim() : ''
-      return Boolean(phone) && !existingPhones.has(phone)
+      return Boolean(phone) && !customerAndLeadPhones.has(phoneKey(phone))
     })
     .map((r: Record<string, unknown>) => ({
       id: `call-${String(r.id || '')}`,
+      rowKind: 'call' as const,
       name: typeof r.customer_name === 'string' && r.customer_name.trim() ? r.customer_name.trim() : null,
       phone: String(r.phone || ''),
       email: null as string | null,
@@ -139,7 +177,7 @@ export default async function LeadsPage() {
       team_members: null,
     }))
 
-  const leads = [...fromLeads, ...fromCustomers, ...fromCalls].sort(
+  const leads = [...dedupedCrmLeads, ...customersOnly, ...fromCalls].sort(
     (a, b) => new Date(b.created_at).getTime() - new Date(a.created_at).getTime(),
   )
 

@@ -506,6 +506,13 @@ async function autoSaveQuoteLeadFromTranscript(input: {
     return null
   }
   const fullName = inferCurrentCallNameFromTranscript(input.transcript) || 'Sin nombre'
+  if (fullName === 'Sin nombre') {
+    console.info('[vapi/quote-lead-autosave] skipped_no_name_in_transcript', {
+      organization_id: input.organizationId,
+      call_id: input.vapiCallId || null,
+    })
+    return null
+  }
   const phone = inferDictatedPhoneFromTranscript(input.transcript)
   const emailDeclined = hasDeclinedEmail(input.transcript)
   const need = input.quoteContext.need_for_lead
@@ -605,6 +612,13 @@ async function autoSaveWrapQuoteLeadFromTranscript(input: {
     return null
   }
   const fullName = inferCurrentCallNameFromTranscript(input.transcript) || 'Sin nombre'
+  if (fullName === 'Sin nombre') {
+    console.info('[vapi/wrap-lead-autosave] skipped_no_name_in_transcript', {
+      organization_id: input.organizationId,
+      call_id: input.vapiCallId || null,
+    })
+    return null
+  }
   const phone = inferDictatedPhoneFromTranscript(input.transcript)
   if (!phone) {
     console.info('[vapi/wrap-lead-autosave] skipped', {

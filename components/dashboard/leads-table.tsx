@@ -27,6 +27,16 @@ import {
   DialogHeader,
   DialogTitle,
 } from '@/components/ui/dialog'
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+} from '@/components/ui/alert-dialog'
 import { format } from 'date-fns'
 import { cn } from '@/lib/utils'
 import { Eye, Phone, Mail, Pencil, Trash2 } from 'lucide-react'
@@ -35,6 +45,7 @@ import { EditLeadDialog } from './edit-lead-dialog'
 
 interface Lead {
   id: string
+  rowKind?: 'lead' | 'customer' | 'call'
   name: string | null
   email: string | null
   phone: string
@@ -72,14 +83,22 @@ const statusConfig: Record<string, { label: string; color: string }> = {
 
 export function LeadsTable({ leads, teamMembers }: { leads: Lead[]; teamMembers: TeamMember[] }) {
   const [selectedLead, setSelectedLead] = useState<Lead | null>(null)
+  const [deleteTarget, setDeleteTarget] = useState<Lead | null>(null)
+  const [deleteBusy, setDeleteBusy] = useState(false)
   const router = useRouter()
   const supabase = createClient()
 
-  const handleStatusChange = async (leadId: string, newStatus: string) => {
-    // Filas con id "call-XXX" vienen de call_logs, no son leads reales
-    if (leadId.startsWith('call-')) {
+  const handleStatusChange = async (lead: Lead, newStatus: string) => {
+    if (lead.id.startsWith('call-') || lead.rowKind === 'call') {
       toast.error('Este registro vino de una llamada, no es un lead aún', {
         description: 'Editalo desde el botón "lápiz" para convertirlo en lead.',
+        duration: 6000,
+      })
+      return
+    }
+    if (lead.rowKind === 'customer') {
+      toast.error('Este contacto está en clientes, no en leads', {
+        description: 'Usá el lápiz para crear o actualizar el lead formal.',
         duration: 6000,
       })
       return
@@ -87,7 +106,7 @@ export function LeadsTable({ leads, teamMembers }: { leads: Lead[]; teamMembers:
     const { data, error } = await supabase
       .from('leads')
       .update({ status: newStatus, updated_at: new Date().toISOString() })
-      .eq('id', leadId)
+      .eq('id', lead.id)
       .select('id')
     if (error) {
       toast.error('No se pudo actualizar el estado', { description: error.message })
@@ -103,6 +122,41 @@ export function LeadsTable({ leads, teamMembers }: { leads: Lead[]; teamMembers:
     }
     toast.success('Estado actualizado')
     router.refresh()
+  }
+
+  const handleDeleteLeadConfirm = async () => {
+    if (!deleteTarget) return
+    setDeleteBusy(true)
+    try {
+      const rk = deleteTarget.rowKind
+      let url: string | null = null
+      if (rk === 'lead' || (!rk && !deleteTarget.id.startsWith('call-'))) {
+        url = `/api/dashboard/leads/${deleteTarget.id}`
+      } else if (rk === 'call' || deleteTarget.id.startsWith('call-')) {
+        const raw = deleteTarget.id.replace(/^call-/i, '')
+        if (!raw || !/^[0-9a-f-]{36}$/i.test(raw)) {
+          toast.error('ID de llamada inválido')
+          return
+        }
+        url = `/api/dashboard/calls/${raw}`
+      } else {
+        toast.error('Eliminá contactos desde administración o creá primero un lead con el lápiz.')
+        return
+      }
+      const res = await fetch(url, { method: 'DELETE' })
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        toast.error(typeof body.error === 'string' ? body.error : 'No se pudo eliminar')
+        return
+      }
+      toast.success(rk === 'call' || deleteTarget.id.startsWith('call-') ? 'Llamada quitada del listado' : 'Lead eliminado')
+      setDeleteTarget(null)
+      router.refresh()
+    } catch {
+      toast.error('Error de red')
+    } finally {
+      setDeleteBusy(false)
+    }
   }
 
   const effScore = (lead: Lead) =>
@@ -205,7 +259,7 @@ export function LeadsTable({ leads, teamMembers }: { leads: Lead[]; teamMembers:
               <TableCell>
                 <Select
                   value={lead.status}
-                  onValueChange={(value) => handleStatusChange(lead.id, value)}
+                  onValueChange={(value) => void handleStatusChange(lead, value)}
                 >
                   <SelectTrigger className="h-8 w-32">
                     <SelectValue />
@@ -234,7 +288,7 @@ export function LeadsTable({ leads, teamMembers }: { leads: Lead[]; teamMembers:
                   >
                     <Eye className="h-4 w-4" />
                   </Button>
-                  <EditLeadDialog lead={lead} />
+                  {lead.rowKind !== 'call' && !lead.id.startsWith('call-') && <EditLeadDialog lead={lead} />}
                   <Button size="sm" variant="ghost" asChild>
                     <a href={`tel:${lead.phone}`}>
                       <Phone className="h-4 w-4" />
@@ -245,6 +299,22 @@ export function LeadsTable({ leads, teamMembers }: { leads: Lead[]; teamMembers:
                       <a href={`mailto:${lead.email}`}>
                         <Mail className="h-4 w-4" />
                       </a>
+                    </Button>
+                  )}
+                  {(lead.rowKind === 'lead' || lead.rowKind === 'call' || lead.id.startsWith('call-')) && (
+                    <Button
+                      type="button"
+                      size="sm"
+                      variant="ghost"
+                      className="text-muted-foreground hover:text-destructive"
+                      title={
+                        lead.rowKind === 'call' || lead.id.startsWith('call-')
+                          ? 'Quitar esta llamada del listado'
+                          : 'Eliminar lead'
+                      }
+                      onClick={() => setDeleteTarget(lead)}
+                    >
+                      <Trash2 className="h-4 w-4" />
                     </Button>
                   )}
                 </div>
@@ -347,6 +417,44 @@ export function LeadsTable({ leads, teamMembers }: { leads: Lead[]; teamMembers:
           )}
         </DialogContent>
       </Dialog>
+
+      <AlertDialog
+        open={!!deleteTarget}
+        onOpenChange={(open) => !open && !deleteBusy && setDeleteTarget(null)}
+      >
+        <AlertDialogContent>
+          <AlertDialogHeader>
+            <AlertDialogTitle>
+              {deleteTarget?.rowKind === 'call' || deleteTarget?.id.startsWith('call-')
+                ? 'Quitar llamada del listado'
+                : 'Eliminar lead'}
+            </AlertDialogTitle>
+            <AlertDialogDescription>
+              {deleteTarget?.rowKind === 'call' || deleteTarget?.id.startsWith('call-')
+                ? 'Se borra el registro de la llamada en el panel (no el lead en CRM si ya existe).'
+                : 'Se elimina el lead de la base. Esta acción no se puede deshacer.'}
+              {deleteTarget && (
+                <span className="mt-2 block font-medium text-foreground">
+                  {deleteTarget.name || deleteTarget.phone}
+                </span>
+              )}
+            </AlertDialogDescription>
+          </AlertDialogHeader>
+          <AlertDialogFooter>
+            <AlertDialogCancel disabled={deleteBusy}>Cancelar</AlertDialogCancel>
+            <AlertDialogAction
+              disabled={deleteBusy}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90"
+              onClick={(e) => {
+                e.preventDefault()
+                void handleDeleteLeadConfirm()
+              }}
+            >
+              {deleteBusy ? 'Eliminando…' : 'Eliminar'}
+            </AlertDialogAction>
+          </AlertDialogFooter>
+        </AlertDialogContent>
+      </AlertDialog>
     </>
   )
 }
