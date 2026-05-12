@@ -971,6 +971,117 @@ export async function getPriceQuote(input: {
   return { rows: [], searchMeta: productMeta }
 }
 
+/** True when this Vapi call already has a finalized call_log row (duplicate end-of-call webhook guard). */
+export async function isCallLogAlreadyFinalized(input: {
+  organizationId: string
+  vapiCallId: string
+}): Promise<boolean> {
+  if (!input.vapiCallId.trim()) return false
+  const supabase = createServiceRoleClient()
+  const { data, error } = await supabase
+    .from('call_logs')
+    .select('ended_at')
+    .eq('organization_id', input.organizationId)
+    .eq('vapi_call_id', input.vapiCallId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (error?.code === 'PGRST205' || error) return false
+  const endedAt = data && typeof (data as { ended_at?: unknown }).ended_at === 'string'
+    ? String((data as { ended_at: string }).ended_at).trim()
+    : ''
+  return Boolean(endedAt)
+}
+
+export type VapiCallIdempotencyFlags = {
+  callLogId: string | null
+  endedFinalized: boolean
+  latestSavedLeadId: string | null
+  telegramSaveLeadSent: boolean
+  quoteLeadAutosaveDone: boolean
+  wrapLeadAutosaveDone: boolean
+}
+
+export async function getVapiCallIdempotencyFlags(input: {
+  organizationId: string
+  vapiCallId: string
+}): Promise<VapiCallIdempotencyFlags> {
+  const empty: VapiCallIdempotencyFlags = {
+    callLogId: null,
+    endedFinalized: false,
+    latestSavedLeadId: null,
+    telegramSaveLeadSent: false,
+    quoteLeadAutosaveDone: false,
+    wrapLeadAutosaveDone: false,
+  }
+  if (!input.vapiCallId.trim()) return empty
+  const supabase = createServiceRoleClient()
+  const { data, error } = await supabase
+    .from('call_logs')
+    .select('id, ended_at, structured_extraction')
+    .eq('organization_id', input.organizationId)
+    .eq('vapi_call_id', input.vapiCallId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+    .maybeSingle()
+  if (error?.code === 'PGRST205' || error || !data) return empty
+  const row = data as Record<string, unknown>
+  const structured =
+    row.structured_extraction &&
+    typeof row.structured_extraction === 'object' &&
+    !Array.isArray(row.structured_extraction)
+      ? (row.structured_extraction as Record<string, unknown>)
+      : {}
+  const saved =
+    structured.latest_saved_lead &&
+    typeof structured.latest_saved_lead === 'object' &&
+    !Array.isArray(structured.latest_saved_lead)
+      ? (structured.latest_saved_lead as Record<string, unknown>)
+      : {}
+  const endedAt =
+    typeof row.ended_at === 'string' && row.ended_at.trim() ? row.ended_at.trim() : ''
+  return {
+    callLogId: typeof row.id === 'string' ? row.id : null,
+    endedFinalized: Boolean(endedAt),
+    latestSavedLeadId: typeof saved.lead_id === 'string' ? saved.lead_id : null,
+    telegramSaveLeadSent: structured.telegram_save_lead_sent === true,
+    quoteLeadAutosaveDone: structured.quote_lead_autosave_done === true,
+    wrapLeadAutosaveDone: structured.wrap_lead_autosave_done === true,
+  }
+}
+
+export async function mergeCallLogStructuredByVapiCallId(input: {
+  organizationId: string
+  vapiCallId: string
+  patch: Record<string, unknown>
+}): Promise<void> {
+  if (!input.vapiCallId.trim() || Object.keys(input.patch).length === 0) return
+  const supabase = createServiceRoleClient()
+  const { data: rows, error: findErr } = await supabase
+    .from('call_logs')
+    .select('id, structured_extraction')
+    .eq('organization_id', input.organizationId)
+    .eq('vapi_call_id', input.vapiCallId)
+    .order('created_at', { ascending: false })
+    .limit(1)
+  if (findErr || !rows?.[0]?.id) return
+  const row = rows[0] as Record<string, unknown>
+  const prev =
+    row.structured_extraction &&
+    typeof row.structured_extraction === 'object' &&
+    !Array.isArray(row.structured_extraction)
+      ? (row.structured_extraction as Record<string, unknown>)
+      : {}
+  const merged = { ...prev, ...input.patch }
+  await supabase
+    .from('call_logs')
+    .update({
+      structured_extraction: merged,
+      updated_at: new Date().toISOString(),
+    })
+    .eq('id', row.id)
+}
+
 export async function upsertCallLog(input: {
   organizationId: string
   vapiCallId?: string | null
@@ -1153,6 +1264,10 @@ export async function upsertCallLog(input: {
     .select('*')
     .single()
   if (error) {
+    const firstCode = (error as { code?: string }).code
+    if (firstCode === '23505' && input.vapiCallId?.trim()) {
+      return upsertCallLog(input)
+    }
     const retry = await supabase
       .from('call_logs')
       .insert({
@@ -1162,7 +1277,13 @@ export async function upsertCallLog(input: {
       })
       .select('*')
       .single()
-    if (retry.error) throw retry.error
+    if (retry.error) {
+      const retryCode = (retry.error as { code?: string }).code
+      if (retryCode === '23505' && input.vapiCallId?.trim()) {
+        return upsertCallLog(input)
+      }
+      throw retry.error
+    }
     data = retry.data
   }
   return data

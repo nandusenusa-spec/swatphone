@@ -14,6 +14,8 @@ import {
   getCallLogIdByVapiCallId,
   findTeamMemberByPhoneOrName,
   getCallLogLeadCustomerContext,
+  getVapiCallIdempotencyFlags,
+  mergeCallLogStructuredByVapiCallId,
   patchCallLogLeadCustomer,
 } from '@/lib/voice-platform/repository'
 import {
@@ -893,6 +895,8 @@ export async function executeToolHandler(
       })
 
       if (out.ok) {
+        const displayCustomerName =
+          namePresent && mergedName ? mergedName : out.customer?.name ?? finalName
         let callLogLink:
           | {
               callLogId: string | null
@@ -907,7 +911,7 @@ export async function executeToolHandler(
             vapiCallId: context.vapiCallId,
             customerId: out.customer.id,
             leadId: out.lead?.id ?? null,
-            customerName: out.customer.name ?? finalName,
+            customerName: displayCustomerName,
           }).catch((error) => {
             console.warn('[vapi/save-lead] call_log_link_failed', {
               toolCallId: context.toolCallId ?? null,
@@ -940,7 +944,7 @@ export async function executeToolHandler(
             : null,
           current_call_name: namePresent ? mergedName ?? null : null,
           existing_contact_name: out.customer?.name ?? null,
-          final_saved_name: out.customer?.name ?? finalName,
+          final_saved_name: displayCustomerName,
           final_saved_phone: out.customer?.phone ?? phone,
           name_source: namePresent ? nameSource : 'fallback_sin_nombre',
           phone_source: phoneSource,
@@ -961,26 +965,49 @@ export async function executeToolHandler(
           error: null,
         })
         try {
-          const tgOk = await notifyLeadTelegram({
-            temperature: classifyLeadTemperature({
-              customerName: out.customer?.name ?? finalName,
+          let skipTelegram = false
+          if (context.vapiCallId) {
+            const idem = await getVapiCallIdempotencyFlags({
+              organizationId: context.organizationId,
+              vapiCallId: context.vapiCallId,
+            })
+            skipTelegram = idem.telegramSaveLeadSent
+          }
+          let tgOk = false
+          if (skipTelegram) {
+            console.info('[vapi/save-lead] telegram_skipped_idempotent', {
+              leadId: out.lead?.id ?? null,
+              vapi_call_id: context.vapiCallId || null,
+            })
+          } else {
+            tgOk = await notifyLeadTelegram({
+              temperature: classifyLeadTemperature({
+                customerName: displayCustomerName,
+                phone: out.customer?.phone ?? phone,
+                email: cleanedEmail ?? null,
+                need: mergedNotes || '',
+                priceRequested: commercial.intent === 'quote_request',
+                dateNeeded: typeof args.date_needed === 'string' ? args.date_needed : null,
+              }),
+              customerName: displayCustomerName,
               phone: out.customer?.phone ?? phone,
               email: cleanedEmail ?? null,
-              need: mergedNotes||'',
-              priceRequested: commercial.intent==='quote_request',
-              dateNeeded: typeof args.date_needed==='string'?args.date_needed:null,
-            }),
-            customerName: out.customer?.name ?? finalName,
-            phone: out.customer?.phone ?? phone,
-            email: cleanedEmail ?? null,
-            need: mergedNotes||'',
-            priceRequested: commercial.intent==='quote_request',
-            dateNeeded: typeof args.date_needed==='string'?args.date_needed:null,
-            category: commercial.category||null,
-            summary: commercial.summary||null,
-            nextAction: commercial.next_action||null,
-          })
-          console.info('[vapi/save-lead] telegram', { sent: tgOk, leadId: out.lead?.id ?? null })
+              need: mergedNotes || '',
+              priceRequested: commercial.intent === 'quote_request',
+              dateNeeded: typeof args.date_needed === 'string' ? args.date_needed : null,
+              category: commercial.category || null,
+              summary: commercial.summary || null,
+              nextAction: commercial.next_action || null,
+            })
+            console.info('[vapi/save-lead] telegram', { sent: tgOk, leadId: out.lead?.id ?? null })
+            if (tgOk && context.vapiCallId) {
+              await mergeCallLogStructuredByVapiCallId({
+                organizationId: context.organizationId,
+                vapiCallId: context.vapiCallId,
+                patch: { telegram_save_lead_sent: true },
+              })
+            }
+          }
         } catch (tgErr) {
           console.error('[vapi/save-lead] telegram_error', tgErr)
         }

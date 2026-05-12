@@ -18,6 +18,7 @@ import {
   upsertLeadByPhone,
   upsertCustomerLeadInfo,
   upsertCallLog,
+  isCallLogAlreadyFinalized,
   updateAppointmentCalendarSync,
 } from '@/lib/voice-platform/repository'
 import {
@@ -616,6 +617,15 @@ export async function runSaveCallOutcome(input: {
     explicitHumanRequest: input.transferRequested === true,
   })
 
+  const vapiCallIdTrim = typeof input.vapiCallId === 'string' ? input.vapiCallId.trim() : ''
+  const duplicateEndedFinalize =
+    input.ended === true &&
+    Boolean(vapiCallIdTrim) &&
+    (await isCallLogAlreadyFinalized({
+      organizationId: input.organizationId,
+      vapiCallId: vapiCallIdTrim,
+    }))
+
   const callLog = await upsertCallLog({
     organizationId: input.organizationId,
     vapiCallId: input.vapiCallId,
@@ -658,7 +668,7 @@ export async function runSaveCallOutcome(input: {
   const finalSavedLeadId =
     typeof latestSavedLead.lead_id === 'string' ? latestSavedLead.lead_id : null
 
-  if (input.ended) {
+  if (!duplicateEndedFinalize && input.ended) {
     try {
       await findOrCreateCustomer({
         organizationId: input.organizationId,
@@ -670,69 +680,71 @@ export async function runSaveCallOutcome(input: {
     }
   }
 
-  await insertCallClassification({
-    organizationId: input.organizationId,
-    callLogId: callLog.id,
-    classification: classificationInput.classification,
-    confidence: 0.8,
-    reason: `intent=${classificationInput.intent} spamScore=${classificationInput.spamScore}`,
-  })
-
-  if (classificationInput.transferCandidate && !input.transferCompleted) {
-    await createFollowUp({
+  if (!duplicateEndedFinalize) {
+    await insertCallClassification({
       organizationId: input.organizationId,
       callLogId: callLog.id,
-      title: 'Revisar llamada transfer candidate',
-      notes: input.summary || 'Revisar contexto y definir accion.',
-      owner: 'Ramon',
-      dueAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
-      priority: classificationInput.urgent ? 'urgent' : 'high',
-      callbackRequired: true,
+      classification: classificationInput.classification,
+      confidence: 0.8,
+      reason: `intent=${classificationInput.intent} spamScore=${classificationInput.spamScore}`,
     })
-  }
 
-  const ext = input.structuredExtraction
-  const wantsCallback =
-    Boolean(input.followUpDate) ||
-    ext?.callback_required === true ||
-    ext?.follow_up_required === true
-  const spamish =
-    input.validationStatus === 'spam_or_invalid' ||
-    classificationInput.intent === 'spam' ||
-    classificationInput.validationStatus === 'spam_or_invalid'
-  if (wantsCallback && !spamish && input.ended) {
-    const existing = await followUpCountForCallLog(callLog.id)
-    if (existing === 0) {
-      const due =
-        input.followUpDate ||
-        ext?.follow_up_date ||
-        new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
-      const blob = `${input.summary || ''} ${input.transcript || ''}`.toLowerCase()
-      const title = blob.includes('presupuesto') || blob.includes('cotiz')
-        ? 'Presupuesto / cotización — devolver contacto al cliente'
-        : 'Seguimiento — contacto prometido al cliente'
-      const fuRow = await createFollowUp({
+    if (classificationInput.transferCandidate && !input.transferCompleted) {
+      await createFollowUp({
         organizationId: input.organizationId,
         callLogId: callLog.id,
-        customerId: finalSavedCustomerId,
-        leadId: finalSavedLeadId,
-        title,
-        notes: [input.summary, input.nextAction].filter(Boolean).join('\n') || null,
-        owner: input.owner || null,
-        dueAt: due,
-        priority: 'high',
+        title: 'Revisar llamada transfer candidate',
+        notes: input.summary || 'Revisar contexto y definir accion.',
+        owner: 'Ramon',
+        dueAt: new Date(Date.now() + 60 * 60 * 1000).toISOString(),
+        priority: classificationInput.urgent ? 'urgent' : 'high',
         callbackRequired: true,
       })
-      const fuId = fuRow && typeof fuRow === 'object' && 'id' in fuRow ? String((fuRow as { id: string }).id) : null
-      await createNotification({
-        organizationId: input.organizationId,
-        callLogId: callLog.id,
-        followUpId: fuId,
-        type: 'follow_up_created',
-        title: 'Seguimiento creado desde cierre de llamada',
-        message: title,
-        priority: 'high',
-      })
+    }
+
+    const ext = input.structuredExtraction
+    const wantsCallback =
+      Boolean(input.followUpDate) ||
+      ext?.callback_required === true ||
+      ext?.follow_up_required === true
+    const spamish =
+      input.validationStatus === 'spam_or_invalid' ||
+      classificationInput.intent === 'spam' ||
+      classificationInput.validationStatus === 'spam_or_invalid'
+    if (wantsCallback && !spamish && input.ended) {
+      const existing = await followUpCountForCallLog(callLog.id)
+      if (existing === 0) {
+        const due =
+          input.followUpDate ||
+          ext?.follow_up_date ||
+          new Date(Date.now() + 24 * 60 * 60 * 1000).toISOString()
+        const blob = `${input.summary || ''} ${input.transcript || ''}`.toLowerCase()
+        const title = blob.includes('presupuesto') || blob.includes('cotiz')
+          ? 'Presupuesto / cotización — devolver contacto al cliente'
+          : 'Seguimiento — contacto prometido al cliente'
+        const fuRow = await createFollowUp({
+          organizationId: input.organizationId,
+          callLogId: callLog.id,
+          customerId: finalSavedCustomerId,
+          leadId: finalSavedLeadId,
+          title,
+          notes: [input.summary, input.nextAction].filter(Boolean).join('\n') || null,
+          owner: input.owner || null,
+          dueAt: due,
+          priority: 'high',
+          callbackRequired: true,
+        })
+        const fuId = fuRow && typeof fuRow === 'object' && 'id' in fuRow ? String((fuRow as { id: string }).id) : null
+        await createNotification({
+          organizationId: input.organizationId,
+          callLogId: callLog.id,
+          followUpId: fuId,
+          type: 'follow_up_created',
+          title: 'Seguimiento creado desde cierre de llamada',
+          message: title,
+          priority: 'high',
+        })
+      }
     }
   }
 
@@ -742,6 +754,7 @@ export async function runSaveCallOutcome(input: {
     classification: classificationInput.classification,
     spam_score: classificationInput.spamScore,
     transfer_candidate: classificationInput.transferCandidate,
+    duplicate_finalize: duplicateEndedFinalize,
   }
 }
 

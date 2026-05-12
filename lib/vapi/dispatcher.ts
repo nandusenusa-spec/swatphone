@@ -45,8 +45,13 @@ import { screenInboundAssistantRequest } from '@/lib/vapi/phone-screening'
 import { textSuggestsPromisedCallback } from '@/lib/voice-platform/callback-heuristic'
 import { normalizePhone } from '@/lib/phone'
 import { logVapiToolCallReceived } from '@/lib/vapi/tool-call-logging'
-import { notifyLeadTelegram } from '@/lib/notifications/telegram'
-import { patchCallLogLeadCustomer } from '@/lib/voice-platform/repository'
+import type { StructuredExtraction } from '@/lib/voice-platform/types'
+import {
+  getVapiCallIdempotencyFlags,
+  mergeCallLogStructuredByVapiCallId,
+  patchCallLogLeadCustomer,
+  upsertCallLog,
+} from '@/lib/voice-platform/repository'
 
 type JsonRecord = Record<string, unknown>
 
@@ -444,17 +449,13 @@ async function persistQuoteContextForCall(input: {
     quote_context: input.quoteContext || incomingContexts[incomingContexts.length - 1],
     quote_contexts: mergedContexts,
   }
-  if (existing?.id) {
-    await supabase.from('call_logs').update({ structured_extraction: structured }).eq('id', existing.id)
-    return
-  }
-  await supabase.from('call_logs').insert({
-    organization_id: input.organizationId,
-    vapi_call_id: input.vapiCallId,
-    phone: input.phone || unknownCallerPlaceholderE164(),
-    structured_extraction: structured,
-    validation_status: 'pending',
-    spam_score: 0,
+  await upsertCallLog({
+    organizationId: input.organizationId,
+    vapiCallId: input.vapiCallId,
+    phone: input.phone?.trim() ? input.phone : unknownCallerPlaceholderE164(),
+    validationStatus: 'pending',
+    spamScore: 0,
+    structuredExtraction: structured as StructuredExtraction,
   })
 }
 
@@ -491,6 +492,19 @@ async function autoSaveQuoteLeadFromTranscript(input: {
   quoteContext: QuoteContext | null
 }) {
   if (!input.quoteContext) return null
+  const flags = await getVapiCallIdempotencyFlags({
+    organizationId: input.organizationId,
+    vapiCallId: input.vapiCallId,
+  })
+  if (flags.latestSavedLeadId || flags.quoteLeadAutosaveDone) {
+    console.info('[vapi/quote-lead-autosave] skipped_idempotent', {
+      organization_id: input.organizationId,
+      call_id: input.vapiCallId || null,
+      has_saved_lead: Boolean(flags.latestSavedLeadId),
+      autosave_done: flags.quoteLeadAutosaveDone,
+    })
+    return null
+  }
   const fullName = inferCurrentCallNameFromTranscript(input.transcript) || 'Sin nombre'
   const phone = inferDictatedPhoneFromTranscript(input.transcript)
   const emailDeclined = hasDeclinedEmail(input.transcript)
@@ -543,18 +557,12 @@ async function autoSaveQuoteLeadFromTranscript(input: {
       return null
     })
   }
-  let telegramSent = false
+  const telegramSent = false
   if (out.ok) {
-    telegramSent = await notifyLeadTelegram({
-      temperature: 'hot',
-      customerName: out.customer?.name ?? fullName,
-      phone: out.customer?.phone ?? phone,
-      email: null,
-      need,
-      priceRequested: true,
-      category: 'catalog_quote',
-      summary: need,
-      nextAction: `Enviar cotización formal de ${input.quoteContext.service_name}.`,
+    await mergeCallLogStructuredByVapiCallId({
+      organizationId: input.organizationId,
+      vapiCallId: input.vapiCallId,
+      patch: { quote_lead_autosave_done: true },
     })
   }
   console.info('[vapi/quote-lead-autosave] result', {
@@ -583,6 +591,19 @@ async function autoSaveWrapQuoteLeadFromTranscript(input: {
 }) {
   const wrap = inferWrapQuoteNeedFromTranscript(input.transcript)
   if (!wrap) return null
+  const flags = await getVapiCallIdempotencyFlags({
+    organizationId: input.organizationId,
+    vapiCallId: input.vapiCallId,
+  })
+  if (flags.latestSavedLeadId || flags.wrapLeadAutosaveDone) {
+    console.info('[vapi/wrap-lead-autosave] skipped_idempotent', {
+      organization_id: input.organizationId,
+      call_id: input.vapiCallId || null,
+      has_saved_lead: Boolean(flags.latestSavedLeadId),
+      autosave_done: flags.wrapLeadAutosaveDone,
+    })
+    return null
+  }
   const fullName = inferCurrentCallNameFromTranscript(input.transcript) || 'Sin nombre'
   const phone = inferDictatedPhoneFromTranscript(input.transcript)
   if (!phone) {
@@ -635,20 +656,9 @@ async function autoSaveWrapQuoteLeadFromTranscript(input: {
       return null
     })
   }
-  let telegramSent = false
+  const telegramSent = false
   let followUpCreated = false
   if (out.ok) {
-    telegramSent = await notifyLeadTelegram({
-      temperature: 'hot',
-      customerName: out.customer?.name ?? fullName,
-      phone: out.customer?.phone ?? phone,
-      email: null,
-      need: wrap.need,
-      priceRequested: true,
-      category: 'wrap',
-      summary: wrap.need,
-      nextAction: commercial.next_action,
-    })
     const followUp = await runCreateFollowUp({
       organizationId: input.organizationId,
       callLogId: input.callLogId || undefined,
@@ -661,6 +671,11 @@ async function autoSaveWrapQuoteLeadFromTranscript(input: {
       callbackRequired: true,
     })
     followUpCreated = Boolean(followUp)
+    await mergeCallLogStructuredByVapiCallId({
+      organizationId: input.organizationId,
+      vapiCallId: input.vapiCallId,
+      patch: { wrap_lead_autosave_done: true },
+    })
   }
   console.info('[vapi/wrap-lead-autosave] result', {
     organization_id: input.organizationId,
@@ -1379,8 +1394,14 @@ export async function dispatchVapiEvent(input: {
     }
   }
 
+  const duplicateFinalize = Boolean(
+    persisted && typeof persisted === 'object' && 'duplicate_finalize' in persisted
+      ? (persisted as { duplicate_finalize?: boolean }).duplicate_finalize
+      : false,
+  )
+
   let followUpAfterFailedTransfer = false
-  if (ended && er && vapiCallId) {
+  if (!duplicateFinalize && ended && er && vapiCallId) {
     const fu = await onWarmTransferFailureFollowUp({
       organizationId: input.organizationId,
       vapiCallId,
@@ -1391,7 +1412,7 @@ export async function dispatchVapiEvent(input: {
   }
 
   const quoteLeadAutosave =
-    ended && transcriptFinal.trim()
+    !duplicateFinalize && ended && transcriptFinal.trim()
       ? await autoSaveQuoteLeadFromTranscript({
           organizationId: input.organizationId,
           transcript: transcriptFinal,
@@ -1403,7 +1424,7 @@ export async function dispatchVapiEvent(input: {
         })
       : null
   const wrapLeadAutosave =
-    ended && transcriptFinal.trim()
+    !duplicateFinalize && ended && transcriptFinal.trim()
       ? await autoSaveWrapQuoteLeadFromTranscript({
           organizationId: input.organizationId,
           transcript: transcriptFinal,
