@@ -11,6 +11,7 @@ import {
   isAllowedWorkOrderStatus,
   WORK_ORDER_STATUS_WHITELIST,
 } from '@/lib/admin/work-order-status'
+import { mergeIndustryTemplateMetadata } from '@/lib/onboarding/apply-industry-template'
 import { createHmac, timingSafeEqual } from 'crypto'
 
 function slugifyName(value: string): string {
@@ -841,6 +842,7 @@ export async function POST(request: NextRequest) {
         const timezone = typeof data?.timezone === 'string' ? data.timezone.trim() || 'America/New_York' : 'America/New_York'
         const assistantId = typeof data?.vapi_assistant_id === 'string' ? data.vapi_assistant_id.trim() || null : null
         const transferNumber = typeof data?.ramon_transfer_number === 'string' ? data.ramon_transfer_number.trim() || null : null
+        const industry = typeof data?.industry === 'string' ? data.industry : 'general_services'
         if (!companyName || !ownerEmail || ownerPassword.length < 8) {
           return NextResponse.json(
             { error: 'name, owner_email and owner_password(min 8) are required' },
@@ -851,6 +853,12 @@ export async function POST(request: NextRequest) {
           typeof data?.slug === 'string' && data.slug.trim() ? data.slug : companyName,
         )
         if (!baseSlug) return NextResponse.json({ error: 'invalid slug/name' }, { status: 400 })
+
+        const { settings: initialSettings } = mergeIndustryTemplateMetadata(
+          {},
+          industry,
+          'admin_create_organization',
+        )
 
         let slug = baseSlug
         for (let n = 0; n < 100; n++) {
@@ -874,7 +882,7 @@ export async function POST(request: NextRequest) {
             slug,
             timezone,
             vapi_assistant_id: assistantId,
-            settings: {},
+            settings: initialSettings,
           })
           .select('*')
           .single()

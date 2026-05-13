@@ -20,6 +20,12 @@ import {
 } from 'lucide-react'
 import { cn } from '@/lib/utils'
 import { getAdminAuthHeaders } from '@/lib/admin/client-headers'
+import {
+  getIndustryTemplate,
+  industryTemplateOptions,
+  isIndustryKey,
+  type IndustryKey,
+} from '@/lib/onboarding/industry-templates'
 
 type OwnerCredentialList = {
   owner_email: string
@@ -50,6 +56,7 @@ export default function AdminClientsPage() {
   const [newOwnerPassword, setNewOwnerPassword] = useState('')
   const [newAssistantId, setNewAssistantId] = useState('')
   const [newTransferNumber, setNewTransferNumber] = useState('')
+  const [newIndustry, setNewIndustry] = useState<IndustryKey>('general_services')
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const [formError, setFormError] = useState('')
   const [formErrorCode, setFormErrorCode] = useState<string | undefined>(undefined)
@@ -122,6 +129,9 @@ export default function AdminClientsPage() {
     if (newOwnerPassword.length < 8) {
       e.password = 'La contraseña temporal debe tener al menos 8 caracteres.'
     }
+    if (!isIndustryKey(newIndustry)) {
+      e.industry = 'Seleccioná el rubro de la empresa.'
+    }
     setFieldErrors(e)
     return Object.keys(e).length === 0
   }
@@ -179,6 +189,7 @@ export default function AdminClientsPage() {
             name: newOrgName.trim(),
             owner_email: newOwnerEmail.trim(),
             owner_password: newOwnerPassword,
+            industry: newIndustry,
             vapi_assistant_id: newAssistantId.trim() || null,
             ramon_transfer_number: newTransferNumber.trim() || null,
           },
@@ -202,6 +213,7 @@ export default function AdminClientsPage() {
       setNewOwnerPassword('')
       setNewAssistantId('')
       setNewTransferNumber('')
+      setNewIndustry('general_services')
       setFieldErrors({})
       const refetch = await fetch('/api/admin/data?type=organizations', {
         cache: 'no-store',
@@ -226,6 +238,8 @@ export default function AdminClientsPage() {
   if (loading) {
     return <div className="p-8">Cargando...</div>
   }
+
+  const selectedIndustryTemplate = getIndustryTemplate(newIndustry)
 
   return (
     <div className="space-y-8 p-8">
@@ -302,6 +316,49 @@ export default function AdminClientsPage() {
               </AlertDescription>
             </Alert>
           ) : null}
+
+          <div className="space-y-3 rounded-lg border bg-muted/20 p-4">
+            <div className="space-y-1">
+              <Label>Rubro de la empresa</Label>
+              <p className="text-sm text-muted-foreground">
+                Se guarda como metadata inicial de onboarding. No cambia prompts, Vapi ni configuraciones vivas.
+              </p>
+            </div>
+            <div className="grid gap-2 sm:grid-cols-2 lg:grid-cols-3">
+              {industryTemplateOptions.map((template) => {
+                const isSelected = newIndustry === template.key
+                return (
+                  <button
+                    key={template.key}
+                    type="button"
+                    onClick={() => {
+                      setNewIndustry(template.key)
+                      clearFieldError('industry')
+                    }}
+                    className={cn(
+                      'rounded-md border bg-card p-3 text-left text-sm transition hover:border-primary/60 hover:bg-primary/5',
+                      isSelected && 'border-primary bg-primary/10 ring-1 ring-primary/20',
+                    )}
+                    aria-pressed={isSelected}
+                  >
+                    <span className="font-medium">{template.displayName}</span>
+                    <span className="mt-1 block text-xs text-muted-foreground">
+                      {template.commonServiceCategories.slice(0, 3).join(', ')}
+                    </span>
+                  </button>
+                )
+              })}
+            </div>
+            {fieldErrors.industry ? (
+              <p className="text-xs text-destructive">{fieldErrors.industry}</p>
+            ) : null}
+
+            <div className="grid gap-3 rounded-md border bg-background p-4 text-sm md:grid-cols-3">
+              <PreviewList title="Va a preguntar" items={selectedIndustryTemplate.preview.asks} />
+              <PreviewList title="Va a priorizar" items={selectedIndustryTemplate.preview.prioritizes} />
+              <PreviewList title="Va a capturar" items={selectedIndustryTemplate.preview.captures} />
+            </div>
+          </div>
 
           <div className="grid gap-4 md:grid-cols-2">
             <div className="space-y-2">
@@ -634,6 +691,24 @@ export default function AdminClientsPage() {
       {clients.length === 0 && !listError ? (
         <div className="py-12 text-center text-muted-foreground">No hay clientes registrados aún.</div>
       ) : null}
+    </div>
+  )
+}
+
+function PreviewList({ title, items }: { title: string; items: string[] }) {
+  return (
+    <div>
+      <p className="mb-2 text-xs font-semibold uppercase tracking-wide text-muted-foreground">
+        {title}
+      </p>
+      <ul className="space-y-1">
+        {items.map((item) => (
+          <li key={item} className="flex gap-2 text-xs text-muted-foreground">
+            <Check className="mt-0.5 h-3 w-3 shrink-0 text-primary" />
+            <span>{item}</span>
+          </li>
+        ))}
+      </ul>
     </div>
   )
 }
