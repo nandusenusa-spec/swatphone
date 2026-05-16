@@ -103,6 +103,17 @@ export async function POST(req: Request) {
 
     const supabase = createServiceRoleClient()
 
+    const { data: dbLimit, error: dbLimitErr } = await supabase.rpc('check_admin_rate_limit', {
+      p_username: usernameInput,
+    })
+    if (!dbLimitErr && dbLimit && typeof dbLimit === 'object' && (dbLimit as { blocked?: boolean }).blocked) {
+      const until = (dbLimit as { blocked_until?: string }).blocked_until
+      const secs = until
+        ? Math.max(1, Math.ceil((new Date(until).getTime() - Date.now()) / 1000))
+        : 900
+      return blockedResponse(secs)
+    }
+
     // Verify admin credentials
     const { data: adminRows, error } = await supabase
       .from('admin_credentials')
@@ -116,6 +127,7 @@ export async function POST(req: Request) {
       ) ?? null
 
     if (error || !admin) {
+      await supabase.rpc('register_admin_failed_login', { p_username: usernameInput })
       const maybeBlockedNow = registerFailedAttempt(req, usernameInput)
       if (maybeBlockedNow) return maybeBlockedNow
       return NextResponse.json(
@@ -127,6 +139,20 @@ export async function POST(req: Request) {
     const passwordMatch = await bcryptCompare(password, String((admin as { password_hash?: string }).password_hash || ''))
 
     if (!passwordMatch) {
+      const { data: failReg } = await supabase.rpc('register_admin_failed_login', {
+        p_username: usernameInput,
+      })
+      if (
+        failReg &&
+        typeof failReg === 'object' &&
+        (failReg as { blocked?: boolean }).blocked
+      ) {
+        const until = (failReg as { blocked_until?: string }).blocked_until
+        const secs = until
+          ? Math.max(1, Math.ceil((new Date(until).getTime() - Date.now()) / 1000))
+          : 900
+        return blockedResponse(secs)
+      }
       const maybeBlockedNow = registerFailedAttempt(req, usernameInput)
       if (maybeBlockedNow) return maybeBlockedNow
       return NextResponse.json(
@@ -135,6 +161,7 @@ export async function POST(req: Request) {
       )
     }
 
+    await supabase.rpc('clear_admin_login_attempts', { p_username: usernameInput })
     clearFailedAttempts(req, usernameInput)
 
     // Create admin session token

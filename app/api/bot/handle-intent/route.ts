@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { detectIntent } from '@/lib/mvp/intents'
+import { isValidInternalApiKey } from '@/lib/security/internal-api-key'
 
 const IntentSchema = z.object({
   text: z.string().default(''),
@@ -8,6 +9,9 @@ const IntentSchema = z.object({
 })
 
 export async function POST(request: NextRequest) {
+  if (!isValidInternalApiKey(request)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
   try {
     const parsed = IntentSchema.parse(await request.json())
     const result = detectIntent(parsed.text, parsed.attempts)

@@ -15,9 +15,24 @@ export type JobStatusOrgSource =
 export const UUID_RE =
   /^[0-9a-f]{8}-[0-9a-f]{4}-[1-5][0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/i
 
-/** Fallback cuando Vapi no envía organization_id pero el assistant es conocido. */
-export const KNOWN_VAPI_ASSISTANT_TO_ORG: Readonly<Record<string, string>> = {
-  'e9a5d0a4-44a5-4b7f-90df-35a5d50d181d': '9bb50e58-9ba6-4d54-8171-13922749f570',
+/**
+ * Optional env fallback: VAPI_ASSISTANT_ORG_MAPPING=assistantUuid:orgUuid,...
+ * Prefer lookupOrganizationIdByVapiAssistantId (organizations.vapi_assistant_id).
+ */
+export function parseVapiAssistantOrgMappingFromEnv(): Readonly<Record<string, string>> {
+  const raw = process.env.VAPI_ASSISTANT_ORG_MAPPING?.trim()
+  if (!raw) return {}
+  const out: Record<string, string> = {}
+  for (const part of raw.split(',')) {
+    const sep = part.indexOf(':')
+    if (sep < 0) continue
+    const assistantId = part.slice(0, sep).trim()
+    const orgId = part.slice(sep + 1).trim()
+    if (assistantId && orgId && UUID_RE.test(assistantId) && UUID_RE.test(orgId)) {
+      out[assistantId] = orgId
+    }
+  }
+  return out
 }
 
 export function defaultOrgIdFromEnvForVapiTools(): string {
@@ -214,7 +229,7 @@ export async function resolveOrganizationIdForVapiTools(input: {
         mappingDetail: 'supabase_vapi_assistant_id',
       }
     }
-    const known = KNOWN_VAPI_ASSISTANT_TO_ORG[assistantIdDetected]
+    const known = parseVapiAssistantOrgMappingFromEnv()[assistantIdDetected]
     if (known && UUID_RE.test(known)) {
       return {
         organizationId: known,

@@ -1,6 +1,7 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { z } from 'zod'
 import { createRecado } from '@/lib/mvp/repository'
+import { isValidInternalApiKey } from '@/lib/security/internal-api-key'
 
 const RecadoSchema = z.object({
   organization_id: z.string().uuid().optional().nullable(),
@@ -18,6 +19,9 @@ const RecadoSchema = z.object({
 })
 
 export async function POST(request: NextRequest) {
+  if (!isValidInternalApiKey(request)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
   try {
     const parsed = RecadoSchema.parse(await request.json())
     const row = await createRecado({

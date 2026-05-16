@@ -10,6 +10,10 @@ export function readInternalApiKey(request: NextRequest): string {
   return bearer || ''
 }
 
+/**
+ * Si INTERNAL_API_KEY no está definida, devuelve true (endpoints legacy siguen abiertos por compatibilidad).
+ * En producción conviene definir INTERNAL_API_KEY y exigir X-Internal-Key o Bearer.
+ */
 export function isValidInternalApiKey(request: NextRequest): boolean {
   const expected = process.env.INTERNAL_API_KEY?.trim()
   if (!expected) return true

@@ -1,4 +1,5 @@
 import { createServerClient } from '@supabase/ssr'
+import { organizationHasDashboardAccess } from '@/lib/billing/subscription-access'
 import { isDemoBypassAuth } from '@/lib/auth/demo-bypass'
 import { NextResponse, type NextRequest } from 'next/server'
 
@@ -65,6 +66,27 @@ export async function updateSession(request: NextRequest) {
     const url = request.nextUrl.clone()
     url.pathname = '/auth/login'
     return NextResponse.redirect(url)
+  }
+
+  if (
+    user &&
+    request.nextUrl.pathname.startsWith('/dashboard') &&
+    !request.nextUrl.pathname.startsWith('/dashboard/settings/billing') &&
+    !isDemoBypassAuth() &&
+    process.env.STRIPE_ENFORCE_BILLING === 'true'
+  ) {
+    const { data: profile } = await supabase
+      .from('profiles')
+      .select('organization_id')
+      .eq('id', user.id)
+      .maybeSingle()
+    const orgId = profile?.organization_id as string | undefined
+    if (orgId && !(await organizationHasDashboardAccess(orgId))) {
+      const url = request.nextUrl.clone()
+      url.pathname = '/dashboard/settings/billing'
+      url.searchParams.set('billing', 'required')
+      return NextResponse.redirect(url)
+    }
   }
 
   // Super Admin usa cookie admin_token; el CRM del cliente usa Supabase en /dashboard.

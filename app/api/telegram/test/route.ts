@@ -1,3 +1,4 @@
+import { verifyXAdminSecret } from '@/lib/admin/admin-secret-auth'
 import { NextResponse } from 'next/server'
 
 export const dynamic = 'force-dynamic'
@@ -10,6 +11,9 @@ export const dynamic = 'force-dynamic'
  * Devuelve { ok, botInfo, chatInfo, sent } para validar configuración.
  */
 export async function GET(req: Request) {
+  if (!verifyXAdminSecret(req)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
   const url = new URL(req.url)
   const customMsg = url.searchParams.get('msg')
 

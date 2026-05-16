@@ -2,12 +2,8 @@ import { NextRequest, NextResponse } from 'next/server'
 import { createRecado, searchTrabajos } from '@/lib/mvp/repository'
 import { detectIntent } from '@/lib/mvp/intents'
 import { gather, say, voiceResponse, dial } from '@/lib/twilio/twiml'
+import { readValidatedTwilioParams, twilioParam } from '@/lib/twilio/validate-request'
 import { normalizePhone } from '@/lib/phone'
-
-function extractText(form: FormData, key: string): string {
-  const value = form.get(key)
-  return typeof value === 'string' ? value.trim() : ''
-}
 
 function normalizeTrabajoNumber(raw: string): string {
   return (raw || '').toUpperCase().replace(/[^A-Z0-9\-]/g, '')
@@ -35,16 +31,19 @@ function twiml(xml: string): NextResponse {
 }
 
 export async function POST(request: NextRequest) {
+  const twilioRead = await readValidatedTwilioParams(request, '/api/twilio/voice/incoming')
+  if (!twilioRead.ok) return twilioRead.response
+  const params = twilioRead.params
+
   const step = request.nextUrl.searchParams.get('step') || 'menu'
   const attempts = Number(request.nextUrl.searchParams.get('attempts') || '0')
   const intentHint = request.nextUrl.searchParams.get('intent')
   const organizationId = request.nextUrl.searchParams.get('organization_id') || null
 
-  const form = await request.formData()
-  const fromPhoneRaw = extractText(form, 'From')
+  const fromPhoneRaw = twilioParam(params, 'From')
   const fromPhone = normalizePhone(fromPhoneRaw)
-  const speech = extractText(form, 'SpeechResult')
-  const digits = extractText(form, 'Digits')
+  const speech = twilioParam(params, 'SpeechResult')
+  const digits = twilioParam(params, 'Digits')
   const forwardNumber = process.env.TWILIO_FORWARD_NUMBER || ''
 
   if (step === 'menu') {

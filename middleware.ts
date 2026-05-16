@@ -14,15 +14,18 @@ function readVapiSecretHeader(request: NextRequest): string {
 export async function middleware(request: NextRequest) {
   const pathname = request.nextUrl.pathname
 
-  const vapiSecret = process.env.VAPI_WEBHOOK_SECRET?.trim()
-  if (
-    vapiSecret &&
-    request.method === 'POST' &&
-    pathRequiresVapiWebhookSecret(pathname)
-  ) {
-    const provided = readVapiSecretHeader(request)
-    if (!timingSafeEqualUtf8(provided, vapiSecret)) {
-      return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  if (request.method === 'POST' && pathRequiresVapiWebhookSecret(pathname)) {
+    const vapiSecret = process.env.VAPI_WEBHOOK_SECRET?.trim()
+    if (!vapiSecret) {
+      if (process.env.NODE_ENV === 'production') {
+        return NextResponse.json({ error: 'Webhook secret not configured' }, { status: 401 })
+      }
+      console.warn('[middleware] VAPI_WEBHOOK_SECRET not set — skipping check in dev')
+    } else {
+      const provided = readVapiSecretHeader(request)
+      if (!timingSafeEqualUtf8(provided, vapiSecret)) {
+        return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+      }
     }
   }
 

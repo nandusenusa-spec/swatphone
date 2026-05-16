@@ -1,7 +1,11 @@
 import { NextRequest, NextResponse } from 'next/server'
 import { searchTrabajos } from '@/lib/mvp/repository'
+import { isValidInternalApiKey } from '@/lib/security/internal-api-key'
 
 export async function GET(request: NextRequest) {
+  if (!isValidInternalApiKey(request)) {
+    return NextResponse.json({ error: 'Unauthorized' }, { status: 401 })
+  }
   const numero = request.nextUrl.searchParams.get('numero')
   const telefono = request.nextUrl.searchParams.get('telefono')
   const organizationId = request.nextUrl.searchParams.get('organization_id')

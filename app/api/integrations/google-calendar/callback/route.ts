@@ -1,4 +1,5 @@
 import { NextRequest, NextResponse } from 'next/server'
+import { getDashboardOrganizationId } from '@/lib/auth/dashboard-session'
 import {
   exchangeGoogleCalendarCode,
   saveGoogleCalendarConnection,
@@ -28,6 +29,11 @@ export async function GET(request: NextRequest) {
     }
     if (!code || !state || !expected || expected.state !== state) {
       redirectUrl.searchParams.set('google_calendar', 'invalid_state')
+      return NextResponse.redirect(redirectUrl)
+    }
+    const sessionOrgId = await getDashboardOrganizationId()
+    if (!sessionOrgId || sessionOrgId !== expected.organizationId) {
+      redirectUrl.searchParams.set('google_calendar', 'unauthorized')
       return NextResponse.redirect(redirectUrl)
     }
     const token = await exchangeGoogleCalendarCode(code, request.url)

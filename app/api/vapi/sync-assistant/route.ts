@@ -21,12 +21,20 @@ import {
   buildPrepareWarmTransferServerTool,
   buildWarmTransferCallTool,
 } from '@/lib/vapi/warm-transfer-tool'
+import {
+  appendIndustryCrmContextToSystemPrompt,
+  getOrganizationAssistantPrompt,
+} from '@/lib/crm/industry-templates'
 import { createHmac, timingSafeEqual } from 'crypto'
 
-const PRODUCTION_ORGANIZATION_ID = '9bb50e58-9ba6-4d54-8171-13922749f570'
-const PRODUCTION_ASSISTANT_ID = 'e9a5d0a4-44a5-4bf7-90df-35a5d50d181d'
-const PRODUCTION_PHONE_NUMBER_ID = '56e9913c-4032-4356-98f0-3ac1f9713508'
-const PRODUCTION_APP_BASE = 'https://swatvoiceia.vercel.app'
+/** Fallback prod org/assistant/phone when env is set (never hardcode UUIDs in source). */
+const PRODUCTION_ORGANIZATION_ID = process.env.VAPI_PRODUCTION_ORG_ID?.trim() || ''
+const PRODUCTION_ASSISTANT_ID = process.env.VAPI_PRODUCTION_ASSISTANT_ID?.trim() || ''
+const PRODUCTION_PHONE_NUMBER_ID = process.env.VAPI_PRODUCTION_PHONE_NUMBER_ID?.trim() || ''
+const PRODUCTION_APP_BASE = (process.env.NEXT_PUBLIC_APP_URL || 'https://swatvoiceia.vercel.app').replace(
+  /\/$/,
+  '',
+)
 const REQUIRED_VAPI_TOOL_NAMES = [
   'save_lead_info',
   'prepare_warm_transfer',
@@ -860,11 +868,12 @@ export async function POST(request: NextRequest) {
       )
     }
 
-    const appBase =
-      organizationId === PRODUCTION_ORGANIZATION_ID
-        ? PRODUCTION_APP_BASE
-        : (process.env.NEXT_PUBLIC_APP_URL || PRODUCTION_APP_BASE).replace(/\/$/, '')
-    if (organizationId === PRODUCTION_ORGANIZATION_ID && !assistantId) {
+    const isConfiguredProdOrg =
+      Boolean(PRODUCTION_ORGANIZATION_ID) && organizationId === PRODUCTION_ORGANIZATION_ID
+    const appBase = isConfiguredProdOrg
+      ? PRODUCTION_APP_BASE
+      : (process.env.NEXT_PUBLIC_APP_URL || PRODUCTION_APP_BASE).replace(/\/$/, '')
+    if (isConfiguredProdOrg && !assistantId && PRODUCTION_ASSISTANT_ID) {
       assistantId = PRODUCTION_ASSISTANT_ID
     }
 
@@ -904,6 +913,16 @@ export async function POST(request: NextRequest) {
         const q = sanitizeFaqTextForSync(String(f.question || ''))
         const a = sanitizeFaqTextForSync(String(f.answer || ''))
         systemPrompt += `- ${q}: ${a}\n`
+      })
+    }
+
+    try {
+      const industryPrompt = await getOrganizationAssistantPrompt(organizationId, 'es')
+      systemPrompt = appendIndustryCrmContextToSystemPrompt(systemPrompt, industryPrompt)
+    } catch (industryErr) {
+      console.warn('[vapi/sync-assistant] industry_crm_prompt_skipped', {
+        organization_id: organizationId,
+        error: industryErr instanceof Error ? industryErr.message : String(industryErr),
       })
     }
 
@@ -1610,13 +1629,12 @@ export async function POST(request: NextRequest) {
     }
 
     const phoneReport = await fetchVapiPhoneNumbersForSync(vapiApiKey, resolvedAssistantId)
-    const phoneNumberId =
-      organizationId === PRODUCTION_ORGANIZATION_ID ? PRODUCTION_PHONE_NUMBER_ID : ''
+    const phoneNumberId = isConfiguredProdOrg && PRODUCTION_PHONE_NUMBER_ID ? PRODUCTION_PHONE_NUMBER_ID : ''
     const phoneNumberServerUrl = `${appBase}/api/vapi/events?organization_id=${organizationId}`
     const phoneNumberServerSync = phoneNumberId
       ? await updateVapiPhoneNumberServerUrl({
           vapiApiKey,
-          assistantId: resolvedAssistantId || PRODUCTION_ASSISTANT_ID,
+          assistantId: resolvedAssistantId || (isConfiguredProdOrg ? PRODUCTION_ASSISTANT_ID : ''),
           phoneNumberId,
           targetServerUrl: phoneNumberServerUrl,
         })

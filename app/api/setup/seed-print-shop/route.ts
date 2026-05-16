@@ -8,6 +8,9 @@ import {
 } from "@/lib/templates/print-shop-config"
 
 export async function POST() {
+  if (process.env.NODE_ENV === 'production' && process.env.ALLOW_SEED_ENDPOINTS !== 'true') {
+    return NextResponse.json({ error: 'Not available in production' }, { status: 403 })
+  }
   try {
     const supabase = await createClient()
     
