@@ -40,6 +40,7 @@ import {
   sortQuoteRowsByBusinessCardsCatalogQty,
 } from '@/lib/voice-platform/repository'
 import { workOrderStatusForVoice } from '@/lib/voice-platform/work-order-voice'
+import { getNextCallRecipient, isPhoneEligibleForCallTransfer } from '@/lib/team/call-routing'
 
 export type QuoteContext = {
   service_name: string
@@ -511,6 +512,9 @@ export async function runGetPriceQuote(input: {
   }
 }
 
+const TEAM_UNAVAILABLE_ASSISTANT_INSTRUCTION =
+  'The team is not available to take live calls right now. Apologize briefly, offer to take a message (name and phone if missing), then use save_lead_info and/or create_follow_up. Do not attempt another live transfer in this call.'
+
 export async function runTransferToRamon(input: {
   organizationId: string
   callLogId: string
@@ -530,9 +534,50 @@ export async function runTransferToRamon(input: {
   const fromRuntimeName = policy.callbackDefaultOwner || dests[0]?.name || 'Ramon'
 
   const settings = await getOrgVoiceSettings(input.organizationId)
-  const ramonPhone =
+  let ramonPhone =
     fromRuntimePhone || settings?.transfer_target_phone || process.env.TWILIO_FORWARD_NUMBER || null
-  const ramonName = settings?.transfer_target_name || fromRuntimeName
+  let ramonName = settings?.transfer_target_name || fromRuntimeName
+
+  const routedRecipient = await getNextCallRecipient(input.organizationId)
+  if (!routedRecipient) {
+    const followUp = await createFollowUp({
+      organizationId: input.organizationId,
+      callLogId: input.callLogId,
+      title: 'Callback: equipo no disponible para llamadas',
+      notes: input.reason,
+      owner: ramonName,
+      priority: input.urgent ? 'urgent' : 'high',
+      callbackRequired: true,
+      dueAt: new Date(Date.now() + 30 * 60 * 1000).toISOString(),
+    })
+    await createNotification({
+      organizationId: input.organizationId,
+      callLogId: input.callLogId,
+      followUpId: followUp.id,
+      type: 'callback_required',
+      title: 'Equipo no disponible para transferencia',
+      message: input.reason,
+      priority: input.urgent ? 'urgent' : 'high',
+    })
+    return {
+      transferred: false,
+      callback_created: true,
+      team_unavailable: true,
+      target_name: ramonName,
+      reason: 'no_call_recipients_available',
+      assistant_instruction: TEAM_UNAVAILABLE_ASSISTANT_INSTRUCTION,
+    }
+  }
+
+  ramonPhone = routedRecipient.phoneE164
+  ramonName = routedRecipient.name
+
+  if (fromRuntimePhone && !(await isPhoneEligibleForCallTransfer(input.organizationId, fromRuntimePhone))) {
+    console.warn('[voice-platform/transfer-to-ramon] legacy target not receiving calls; using routed recipient', {
+      organization_id: input.organizationId,
+      routed_member_id: routedRecipient.id,
+    })
+  }
 
   if (!ramonPhone) {
     const followUp = await createFollowUp({

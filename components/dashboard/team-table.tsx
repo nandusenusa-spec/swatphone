@@ -24,18 +24,42 @@ interface TeamMember {
   email: string | null
   extension: string | null
   is_available: boolean
+  receives_calls?: boolean
+  call_priority?: number
 }
 
 export function TeamTable({ members }: { members: TeamMember[] }) {
   const router = useRouter()
   const supabase = createClient()
 
+  const syncRouting = () =>
+    fetch('/api/dashboard/sync-team-transfer', { method: 'POST', credentials: 'include' }).catch(() => {})
+
   const handleToggleAvailable = async (id: string, isAvailable: boolean) => {
     await supabase
       .from('team_members')
       .update({ is_available: isAvailable, updated_at: new Date().toISOString() })
       .eq('id', id)
-    await fetch('/api/dashboard/sync-team-transfer', { method: 'POST', credentials: 'include' }).catch(() => {})
+    await syncRouting()
+    router.refresh()
+  }
+
+  const handleToggleReceivesCalls = async (member: TeamMember, receivesCalls: boolean) => {
+    const res = await fetch(`/api/dashboard/team/${member.id}/call-availability`, {
+      method: 'PATCH',
+      headers: { 'Content-Type': 'application/json' },
+      credentials: 'include',
+      body: JSON.stringify({
+        receives_calls: receivesCalls,
+        call_priority: member.call_priority ?? 100,
+      }),
+    })
+    if (!res.ok) {
+      const json = (await res.json().catch(() => ({}))) as { message?: string }
+      alert(json.message || 'No se pudo actualizar la disponibilidad para llamadas')
+      return
+    }
+    await syncRouting()
     router.refresh()
   }
 
@@ -65,6 +89,7 @@ export function TeamTable({ members }: { members: TeamMember[] }) {
           <TableHead>Contacto</TableHead>
           <TableHead>Extension</TableHead>
           <TableHead>Disponible</TableHead>
+          <TableHead>Recibir llamadas</TableHead>
           <TableHead>Acciones</TableHead>
         </TableRow>
       </TableHeader>
@@ -111,6 +136,12 @@ export function TeamTable({ members }: { members: TeamMember[] }) {
               <Switch
                 checked={member.is_available}
                 onCheckedChange={(checked) => handleToggleAvailable(member.id, checked)}
+              />
+            </TableCell>
+            <TableCell>
+              <Switch
+                checked={member.receives_calls !== false}
+                onCheckedChange={(checked) => handleToggleReceivesCalls(member, checked)}
               />
             </TableCell>
             <TableCell>

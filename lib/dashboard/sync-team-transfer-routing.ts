@@ -6,6 +6,7 @@ type TeamRow = {
   phone: string | null
   extension: string | null
   is_available: boolean
+  receives_calls?: boolean | null
   role?: string | null
   department?: string | null
 }
@@ -22,6 +23,7 @@ export type TeamTransferDestinationRow = {
 export function teamMembersToTransferDestinations(members: TeamRow[]): TeamTransferDestinationRow[] {
   const out: TeamTransferDestinationRow[] = []
   for (const m of members) {
+    if (m.receives_calls === false) continue
     if (!m.is_available) continue
     const name = typeof m.name === 'string' ? m.name.trim() : ''
     const rawPhone = typeof m.phone === 'string' ? m.phone.trim() : ''
@@ -51,7 +53,7 @@ export async function syncOrganizationRoutingFromTeam(
 ): Promise<{ destinations_count: number }> {
   const { data: members, error: mErr } = await supabase
     .from('team_members')
-    .select('name, phone, extension, is_available, role, department')
+    .select('name, phone, extension, is_available, receives_calls, role, department')
     .eq('organization_id', organizationId)
   if (mErr) throw mErr
 

@@ -6,6 +6,11 @@ import {
   upsertCallLogOperatorHandoffJson,
 } from '@/lib/voice-platform/repository'
 import { normalizePhone } from '@/lib/phone'
+import {
+  getAvailableCallRecipients,
+  getNextCallRecipient,
+  isPhoneEligibleForCallTransfer,
+} from '@/lib/team/call-routing'
 import { buildIntentCue, resolveTransferTarget } from '@/lib/vapi/transfer-destinations'
 
 export type OperatorHandoff = {
@@ -187,6 +192,19 @@ export async function runPrepareWarmTransfer(input: {
     ),
   })
 
+  const availableRecipients = await getAvailableCallRecipients(input.organizationId)
+  if (availableRecipients.length === 0) {
+    console.warn('[vapi/operator-handoff] prepare_warm_transfer failed: team_unavailable', {
+      organization_id: input.organizationId,
+      call_id: input.vapiCallId || null,
+    })
+    return {
+      error: 'team_unavailable' as const,
+      assistant_instruction:
+        'No team member is available to receive calls. Tell the caller briefly, take a message, and use save_lead_info or create_follow_up. Do not call transfer_to_ramon.',
+    }
+  }
+
   if (!resolved) {
     const list = runtime.transferPolicy.transferDestinations || []
     console.warn('[vapi/operator-handoff] prepare_warm_transfer failed: transfer_target_unresolved', {
@@ -228,6 +246,29 @@ export async function runPrepareWarmTransfer(input: {
     }
   }
 
+  let transferTarget = resolved
+  if (transferTarget && !(await isPhoneEligibleForCallTransfer(input.organizationId, transferTarget.phoneE164))) {
+    const fallback = await getNextCallRecipient(input.organizationId)
+    if (!fallback) {
+      return {
+        error: 'team_unavailable' as const,
+        assistant_instruction:
+          'The requested team member is not receiving calls and no alternate is available. Take a message and use save_lead_info or create_follow_up.',
+      }
+    }
+    console.warn('[vapi/operator-handoff] prepare_warm_transfer: target not receiving calls, using fallback', {
+      organization_id: input.organizationId,
+      call_id: input.vapiCallId || null,
+      requested_label: transferTarget.label,
+      fallback_member_id: fallback.id,
+    })
+    transferTarget = {
+      phoneE164: fallback.phoneE164,
+      label: fallback.name,
+      extension: fallback.extension,
+    }
+  }
+
   let customerName =
     typeof input.customerName === 'string' ? input.customerName.trim() || null : null
   let orderNumber =
@@ -265,17 +306,17 @@ export async function runPrepareWarmTransfer(input: {
     intent,
     short_summary: shortSummary,
     language: input.language?.trim() || null,
-    transfer_label: resolved.label,
-    transfer_extension: resolved.extension,
+    transfer_label: transferTarget.label,
+    transfer_extension: transferTarget.extension,
   }
 
   const handoff: OperatorHandoff = {
     ...base,
-    destination_phone_e164: resolved.phoneE164,
+    destination_phone_e164: transferTarget.phoneE164,
     first_message: buildOperatorFirstMessage({
       ...base,
-      transfer_label: resolved.label,
-      transfer_extension: resolved.extension,
+      transfer_label: transferTarget.label,
+      transfer_extension: transferTarget.extension,
     }),
     built_at: new Date().toISOString(),
   }
@@ -292,7 +333,7 @@ export async function runPrepareWarmTransfer(input: {
     call_id: input.vapiCallId || null,
     transfer_label: handoff.transfer_label,
     transfer_extension: handoff.transfer_extension,
-    destination_suffix: resolved.phoneE164.length >= 4 ? resolved.phoneE164.slice(-4) : '****',
+    destination_suffix: transferTarget.phoneE164.length >= 4 ? transferTarget.phoneE164.slice(-4) : '****',
   })
 
   console.info('[vapi/transfer-routing]', {
@@ -300,11 +341,11 @@ export async function runPrepareWarmTransfer(input: {
       [input.transferDepartment, intentCue].filter(Boolean).join(' ').trim() ||
       input.transferExtension ||
       null,
-    matchedName: resolved.label,
+    matchedName: transferTarget.label,
     matchedRole: null as string | null,
     matchedDepartment: input.transferDepartment ?? null,
-    transferExtension: resolved.extension,
-    transferPhone: resolved.phoneE164,
+    transferExtension: transferTarget.extension,
+    transferPhone: transferTarget.phoneE164,
     found: true,
     prepared: true,
     transferred: false,
@@ -437,6 +478,33 @@ export async function buildDynamicWarmTransferDestination(input: {
       transfer_destinations_count: (runtime.transferPolicy.transferDestinations || []).length,
     })
     return null
+  }
+
+  const availableRecipients = await getAvailableCallRecipients(input.organizationId)
+  if (availableRecipients.length === 0) {
+    console.warn('[vapi/operator-handoff] transfer-destination-request blocked: team_unavailable', {
+      organization_id: input.organizationId,
+      call_id: input.vapiCallId || null,
+    })
+    return null
+  }
+
+  const normalizedE164 = normalizePhone(e164)
+  if (!availableRecipients.some((r) => r.phoneE164 === normalizedE164)) {
+    const fallback = await getNextCallRecipient(input.organizationId)
+    if (!fallback) {
+      console.warn('[vapi/operator-handoff] transfer-destination-request blocked: no_eligible_recipient', {
+        organization_id: input.organizationId,
+        call_id: input.vapiCallId || null,
+      })
+      return null
+    }
+    e164 = fallback.phoneE164
+    console.warn('[vapi/operator-handoff] transfer-destination-request using fallback recipient', {
+      organization_id: input.organizationId,
+      call_id: input.vapiCallId || null,
+      fallback_member_id: fallback.id,
+    })
   }
 
   console.log('[vapi/operator-handoff] transfer-destination-request dynamic payload ok', {
