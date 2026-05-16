@@ -3,7 +3,9 @@ import { createClient } from '@/lib/supabase/server'
 import { createServiceRoleClient } from '@/lib/supabase/service-role'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { OrganizationSettingsForm } from '@/components/dashboard/organization-settings-form'
-import { Building2, Clock, Globe } from 'lucide-react'
+import Link from 'next/link'
+import { Building2, Clock, CreditCard, Globe, LayoutGrid } from 'lucide-react'
+import { Button } from '@/components/ui/button'
 
 export default async function SettingsPage() {
   /** TEMP DEMO ONLY — disable after presentation. */
@@ -42,6 +44,36 @@ export default async function SettingsPage() {
       </div>
 
       <div className="grid gap-6">
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <LayoutGrid className="h-5 w-5" />
+              CRM por industria
+            </CardTitle>
+            <CardDescription>Plantilla, campos y contexto del asistente</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button asChild variant="outline">
+              <Link href="/dashboard/settings/crm">Configurar industria</Link>
+            </Button>
+          </CardContent>
+        </Card>
+
+        <Card>
+          <CardHeader>
+            <CardTitle className="flex items-center gap-2">
+              <CreditCard className="h-5 w-5" />
+              Facturación
+            </CardTitle>
+            <CardDescription>Plan, trial y portal Stripe</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <Button asChild variant="outline">
+              <Link href="/dashboard/settings/billing">Ver plan y pagos</Link>
+            </Button>
+          </CardContent>
+        </Card>
+
         {/* Organization settings */}
         <Card>
           <CardHeader>
