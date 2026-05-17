@@ -1,0 +1,12 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(Get-ChildItem \"C:\\\\Users\\\\ferna\\\\NinjaTrader_Logs\\\\\" -ErrorAction SilentlyContinue | Select-Object Name, Length, LastWriteTime | Format-Table -AutoSize)",
+      "Read(//c/Users/ferna/NinjaTrader_Logs/**)",
+      "Read(//c/Users/ferna/Documents/NinjaTrader 8/bin/Custom/Strategies/**)",
+      "Read(//c/Users/ferna/Desktop/trading/**)",
+      "Read(//e/NQ_DATA/**)",
+      "PowerShell(\\(Get-Content \"C:\\\\Users\\\\ferna\\\\Documents\\\\NinjaTrader 8\\\\bin\\\\Custom\\\\Strategies\\\\Fsema20acumdist.cs\"\\).Count)"
+    ]
+  }
+}
