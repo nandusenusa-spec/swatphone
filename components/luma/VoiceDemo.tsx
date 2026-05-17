@@ -143,7 +143,7 @@ export default function VoiceDemo() {
 
           <audio
             ref={audioRef}
-            src="/luma-voice-placeholder.mp3"
+            src="/luma-voice-sample.wav"
             preload="none"
             onEnded={() => setPlaying(false)}
           />
