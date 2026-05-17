@@ -3,24 +3,32 @@ import { createClient } from '@/lib/supabase/server'
 import { createServiceRoleClient } from '@/lib/supabase/service-role'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { OrganizationSettingsForm } from '@/components/dashboard/organization-settings-form'
+import { OwnerProfileForm, OwnerProfileCardTitle } from '@/components/dashboard/owner-profile-form'
 import Link from 'next/link'
 import { Building2, Clock, CreditCard, Globe, LayoutGrid } from 'lucide-react'
 import { Button } from '@/components/ui/button'
 
 export default async function SettingsPage() {
   /** TEMP DEMO ONLY — disable after presentation. */
+  const demoMode = isDemoBypassAuth()
   let profile: {
+    full_name: string | null
+    email: string | null
     organizations: Record<string, unknown> | null
   } | null = null
 
-  if (isDemoBypassAuth()) {
+  if (demoMode) {
     const service = createServiceRoleClient()
     const { data: org } = await service
       .from('organizations')
       .select('*')
       .eq('id', DEMO_ORGANIZATION_ID)
       .single()
-    profile = { organizations: org }
+    profile = {
+      full_name: 'Demo User',
+      email: 'demo@swatworks.local',
+      organizations: org,
+    }
   } else {
     const supabase = await createClient()
     const {
@@ -44,6 +52,22 @@ export default async function SettingsPage() {
       </div>
 
       <div className="grid gap-6">
+        <Card>
+          <CardHeader>
+            <CardTitle>
+              <OwnerProfileCardTitle />
+            </CardTitle>
+            <CardDescription>Nombre y email que ves en el panel (dueño de la cuenta)</CardDescription>
+          </CardHeader>
+          <CardContent>
+            <OwnerProfileForm
+              initialFullName={profile?.full_name || ''}
+              initialEmail={profile?.email || ''}
+              demoMode={demoMode}
+            />
+          </CardContent>
+        </Card>
+
         <Card>
           <CardHeader>
             <CardTitle className="flex items-center gap-2">
