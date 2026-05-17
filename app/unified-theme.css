@@ -1,0 +1,91 @@
+/* LUMA UNIFIED THEME - Landing + Dashboard + Auth */
+
+:root {
+  /* Dark theme */
+  --bg-primary: #0c0c0c;
+  --bg-secondary: #1a1a1a;
+  --bg-tertiary: #2a2a2a;
+
+  /* Glassmorphism */
+  --glass-bg: rgba(255, 255, 255, 0.01);
+  --glass-border: rgba(255, 255, 255, 0.1);
+  --glass-blur: 4px;
+
+  /* Text */
+  --text-primary: #ffffff;
+  --text-secondary: rgba(255, 255, 255, 0.7);
+  --text-muted: rgba(255, 255, 255, 0.4);
+
+  /* Accent */
+  --accent-primary: #3d81e3;
+  --accent-hover: #2a5fbf;
+
+  /* Font */
+  --font-family: 'Inter', system-ui, sans-serif;
+}
+
+html, body {
+  font-family: var(--font-family);
+  background: var(--bg-primary);
+  color: var(--text-primary);
+  -webkit-font-smoothing: antialiased;
+}
+
+/* Glassmorphism card */
+.glass, .liquid-glass {
+  background: var(--glass-bg);
+  backdrop-filter: blur(var(--glass-blur));
+  -webkit-backdrop-filter: blur(var(--glass-blur));
+  border: 1px solid var(--glass-border);
+  border-radius: 12px;
+}
+
+/* Buttons unified */
+.btn-primary, .btn {
+  font-family: var(--font-family);
+  background: var(--text-primary);
+  color: var(--bg-primary);
+  border: none;
+  border-radius: 8px;
+  padding: 10px 24px;
+  font-weight: 600;
+  cursor: pointer;
+  transition: all 200ms;
+}
+
+.btn-primary:hover, .btn:hover {
+  background: #f5f5f5;
+  transform: scale(1.02);
+}
+
+.btn-ghost {
+  background: transparent;
+  color: var(--text-primary);
+  border: 1px solid var(--glass-border);
+  border-radius: 8px;
+  padding: 10px 24px;
+  font-family: var(--font-family);
+  cursor: pointer;
+  transition: all 200ms;
+}
+
+.btn-ghost:hover {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.2);
+}
+
+/* Links */
+a {
+  color: var(--accent-primary);
+  text-decoration: none;
+  transition: color 200ms;
+}
+
+a:hover {
+  color: var(--accent-hover);
+}
+
+/* Selection */
+::selection {
+  background: rgba(61, 129, 227, 0.3);
+}

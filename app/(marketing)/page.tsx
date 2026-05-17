@@ -8,6 +8,7 @@ import LogoCloud from '@/components/luma/LogoCloud';
 import Testimonials from '@/components/luma/Testimonials';
 import Pricing from '@/components/luma/Pricing';
 import FinalCTA from '@/components/luma/FinalCTA';
+import { ComingSoon } from '@/components/luma/ComingSoon';
 import SoundWaveBackground from '@/components/luma/SoundWaveBackground';
 import { NoiseFilters, GuideLines } from '@/components/luma/primitives';
 
@@ -27,6 +28,7 @@ export default function MarketingHomePage() {
       <LogoCloud />
       <Testimonials />
       <Pricing />
+      <ComingSoon />
       <FinalCTA />
     </main>
   );
