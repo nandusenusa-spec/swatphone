@@ -1,4 +1,4 @@
-/* LUMA UNIFIED THEME - Landing + Dashboard + Auth */
+/* LUMA UNIFIED THEME - Variables + Classes only (no html/body override) */
 
 :root {
   /* Dark theme */
@@ -22,13 +22,6 @@
 
   /* Font */
   --font-family: 'Inter', system-ui, sans-serif;
-}
-
-html, body {
-  font-family: var(--font-family);
-  background: var(--bg-primary);
-  color: var(--text-primary);
-  -webkit-font-smoothing: antialiased;
 }
 
 /* Glassmorphism card */
@@ -72,20 +65,4 @@ html, body {
 .btn-ghost:hover {
   background: rgba(255, 255, 255, 0.05);
   border-color: rgba(255, 255, 255, 0.2);
-}
-
-/* Links */
-a {
-  color: var(--accent-primary);
-  text-decoration: none;
-  transition: color 200ms;
-}
-
-a:hover {
-  color: var(--accent-hover);
-}
-
-/* Selection */
-::selection {
-  background: rgba(61, 129, 227, 0.3);
 }
