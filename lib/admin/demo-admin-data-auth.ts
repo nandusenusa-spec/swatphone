@@ -60,11 +60,18 @@ export function rejectUnlessDemoBypassAdminDataGet(
   }
 
   if (type === 'calls' || type === 'leads') {
-    const effectiveId = id ?? getLumaPlatformOrganizationId()
-    if (effectiveId !== DEMO_ORGANIZATION_ID) {
+    if (id) {
+      if (id !== DEMO_ORGANIZATION_ID) {
+        return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
+      }
+      console.log(`[auth/demo-bypass] api_admin_data organization_id=${id}`)
+      return null
+    }
+    const platformId = getLumaPlatformOrganizationId()
+    if (platformId && platformId !== DEMO_ORGANIZATION_ID) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
-    console.log(`[auth/demo-bypass] api_admin_data organization_id=${effectiveId}`)
+    console.log('[auth/demo-bypass] api_admin_data platform_leads_calls_list')
     return null
   }
 

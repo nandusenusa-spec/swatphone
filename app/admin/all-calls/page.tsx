@@ -28,6 +28,7 @@ export default function AllCallsPage() {
   const [calls, setCalls] = useState<Call[]>([])
   const [loading, setLoading] = useState(true)
   const [search, setSearch] = useState('')
+  const [platformNote, setPlatformNote] = useState<string | null>(null)
 
   useEffect(() => {
     async function fetchCalls() {
@@ -38,6 +39,7 @@ export default function AllCallsPage() {
       })
       const json = await res.json()
       if (res.ok && Array.isArray(json.data)) setCalls(json.data as Call[])
+      if (typeof json.note === 'string') setPlatformNote(json.note)
       setLoading(false)
     }
     fetchCalls()
@@ -66,6 +68,12 @@ export default function AllCallsPage() {
           <p className="text-muted-foreground">
             Llamadas entrantes a la línea de la plataforma (no las de cada cliente)
           </p>
+          {platformNote === 'platform_org_not_configured' ? (
+            <p className="mt-2 text-sm text-amber-600 dark:text-amber-400">
+              Configurá <code className="rounded bg-muted px-1">LUMA_PLATFORM_ORGANIZATION_ID</code> en Vercel.
+              Las llamadas de SWATWORKS están en Admin → Clientes → Llamadas y leads.
+            </p>
+          ) : null}
         </div>
         <div className="relative w-80">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />

@@ -8,7 +8,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import { Key, Globe, Bell, Shield, Phone } from 'lucide-react'
 
-type PlatformOrg = { id: string; name: string; slug: string | null }
+type PlatformOrg = { configured?: boolean; id: string | null; name: string | null; slug: string | null }
 
 export default function AdminSettingsPage() {
   const [platform, setPlatform] = useState<PlatformOrg | null>(null)
@@ -17,7 +17,7 @@ export default function AdminSettingsPage() {
     fetch('/api/admin/platform-org', { credentials: 'include' })
       .then((r) => r.json())
       .then((j) => {
-        if (j?.id) setPlatform(j as PlatformOrg)
+        if (j?.configured && j?.id) setPlatform(j as PlatformOrg)
       })
       .catch(() => {})
   }, [])
@@ -40,7 +40,7 @@ export default function AdminSettingsPage() {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-3">
-          {platform ? (
+          {platform?.id ? (
             <>
               <p className="text-sm">
                 Organización: <strong>{platform.name}</strong>
@@ -56,8 +56,9 @@ export default function AdminSettingsPage() {
             </>
           ) : (
             <p className="text-sm text-muted-foreground">
-              Definí <code className="rounded bg-muted px-1">LUMA_PLATFORM_ORGANIZATION_ID</code> en Vercel (o usa el
-              demo por defecto).
+              Creá una organización <strong>Luma</strong> en Supabase (distinta de SWATWORKS) y definí su UUID en{' '}
+              <code className="rounded bg-muted px-1">LUMA_PLATFORM_ORGANIZATION_ID</code> en Vercel. Los clientes
+              (SWATWORKS, etc.) se administran en Admin → Clientes.
             </p>
           )}
         </CardContent>

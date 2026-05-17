@@ -1,18 +1,23 @@
 import 'server-only'
 
-import { DEMO_ORGANIZATION_ID } from '@/lib/auth/demo-bypass'
-
 /**
- * Organization that receives inbound calls/leads for Luma (marketing / platform line),
- * separate from tenant clients. Defaults to demo SWATWORKS org if unset.
+ * Organization that receives inbound calls/leads for the Luma product line (marketing number).
+ * Must NOT default to SWATWORKS or demo tenant — those are regular clients.
+ *
+ * Set LUMA_PLATFORM_ORGANIZATION_ID in Vercel when you have a dedicated Luma org in Supabase.
  */
-export function getLumaPlatformOrganizationId(): string {
+export function getLumaPlatformOrganizationId(): string | null {
   const fromEnv = process.env.LUMA_PLATFORM_ORGANIZATION_ID?.trim()
   if (fromEnv && /^[0-9a-f-]{36}$/i.test(fromEnv)) return fromEnv
-  return DEMO_ORGANIZATION_ID
+  return null
+}
+
+export function hasLumaPlatformOrganization(): boolean {
+  return getLumaPlatformOrganizationId() !== null
 }
 
 export function isLumaPlatformOrganizationId(orgId: string | null | undefined): boolean {
-  if (!orgId) return false
-  return orgId === getLumaPlatformOrganizationId()
+  const platformId = getLumaPlatformOrganizationId()
+  if (!platformId || !orgId) return false
+  return orgId === platformId
 }

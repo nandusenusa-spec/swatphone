@@ -285,7 +285,9 @@ export async function GET(request: NextRequest) {
 
         if (orgsError) throw orgsError
         const platformId = getLumaPlatformOrganizationId()
-        const list = (orgs || []).filter((o: { id: string }) => o.id !== platformId)
+        const list = platformId
+          ? (orgs || []).filter((o: { id: string }) => o.id !== platformId)
+          : orgs || []
         const ids = list.map((o: { id: string }) => o.id).filter(Boolean)
         let credentialStoreAvailable = true
         const credByOrg: Record<
@@ -438,7 +440,10 @@ export async function GET(request: NextRequest) {
       case 'calls': {
         const orgFilter = id ?? getLumaPlatformOrganizationId()
         if (!orgFilter) {
-          return NextResponse.json({ error: 'platform_org_not_configured' }, { status: 500 })
+          return NextResponse.json({
+            data: [],
+            note: 'platform_org_not_configured',
+          })
         }
 
         const callsQuery = supabase
@@ -504,7 +509,10 @@ export async function GET(request: NextRequest) {
       case 'leads': {
         const orgFilter = id ?? getLumaPlatformOrganizationId()
         if (!orgFilter) {
-          return NextResponse.json({ error: 'platform_org_not_configured' }, { status: 500 })
+          return NextResponse.json({
+            data: [],
+            note: 'platform_org_not_configured',
+          })
         }
 
         const leadsQuery = supabase
