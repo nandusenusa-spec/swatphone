@@ -1,7 +1,6 @@
 'use client'
 
 import { createClient } from '@/lib/supabase/client'
-import { Button } from '@/components/ui/button'
 import {
   Card,
   CardContent,
@@ -13,6 +12,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import Link from 'next/link'
 import { useRouter, useSearchParams } from 'next/navigation'
+import { motion } from 'motion/react'
 import { Suspense, useState } from 'react'
 
 function LoginForm() {
@@ -54,13 +54,18 @@ function LoginForm() {
   }
 
   return (
-    <div className="flex min-h-svh w-full items-center justify-center p-6 md:p-10">
+    <motion.div
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4 }}
+      className="flex min-h-svh w-full items-center justify-center p-6 md:p-10"
+    >
       <div className="w-full max-w-sm">
         <div className="flex flex-col gap-6">
-          <Card>
+          <Card className="liquid-glass border-0 bg-transparent text-white shadow-none">
             <CardHeader>
               <CardTitle className="text-2xl">Login</CardTitle>
-              <CardDescription>
+              <CardDescription className="text-white/70">
                 Enter your email below to login to your account
               </CardDescription>
             </CardHeader>
@@ -68,7 +73,9 @@ function LoginForm() {
               <form onSubmit={handleLogin}>
                 <div className="flex flex-col gap-6">
                   <div className="grid gap-2">
-                    <Label htmlFor="email">Email</Label>
+                    <Label htmlFor="email" className="text-white">
+                      Email
+                    </Label>
                     <Input
                       id="email"
                       type="email"
@@ -76,48 +83,61 @@ function LoginForm() {
                       required
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
+                      className="liquid-glass h-10 border-white/10 bg-white/5 text-white shadow-none placeholder:text-white/40 focus-visible:border-white/20 focus-visible:ring-white/10"
                     />
                   </div>
                   <div className="grid gap-2">
-                    <Label htmlFor="password">Password</Label>
+                    <Label htmlFor="password" className="text-white">
+                      Password
+                    </Label>
                     <Input
                       id="password"
                       type="password"
                       required
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
+                      className="liquid-glass h-10 border-white/10 bg-white/5 text-white shadow-none placeholder:text-white/40 focus-visible:border-white/20 focus-visible:ring-white/10"
                     />
                   </div>
                   {noOrgHint && (
-                    <p className="rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-sm text-amber-900 dark:text-amber-100">
+                    <p className="rounded-md border border-amber-500/50 bg-amber-500/10 p-3 text-sm text-amber-100">
                       {noOrgHint}
                     </p>
                   )}
-                  {error && <p className="text-sm text-red-500">{error}</p>}
-                  <Button type="submit" className="w-full" disabled={isLoading}>
+                  {error && <p className="text-sm text-red-400">{error}</p>}
+                  <button
+                    type="submit"
+                    className="c3-btn w-full disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={isLoading}
+                  >
                     {isLoading ? 'Logging in...' : 'Login'}
-                  </Button>
+                  </button>
                 </div>
-                <div className="mt-4 space-y-2 text-center text-sm text-muted-foreground">
+                <motion.div
+                  initial={{ opacity: 0, y: 12 }}
+                  animate={{ opacity: 1, y: 0 }}
+                  transition={{ duration: 0.4 }}
+                  className="mt-4 space-y-2 text-center text-sm text-white/70"
+                >
                   <p>
                     ¿Super administrador de la plataforma?{' '}
-                    <Link href="/admin/login" className="text-foreground underline underline-offset-4">
+                    <Link href="/admin/login" className="text-white underline underline-offset-4">
                       Entrar al panel admin
                     </Link>
                   </p>
                   <p>
                     Don&apos;t have an account?{' '}
-                    <Link href="/auth/sign-up" className="underline underline-offset-4">
+                    <Link href="/auth/sign-up" className="text-white underline underline-offset-4">
                       Sign up
                     </Link>
                   </p>
-                </div>
+                </motion.div>
               </form>
             </CardContent>
           </Card>
         </div>
       </div>
-    </div>
+    </motion.div>
   )
 }
 
@@ -125,9 +145,13 @@ export default function Page() {
   return (
     <Suspense
       fallback={
-        <div className="flex min-h-svh w-full items-center justify-center p-6 text-sm text-muted-foreground">
+        <motion.div
+          initial={{ opacity: 0 }}
+          animate={{ opacity: 1 }}
+          className="flex min-h-svh w-full items-center justify-center p-6 text-sm text-white/70"
+        >
           Cargando…
-        </div>
+        </motion.div>
       }
     >
       <LoginForm />

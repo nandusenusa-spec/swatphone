@@ -12,10 +12,10 @@ import {
   Settings,
   Plug,
   HelpCircle,
-  MessageSquare,
   CalendarClock,
   ListTodo,
 } from 'lucide-react'
+import { LogoMark } from '@/components/luma/primitives'
 import { cn } from '@/lib/utils'
 
 export const dashboardPrimaryNav: { name: string; href: string; icon: LucideIcon }[] = [
@@ -34,6 +34,10 @@ export const dashboardSecondaryNav: { name: string; href: string; icon: LucideIc
   { name: 'Configuracion', href: '/dashboard/settings', icon: Settings },
 ]
 
+const navBase = 'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors'
+const navActive = 'luma-nav-active'
+const navInactive = 'luma-nav-inactive'
+
 export function DashboardNavLinks({
   onNavigate,
   linkBaseClassName,
@@ -46,14 +50,9 @@ export function DashboardNavLinks({
   inactiveClassName?: string
 }) {
   const pathname = usePathname()
-  const base =
-    linkBaseClassName ??
-    'flex items-center gap-3 rounded-lg px-3 py-2 text-sm font-medium transition-colors'
-  const active =
-    activeClassName ?? 'bg-sidebar-accent text-sidebar-accent-foreground'
-  const inactive =
-    inactiveClassName ??
-    'text-sidebar-foreground/70 hover:bg-sidebar-accent/50 hover:text-sidebar-foreground'
+  const base = linkBaseClassName ?? navBase
+  const active = activeClassName ?? navActive
+  const inactive = inactiveClassName ?? navInactive
 
   const renderLink = (item: (typeof dashboardPrimaryNav)[0]) => {
     const isActive =
@@ -73,11 +72,11 @@ export function DashboardNavLinks({
 
   return (
     <>
-      <div className="mb-2 px-3 text-xs font-medium uppercase tracking-wider text-sidebar-foreground/50">
+      <div className="mb-2 px-3 text-xs font-medium uppercase tracking-wider text-white/50">
         Menu Principal
       </div>
       {dashboardPrimaryNav.map(renderLink)}
-      <div className="mb-2 mt-6 px-3 text-xs font-medium uppercase tracking-wider text-sidebar-foreground/50">
+      <div className="mb-2 mt-6 px-3 text-xs font-medium uppercase tracking-wider text-white/50">
         Configuracion
       </div>
       {dashboardSecondaryNav.map((item) => {
@@ -106,15 +105,15 @@ export function DashboardNavBrand({
   demoMode?: boolean
 }) {
   return (
-    <div className="flex items-center gap-3 border-b border-sidebar-border px-4 py-4">
-      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg bg-sidebar-primary">
-        <MessageSquare className="h-5 w-5 text-sidebar-primary-foreground" />
+    <div className="flex items-center gap-3 border-b border-white/10 px-4 py-4">
+      <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-lg border border-white/10 bg-white/5">
+        <LogoMark className="h-5 w-5 text-white" />
       </div>
-      <div className="min-w-0 flex-1 flex flex-col">
-        <span className="text-sm font-semibold text-sidebar-foreground">SWAT-VoiceIA</span>
-        <span className="block truncate text-xs text-sidebar-foreground/60">{organizationName}</span>
+      <div className="flex min-w-0 flex-1 flex-col">
+        <span className="text-sm font-semibold text-white">Luma</span>
+        <span className="block truncate text-xs text-white/60">{organizationName}</span>
         {demoMode ? (
-          <span className="mt-1 inline-flex w-fit rounded border border-amber-500/35 bg-amber-500/10 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-amber-800 dark:text-amber-400">
+          <span className="mt-1 inline-flex w-fit rounded border border-amber-500/35 bg-amber-500/10 px-1.5 py-px text-[10px] font-medium uppercase tracking-wide text-amber-300">
             Demo mode
           </span>
         ) : null}

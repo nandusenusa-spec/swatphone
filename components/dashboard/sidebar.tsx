@@ -22,7 +22,7 @@ export function DashboardSidebar({
   demoMode?: boolean
 }) {
   return (
-    <aside className="hidden w-64 shrink-0 flex-col border-r border-sidebar-border bg-sidebar md:flex">
+    <aside className="liquid-glass hidden w-64 shrink-0 flex-col border-r border-white/10 bg-transparent md:flex">
       <DashboardNavBrand
         organizationName={profile?.organizations?.name || 'Mi Empresa'}
         demoMode={demoMode}
@@ -32,16 +32,16 @@ export function DashboardSidebar({
         <DashboardNavLinks />
       </nav>
 
-      <div className="border-t border-sidebar-border p-4">
+      <div className="border-t border-white/10 p-4">
         <div className="flex items-center gap-3">
-          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full bg-sidebar-accent text-sm font-medium text-sidebar-accent-foreground">
+          <div className="flex h-9 w-9 shrink-0 items-center justify-center rounded-full border border-white/10 bg-white/10 text-sm font-medium text-white">
             {profile?.full_name?.charAt(0)?.toUpperCase() || profile?.email?.charAt(0)?.toUpperCase() || 'U'}
           </div>
           <div className="min-w-0 flex-1 truncate">
-            <p className="truncate text-sm font-medium text-sidebar-foreground">
+            <p className="truncate text-sm font-medium text-white">
               {profile?.full_name || profile?.email?.split('@')[0]}
             </p>
-            <p className="truncate text-xs text-sidebar-foreground/60">
+            <p className="truncate text-xs text-white/60">
               {profile?.role === 'owner' ? 'Propietario' : profile?.role === 'admin' ? 'Admin' : 'Miembro'}
             </p>
           </div>

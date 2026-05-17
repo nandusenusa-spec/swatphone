@@ -1,7 +1,6 @@
 'use client'
 
 import { createClient } from '@/lib/supabase/client'
-import { Button } from '@/components/ui/button'
 import {
   Card,
   CardContent,
@@ -13,6 +12,7 @@ import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
 import Link from 'next/link'
 import { useRouter } from 'next/navigation'
+import { motion } from 'motion/react'
 import { useState } from 'react'
 
 export default function Page() {
@@ -55,19 +55,28 @@ export default function Page() {
   }
 
   return (
-    <div className="flex min-h-svh w-full items-center justify-center p-6 md:p-10">
+    <motion.div
+      initial={{ opacity: 0, y: 12 }}
+      animate={{ opacity: 1, y: 0 }}
+      transition={{ duration: 0.4 }}
+      className="flex min-h-svh w-full items-center justify-center p-6 md:p-10"
+    >
       <div className="w-full max-w-sm">
         <div className="flex flex-col gap-6">
-          <Card>
+          <Card className="liquid-glass border-0 bg-transparent text-white shadow-none">
             <CardHeader>
               <CardTitle className="text-2xl">Sign up</CardTitle>
-              <CardDescription>Create a new account</CardDescription>
+              <CardDescription className="text-white/70">
+                Create a new account
+              </CardDescription>
             </CardHeader>
             <CardContent>
               <form onSubmit={handleSignUp}>
                 <div className="flex flex-col gap-6">
                   <div className="grid gap-2">
-                    <Label htmlFor="email">Email</Label>
+                    <Label htmlFor="email" className="text-white">
+                      Email
+                    </Label>
                     <Input
                       id="email"
                       type="email"
@@ -75,43 +84,47 @@ export default function Page() {
                       required
                       value={email}
                       onChange={(e) => setEmail(e.target.value)}
+                      className="liquid-glass h-10 border-white/10 bg-white/5 text-white shadow-none placeholder:text-white/40 focus-visible:border-white/20 focus-visible:ring-white/10"
                     />
                   </div>
                   <div className="grid gap-2">
-                    <div className="flex items-center">
-                      <Label htmlFor="password">Password</Label>
-                    </div>
+                    <Label htmlFor="password" className="text-white">
+                      Password
+                    </Label>
                     <Input
                       id="password"
                       type="password"
                       required
                       value={password}
                       onChange={(e) => setPassword(e.target.value)}
+                      className="liquid-glass h-10 border-white/10 bg-white/5 text-white shadow-none placeholder:text-white/40 focus-visible:border-white/20 focus-visible:ring-white/10"
                     />
                   </div>
                   <div className="grid gap-2">
-                    <div className="flex items-center">
-                      <Label htmlFor="repeat-password">Repeat Password</Label>
-                    </div>
+                    <Label htmlFor="repeat-password" className="text-white">
+                      Repeat Password
+                    </Label>
                     <Input
                       id="repeat-password"
                       type="password"
                       required
                       value={repeatPassword}
                       onChange={(e) => setRepeatPassword(e.target.value)}
+                      className="liquid-glass h-10 border-white/10 bg-white/5 text-white shadow-none placeholder:text-white/40 focus-visible:border-white/20 focus-visible:ring-white/10"
                     />
                   </div>
-                  {error && <p className="text-sm text-red-500">{error}</p>}
-                  <Button type="submit" className="w-full" disabled={isLoading}>
-                    {isLoading ? 'Creating an account...' : 'Sign up'}
-                  </Button>
-                </div>
-                <div className="mt-4 text-center text-sm">
-                  Already have an account?{' '}
-                  <Link
-                    href="/auth/login"
-                    className="underline underline-offset-4"
+                  {error && <p className="text-sm text-red-400">{error}</p>}
+                  <button
+                    type="submit"
+                    className="c3-btn w-full disabled:cursor-not-allowed disabled:opacity-50"
+                    disabled={isLoading}
                   >
+                    {isLoading ? 'Creating an account...' : 'Sign up'}
+                  </button>
+                </div>
+                <div className="mt-4 text-center text-sm text-white/70">
+                  Already have an account?{' '}
+                  <Link href="/auth/login" className="text-white underline underline-offset-4">
                     Login
                   </Link>
                 </div>
@@ -120,6 +133,6 @@ export default function Page() {
           </Card>
         </div>
       </div>
-    </div>
+    </motion.div>
   )
 }

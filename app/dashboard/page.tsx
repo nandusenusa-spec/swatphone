@@ -123,7 +123,7 @@ export default async function DashboardPage() {
             <CardContent>
               <div className="text-2xl font-bold">{stat.value}</div>
               <p className="text-xs text-muted-foreground">
-                <span className={stat.trend.startsWith('+') ? 'text-green-600' : 'text-red-500'}>
+                <span className={stat.trend.startsWith('+') ? 'text-green-400' : 'text-red-400'}>
                   {stat.trend}
                 </span>{' '}
                 {stat.description}

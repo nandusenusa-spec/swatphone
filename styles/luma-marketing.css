@@ -357,3 +357,140 @@
     padding-right: 0;
   }
 }
+
+/* App shell: dashboard + auth inside .luma-marketing */
+
+.luma-marketing [data-slot='card'] {
+  background: rgba(255, 255, 255, 0.01);
+  background-blend-mode: luminosity;
+  backdrop-filter: blur(4px);
+  -webkit-backdrop-filter: blur(4px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  box-shadow: inset 0 1px 1px rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.luma-marketing .text-foreground,
+.luma-marketing [data-slot='card-title'] {
+  color: #fff;
+}
+
+.luma-marketing .text-muted-foreground,
+.luma-marketing [data-slot='card-description'] {
+  color: rgba(255, 255, 255, 0.65);
+}
+
+.luma-marketing .border-border,
+.luma-marketing .border-input,
+.luma-marketing .border-sidebar-border {
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.luma-marketing .bg-card,
+.luma-marketing .bg-background,
+.luma-marketing .bg-sidebar,
+.luma-marketing .bg-popover {
+  background-color: rgba(255, 255, 255, 0.02);
+}
+
+.luma-marketing .bg-muted,
+.luma-marketing .bg-sidebar-accent,
+.luma-marketing .bg-accent {
+  background-color: rgba(255, 255, 255, 0.06);
+}
+
+.luma-marketing .text-sidebar-foreground,
+.luma-marketing .text-sidebar-accent-foreground,
+.luma-marketing .text-popover-foreground,
+.luma-marketing .text-accent-foreground {
+  color: #fff;
+}
+
+.luma-marketing [data-slot='input'],
+.luma-marketing textarea,
+.luma-marketing select {
+  background: rgba(255, 255, 255, 0.05);
+  border-color: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.luma-marketing [data-slot='input']::placeholder,
+.luma-marketing textarea::placeholder {
+  color: rgba(255, 255, 255, 0.4);
+}
+
+.luma-marketing [data-slot='input']:focus-visible,
+.luma-marketing textarea:focus-visible,
+.luma-marketing select:focus-visible {
+  border-color: rgba(255, 255, 255, 0.25);
+  --tw-ring-color: rgba(255, 255, 255, 0.15);
+}
+
+.luma-marketing table {
+  color: #fff;
+}
+
+.luma-marketing thead tr {
+  border-color: rgba(255, 255, 255, 0.1);
+}
+
+.luma-marketing tbody tr {
+  border-color: rgba(255, 255, 255, 0.08);
+}
+
+.luma-marketing tbody tr:hover {
+  background: rgba(255, 255, 255, 0.03);
+}
+
+.luma-marketing .bg-primary {
+  background-color: #fff !important;
+  color: #000 !important;
+}
+
+.luma-marketing .text-primary-foreground {
+  color: #000 !important;
+}
+
+.luma-marketing .hover\:bg-primary\/90:hover {
+  background-color: rgba(255, 255, 255, 0.9) !important;
+}
+
+.luma-marketing .hover\:bg-accent:hover,
+.luma-marketing .hover\:bg-muted\/40:hover {
+  background-color: rgba(255, 255, 255, 0.08) !important;
+  color: #fff !important;
+}
+
+.luma-marketing [data-slot='dropdown-menu-content'],
+.luma-marketing [data-slot='sheet-content'],
+.luma-marketing [data-slot='dialog-content'] {
+  background: rgba(12, 12, 12, 0.95);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.luma-marketing [data-slot='badge'] {
+  border-color: rgba(255, 255, 255, 0.15);
+}
+
+.luma-marketing .luma-nav-active {
+  background: rgba(255, 255, 255, 0.1);
+  color: #fff;
+}
+
+.luma-marketing .luma-nav-inactive {
+  color: rgba(255, 255, 255, 0.7);
+}
+
+.luma-marketing .luma-nav-inactive:hover {
+  background: rgba(255, 255, 255, 0.05);
+  color: #fff;
+}
+
+.luma-marketing .c3-btn.w-full {
+  margin-top: 0;
+  align-self: stretch;
+  width: 100%;
+}
