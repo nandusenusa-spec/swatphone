@@ -12,6 +12,7 @@ import {
   AccordionTrigger,
 } from '@/components/ui/accordion'
 import { Pencil, Trash2 } from 'lucide-react'
+import { toast } from 'sonner'
 import { EditFAQDialog } from './edit-faq-dialog'
 
 interface Faq {
@@ -28,18 +29,26 @@ export function FaqsList({ faqs }: { faqs: Faq[] }) {
   const supabase = createClient()
 
   const handleToggleActive = async (id: string, isActive: boolean) => {
-    await supabase
+    const { error } = await supabase
       .from('faqs')
       .update({ is_active: isActive, updated_at: new Date().toISOString() })
       .eq('id', id)
+    if (error) {
+      toast.error('No se pudo actualizar el estado', { description: error.message })
+      return
+    }
     router.refresh()
   }
 
   const handleDelete = async (id: string) => {
-    if (confirm('Estas seguro de eliminar esta FAQ?')) {
-      await supabase.from('faqs').delete().eq('id', id)
-      router.refresh()
+    if (!confirm('Estas seguro de eliminar esta FAQ?')) return
+    const { error } = await supabase.from('faqs').delete().eq('id', id)
+    if (error) {
+      toast.error('No se pudo eliminar', { description: error.message })
+      return
     }
+    toast.success('FAQ eliminada')
+    router.refresh()
   }
 
   if (faqs.length === 0) {

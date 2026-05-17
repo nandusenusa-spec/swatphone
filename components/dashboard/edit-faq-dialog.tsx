@@ -17,6 +17,7 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { Pencil, Loader2 } from 'lucide-react'
+import { toast } from 'sonner'
 
 interface FAQ {
   id: string
@@ -42,7 +43,7 @@ export function EditFAQDialog({ faq }: { faq: FAQ }) {
     setIsLoading(true)
 
     try {
-      await supabase
+      const { error } = await supabase
         .from('faqs')
         .update({
           question: formData.question,
@@ -52,10 +53,17 @@ export function EditFAQDialog({ faq }: { faq: FAQ }) {
         })
         .eq('id', faq.id)
 
+      if (error) {
+        throw new Error(error.message)
+      }
+
+      toast.success('FAQ actualizada')
       setOpen(false)
       router.refresh()
     } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Error desconocido'
       console.error('Error updating FAQ:', error)
+      toast.error('No se pudo actualizar la FAQ', { description: msg, duration: 8000 })
     } finally {
       setIsLoading(false)
     }

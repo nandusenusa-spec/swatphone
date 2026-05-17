@@ -64,8 +64,10 @@ export default function AllLeadsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Todos los Leads</h1>
-          <p className="text-muted-foreground">Prospectos de todos los clientes</p>
+          <h1 className="text-2xl font-bold">Leads de Luma</h1>
+          <p className="text-muted-foreground">
+            Prospectos que llaman a la línea de la plataforma (no los de cada cliente)
+          </p>
         </div>
         <div className="relative w-80">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />

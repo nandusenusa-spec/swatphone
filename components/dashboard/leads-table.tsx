@@ -124,23 +124,53 @@ export function LeadsTable({ leads, teamMembers }: { leads: Lead[]; teamMembers:
     router.refresh()
   }
 
+  const resolveDeleteUrl = (lead: Lead): string | null => {
+    if (lead.rowKind === 'call' || lead.id.startsWith('call-')) {
+      const raw = lead.id.replace(/^call-/i, '')
+      if (!raw || !/^[0-9a-f-]{36}$/i.test(raw)) return null
+      return `/api/dashboard/calls/${raw}`
+    }
+    if (lead.rowKind === 'customer') {
+      if (!/^[0-9a-f-]{36}$/i.test(lead.id)) return null
+      return `/api/dashboard/customers/${lead.id}`
+    }
+    if (!/^[0-9a-f-]{36}$/i.test(lead.id)) return null
+    return `/api/dashboard/leads/${lead.id}`
+  }
+
+  const deleteSuccessMessage = (lead: Lead) => {
+    if (lead.rowKind === 'call' || lead.id.startsWith('call-')) {
+      return 'Llamada quitada del listado'
+    }
+    if (lead.rowKind === 'customer') return 'Contacto eliminado'
+    return 'Lead eliminado'
+  }
+
+  const deleteDialogTitle = (lead: Lead | null) => {
+    if (!lead) return 'Eliminar'
+    if (lead.rowKind === 'call' || lead.id.startsWith('call-')) return 'Quitar llamada del listado'
+    if (lead.rowKind === 'customer') return 'Eliminar contacto'
+    return 'Eliminar lead'
+  }
+
+  const deleteDialogDescription = (lead: Lead | null) => {
+    if (!lead) return ''
+    if (lead.rowKind === 'call' || lead.id.startsWith('call-')) {
+      return 'Se borra el registro de la llamada en el panel (no el lead en CRM si ya existe).'
+    }
+    if (lead.rowKind === 'customer') {
+      return 'Se elimina el contacto de clientes. Esta acción no se puede deshacer.'
+    }
+    return 'Se elimina el lead de la base. Esta acción no se puede deshacer.'
+  }
+
   const handleDeleteLeadConfirm = async () => {
     if (!deleteTarget) return
     setDeleteBusy(true)
     try {
-      const rk = deleteTarget.rowKind
-      let url: string | null = null
-      if (rk === 'lead' || (!rk && !deleteTarget.id.startsWith('call-'))) {
-        url = `/api/dashboard/leads/${deleteTarget.id}`
-      } else if (rk === 'call' || deleteTarget.id.startsWith('call-')) {
-        const raw = deleteTarget.id.replace(/^call-/i, '')
-        if (!raw || !/^[0-9a-f-]{36}$/i.test(raw)) {
-          toast.error('ID de llamada inválido')
-          return
-        }
-        url = `/api/dashboard/calls/${raw}`
-      } else {
-        toast.error('Eliminá contactos desde administración o creá primero un lead con el lápiz.')
+      const url = resolveDeleteUrl(deleteTarget)
+      if (!url) {
+        toast.error('No se puede eliminar este registro (ID inválido)')
         return
       }
       const res = await fetch(url, { method: 'DELETE' })
@@ -149,8 +179,9 @@ export function LeadsTable({ leads, teamMembers }: { leads: Lead[]; teamMembers:
         toast.error(typeof body.error === 'string' ? body.error : 'No se pudo eliminar')
         return
       }
-      toast.success(rk === 'call' || deleteTarget.id.startsWith('call-') ? 'Llamada quitada del listado' : 'Lead eliminado')
+      toast.success(deleteSuccessMessage(deleteTarget))
       setDeleteTarget(null)
+      if (selectedLead?.id === deleteTarget.id) setSelectedLead(null)
       router.refresh()
     } catch {
       toast.error('Error de red')
@@ -302,22 +333,23 @@ export function LeadsTable({ leads, teamMembers }: { leads: Lead[]; teamMembers:
                       </a>
                     </Button>
                   )}
-                  {(lead.rowKind === 'lead' || lead.rowKind === 'call' || lead.id.startsWith('call-')) && (
-                    <Button
-                      type="button"
-                      size="sm"
-                      variant="ghost"
-                      className="text-muted-foreground hover:text-destructive"
-                      title={
-                        lead.rowKind === 'call' || lead.id.startsWith('call-')
-                          ? 'Quitar esta llamada del listado'
+                  <Button
+                    type="button"
+                    size="sm"
+                    variant="outline"
+                    className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                    title={
+                      lead.rowKind === 'call' || lead.id.startsWith('call-')
+                        ? 'Quitar esta llamada del listado'
+                        : lead.rowKind === 'customer'
+                          ? 'Eliminar contacto'
                           : 'Eliminar lead'
-                      }
-                      onClick={() => setDeleteTarget(lead)}
-                    >
-                      <Trash2 className="h-4 w-4" />
-                    </Button>
-                  )}
+                    }
+                    onClick={() => setDeleteTarget(lead)}
+                  >
+                    <Trash2 className="h-4 w-4 sm:mr-1" />
+                    <span className="hidden sm:inline">Eliminar</span>
+                  </Button>
                 </div>
               </TableCell>
             </TableRow>
@@ -415,6 +447,21 @@ export function LeadsTable({ leads, teamMembers }: { leads: Lead[]; teamMembers:
                   <p className="text-sm">{selectedLead.notes}</p>
                 </div>
               )}
+
+              <div className="flex justify-end border-t border-white/10 pt-4">
+                <Button
+                  type="button"
+                  variant="outline"
+                  className="border-destructive/40 text-destructive hover:bg-destructive/10 hover:text-destructive"
+                  onClick={() => {
+                    setDeleteTarget(selectedLead)
+                    setSelectedLead(null)
+                  }}
+                >
+                  <Trash2 className="mr-2 h-4 w-4" />
+                  Eliminar
+                </Button>
+              </div>
             </div>
           )}
         </DialogContent>
@@ -426,15 +473,9 @@ export function LeadsTable({ leads, teamMembers }: { leads: Lead[]; teamMembers:
       >
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>
-              {deleteTarget?.rowKind === 'call' || deleteTarget?.id.startsWith('call-')
-                ? 'Quitar llamada del listado'
-                : 'Eliminar lead'}
-            </AlertDialogTitle>
+            <AlertDialogTitle>{deleteDialogTitle(deleteTarget)}</AlertDialogTitle>
             <AlertDialogDescription>
-              {deleteTarget?.rowKind === 'call' || deleteTarget?.id.startsWith('call-')
-                ? 'Se borra el registro de la llamada en el panel (no el lead en CRM si ya existe).'
-                : 'Se elimina el lead de la base. Esta acción no se puede deshacer.'}
+              {deleteDialogDescription(deleteTarget)}
               {deleteTarget && (
                 <span className="mt-2 block font-medium text-foreground">
                   {deleteTarget.name || deleteTarget.phone}

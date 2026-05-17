@@ -2,6 +2,7 @@ import {
   rejectUnlessDemoBypassAdminDataGet,
   rejectUnlessDemoBypassAdminDataPost,
 } from '@/lib/admin/demo-admin-data-auth'
+import { getLumaPlatformOrganizationId } from '@/lib/admin/luma-platform-org'
 import { createServiceRoleClient } from '@/lib/supabase/service-role'
 import { syncTeamMembersFromTransferDestinations } from '@/lib/dashboard/sync-team-transfer-routing'
 import { NextRequest, NextResponse } from 'next/server'
@@ -283,7 +284,8 @@ export async function GET(request: NextRequest) {
           .order('created_at', { ascending: false })
 
         if (orgsError) throw orgsError
-        const list = orgs || []
+        const platformId = getLumaPlatformOrganizationId()
+        const list = (orgs || []).filter((o: { id: string }) => o.id !== platformId)
         const ids = list.map((o: { id: string }) => o.id).filter(Boolean)
         let credentialStoreAvailable = true
         const credByOrg: Record<
@@ -433,14 +435,18 @@ export async function GET(request: NextRequest) {
         if (woErr) throw woErr
         return NextResponse.json({ data: workOrders || [] })
 
-      case 'calls':
+      case 'calls': {
+        const orgFilter = id ?? getLumaPlatformOrganizationId()
+        if (!orgFilter) {
+          return NextResponse.json({ error: 'platform_org_not_configured' }, { status: 500 })
+        }
+
         const callsQuery = supabase
           .from('calls')
           .select('*')
+          .eq('organization_id', orgFilter)
           .order('created_at', { ascending: false })
           .limit(100)
-
-        if (id) callsQuery.eq('organization_id', id)
 
         const { data: calls, error: callsError } = await callsQuery
         if (callsError) {
@@ -458,9 +464,9 @@ export async function GET(request: NextRequest) {
           .select(
             'id, organization_id, phone, transcript, summary, result, started_at, created_at, ended_at, outcome',
           )
+          .eq('organization_id', orgFilter)
           .order('created_at', { ascending: false })
           .limit(100)
-        if (id) callLogsBase.eq('organization_id', id)
         const { data: callLogs, error: callLogsError } = await callLogsBase
         if (callLogsError) {
           if (isPostgrestMissingRelation(callLogsError)) {
@@ -493,15 +499,20 @@ export async function GET(request: NextRequest) {
           }
         })
         return NextResponse.json({ data: normalizedCalls })
+      }
 
-      case 'leads':
+      case 'leads': {
+        const orgFilter = id ?? getLumaPlatformOrganizationId()
+        if (!orgFilter) {
+          return NextResponse.json({ error: 'platform_org_not_configured' }, { status: 500 })
+        }
+
         const leadsQuery = supabase
           .from('leads')
           .select('*')
+          .eq('organization_id', orgFilter)
           .order('created_at', { ascending: false })
           .limit(100)
-
-        if (id) leadsQuery.eq('organization_id', id)
 
         const { data: leads, error: leadsError } = await leadsQuery
         if (leadsError) {
@@ -517,9 +528,9 @@ export async function GET(request: NextRequest) {
         const customersQuery = supabase
           .from('customers')
           .select('id, organization_id, name, phone, email, company, created_at')
+          .eq('organization_id', orgFilter)
           .order('created_at', { ascending: false })
           .limit(100)
-        if (id) customersQuery.eq('organization_id', id)
         const { data: customers, error: customersError } = await customersQuery
         if (customersError) {
           if (isPostgrestMissingRelation(customersError)) {
@@ -540,6 +551,7 @@ export async function GET(request: NextRequest) {
           organizations: null,
         }))
         return NextResponse.json({ data: normalizedLeads })
+      }
 
       case 'assistant_config':
         if (!id) return NextResponse.json({ error: 'Organization ID required' }, { status: 400 })

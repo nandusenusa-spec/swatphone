@@ -31,6 +31,7 @@ import {
   WORK_ORDER_VOICE_ADMIN_STATUSES,
   workOrderStatusForAdminDropdown,
 } from '@/lib/admin/work-order-status'
+import { ClientCallsLeadsPanel } from '@/components/admin/client-calls-leads-panel'
 
 type TransferDestinationRow = {
   id: string
@@ -1049,6 +1050,7 @@ export default function AdminClientDetailPage() {
           <TabsTrigger value="vapi">Configurar Asistente</TabsTrigger>
           <TabsTrigger value="prompts">Prompts</TabsTrigger>
           <TabsTrigger value="screening">Spam / números</TabsTrigger>
+          <TabsTrigger value="activity">Llamadas y leads</TabsTrigger>
         </TabsList>
 
         {/* Tab: Info del Cliente */}
@@ -1782,6 +1784,17 @@ export default function AdminClientDetailPage() {
               </div>
             </CardContent>
           </Card>
+        </TabsContent>
+
+        <TabsContent value="activity" className="space-y-4">
+          <Alert>
+            <AlertTitle>Actividad de este cliente</AlertTitle>
+            <AlertDescription className="text-sm">
+              Llamadas y leads de la línea de <strong>este</strong> tenant. Los de la plataforma Luma están en Admin → Leads
+              Luma / Llamadas Luma.
+            </AlertDescription>
+          </Alert>
+          <ClientCallsLeadsPanel organizationId={clientId} />
         </TabsContent>
 
         <TabsContent value="prompts" className="space-y-4">

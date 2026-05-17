@@ -62,8 +62,10 @@ export default function AllCallsPage() {
     <div className="space-y-6">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-2xl font-bold">Todas las Llamadas</h1>
-          <p className="text-muted-foreground">Historial de llamadas de todos los clientes</p>
+          <h1 className="text-2xl font-bold">Llamadas Luma</h1>
+          <p className="text-muted-foreground">
+            Llamadas entrantes a la línea de la plataforma (no las de cada cliente)
+          </p>
         </div>
         <div className="relative w-80">
           <Search className="absolute left-3 top-1/2 h-4 w-4 -translate-y-1/2 text-muted-foreground" />

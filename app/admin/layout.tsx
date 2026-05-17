@@ -105,8 +105,8 @@ export default function AdminLayout({ children }: { children: React.ReactNode })
   const navItems = [
     { href: '/admin', icon: LayoutDashboard, label: 'Dashboard' },
     { href: '/admin/clients', icon: Users, label: 'Clientes' },
-    { href: '/admin/all-calls', icon: Phone, label: 'Todas las Llamadas' },
-    { href: '/admin/all-leads', icon: UserCheck, label: 'Todos los Leads' },
+    { href: '/admin/all-calls', icon: Phone, label: 'Llamadas Luma' },
+    { href: '/admin/all-leads', icon: UserCheck, label: 'Leads Luma' },
     { href: '/admin/analytics', icon: BarChart3, label: 'Analytics' },
     { href: '/admin/settings', icon: Settings, label: 'Configuracion' },
   ]

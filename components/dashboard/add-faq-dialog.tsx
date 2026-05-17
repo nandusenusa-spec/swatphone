@@ -1,7 +1,6 @@
 'use client'
 
 import { useState } from 'react'
-import { createClient } from '@/lib/supabase/client'
 import { useRouter } from 'next/navigation'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
@@ -17,13 +16,13 @@ import {
   DialogTrigger,
 } from '@/components/ui/dialog'
 import { Plus, Loader2 } from 'lucide-react'
+import { toast } from 'sonner'
 
 export function AddFaqDialog() {
   const router = useRouter()
-  const supabase = createClient()
   const [open, setOpen] = useState(false)
   const [isLoading, setIsLoading] = useState(false)
-  
+
   const [formData, setFormData] = useState({
     question: '',
     answer: '',
@@ -36,27 +35,31 @@ export function AddFaqDialog() {
     setIsLoading(true)
 
     try {
-      // Get organization_id from profile
-      const { data: { user } } = await supabase.auth.getUser()
-      const { data: profile } = await supabase
-        .from('profiles')
-        .select('organization_id')
-        .eq('id', user?.id)
-        .single()
-
       const keywords = formData.keywords
-        ? formData.keywords.split(',').map(k => k.trim()).filter(k => k)
-        : null
+        ? formData.keywords.split(',').map((k) => k.trim()).filter(Boolean)
+        : []
 
-      await supabase.from('faqs').insert({
-        organization_id: profile?.organization_id,
-        question: formData.question,
-        answer: formData.answer,
-        category: formData.category || null,
-        keywords,
-        is_active: true,
+      const res = await fetch('/api/dashboard/faqs', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          question: formData.question,
+          answer: formData.answer,
+          category: formData.category || null,
+          keywords,
+        }),
       })
 
+      const body = await res.json().catch(() => ({}))
+      if (!res.ok) {
+        const msg =
+          typeof body.error === 'string'
+            ? body.error
+            : 'No se pudo guardar la FAQ. ¿Ejecutaste la migración 025 en Supabase?'
+        throw new Error(msg)
+      }
+
+      toast.success('FAQ guardada')
       setOpen(false)
       setFormData({
         question: '',
@@ -66,7 +69,9 @@ export function AddFaqDialog() {
       })
       router.refresh()
     } catch (error) {
+      const msg = error instanceof Error ? error.message : 'Error desconocido'
       console.error('Error adding FAQ:', error)
+      toast.error('No se pudo guardar la FAQ', { description: msg, duration: 8000 })
     } finally {
       setIsLoading(false)
     }
@@ -130,9 +135,7 @@ export function AddFaqDialog() {
                 onChange={(e) => setFormData({ ...formData, keywords: e.target.value })}
                 placeholder="horario, atencion, abierto"
               />
-              <p className="text-xs text-muted-foreground">
-                Separadas por coma
-              </p>
+              <p className="text-xs text-muted-foreground">Separadas por coma</p>
             </div>
           </div>
 

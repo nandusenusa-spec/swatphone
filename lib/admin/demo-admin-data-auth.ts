@@ -5,6 +5,7 @@
  * fixed demo organization only. Does not replace real admin auth when bypass is off.
  */
 
+import { getLumaPlatformOrganizationId } from '@/lib/admin/luma-platform-org'
 import { DEMO_ORGANIZATION_ID, isDemoBypassAuth } from '@/lib/auth/demo-bypass'
 import { createServiceRoleClient } from '@/lib/supabase/service-role'
 import { NextRequest, NextResponse } from 'next/server'
@@ -59,10 +60,11 @@ export function rejectUnlessDemoBypassAdminDataGet(
   }
 
   if (type === 'calls' || type === 'leads') {
-    if (!id || id !== DEMO_ORGANIZATION_ID) {
+    const effectiveId = id ?? getLumaPlatformOrganizationId()
+    if (effectiveId !== DEMO_ORGANIZATION_ID) {
       return NextResponse.json({ error: 'Forbidden' }, { status: 403 })
     }
-    console.log(`[auth/demo-bypass] api_admin_data organization_id=${id}`)
+    console.log(`[auth/demo-bypass] api_admin_data organization_id=${effectiveId}`)
     return null
   }
 
