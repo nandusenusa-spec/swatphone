@@ -1007,17 +1007,25 @@ export async function dispatchVapiEvent(input: {
       final_number: number,
       is_e164: /^\+[1-9]\d{7,14}$/.test(number || ''),
     })
-    if (!number) {
+    if (!number || !/^\+[1-9]\d{7,14}$/.test(number)) {
       console.error('[vapi/dispatcher] transfer-destination-request NO_VALID_E164_FALLBACK', {
         organization_id: input.organizationId,
         call_id: vapiCallId || null,
         listed_destinations_count: runtime.transferPolicy.transferDestinations?.length ?? 0,
       })
+      return {
+        message: {
+          type: 'request-failed',
+          message:
+            'No transfer destination configured. Please leave your name and number for a callback.',
+        },
+      }
     }
     return {
       destination: {
         type: 'number',
         number,
+        numberE164CheckEnabled: true,
         description: runtime.transferPolicy.callbackDefaultOwner || 'Ramon',
       },
     }
@@ -1444,6 +1452,28 @@ export async function dispatchVapiEvent(input: {
       ? (persisted as { duplicate_finalize?: boolean }).duplicate_finalize
       : false,
   )
+
+  if (
+    !duplicateFinalize &&
+    ended &&
+    persisted &&
+    typeof persisted === 'object' &&
+    'call_log_id' in persisted
+  ) {
+    const { debitCallCreditForEndedCall } = await import('@/lib/billing/call-credits')
+    const { getOrganizationRuntimeConfig } = await import('@/lib/vapi/runtime-config')
+    const runtime = await getOrganizationRuntimeConfig(input.organizationId).catch(() => null)
+    await debitCallCreditForEndedCall({
+      organizationId: input.organizationId,
+      callLogId: String((persisted as { call_log_id: string }).call_log_id),
+      vapiCallId: vapiCallId || null,
+      vapiCostUsd: typeof cost === 'number' ? cost : null,
+      durationSeconds: typeof durationSeconds === 'number' ? durationSeconds : null,
+      organizationDisplayName: runtime?.organizationDisplayName ?? null,
+    }).catch((e) => {
+      console.warn('[call-credits] debit_failed', e instanceof Error ? e.message : String(e))
+    })
+  }
 
   let followUpAfterFailedTransfer = false
   if (!duplicateFinalize && ended && er && vapiCallId) {

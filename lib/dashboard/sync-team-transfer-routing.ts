@@ -169,6 +169,8 @@ export async function syncTeamMembersFromTransferDestinations(
         .from('team_members')
         .insert({
           organization_id: organizationId,
+          receives_calls: true,
+          call_priority: 100,
           ...patch,
         })
         .select('id')
