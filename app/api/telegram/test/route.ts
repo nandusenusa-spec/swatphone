@@ -1,14 +1,12 @@
 import { verifyXAdminSecret } from '@/lib/admin/admin-secret-auth'
+import { getTelegramChatIds } from '@/lib/notifications/telegram-chat-ids'
 import { NextResponse } from 'next/server'
 
 export const dynamic = 'force-dynamic'
 
 /**
- * Endpoint de diagnóstico Telegram.
- * GET  /api/telegram/test                → manda mensaje de prueba al TELEGRAM_CHAT_ID
- * GET  /api/telegram/test?msg=hola       → manda "hola"
- *
- * Devuelve { ok, botInfo, chatInfo, sent } para validar configuración.
+ * GET /api/telegram/test           → prueba a todos los chat IDs configurados
+ * GET /api/telegram/test?msg=hola
  */
 export async function GET(req: Request) {
   if (!verifyXAdminSecret(req)) {
@@ -18,16 +16,16 @@ export async function GET(req: Request) {
   const customMsg = url.searchParams.get('msg')
 
   const token = process.env.TELEGRAM_BOT_TOKEN?.trim()
-  const chatId = process.env.TELEGRAM_CHAT_ID?.trim()
+  const chatIds = getTelegramChatIds()
 
-  if (!token || !chatId) {
+  if (!token || chatIds.length === 0) {
     return NextResponse.json(
       {
         ok: false,
         error: 'env_missing',
         hasToken: Boolean(token),
-        hasChatId: Boolean(chatId),
-        hint: 'Configurar TELEGRAM_BOT_TOKEN y TELEGRAM_CHAT_ID en Vercel.',
+        chatIdCount: chatIds.length,
+        hint: 'TELEGRAM_BOT_TOKEN + TELEGRAM_CHAT_ID (y opcional TELEGRAM_EXTRA_CHAT_IDS) en Vercel.',
       },
       { status: 500 },
     )
@@ -35,7 +33,6 @@ export async function GET(req: Request) {
 
   const base = `https://api.telegram.org/bot${token}`
 
-  // 1) Validar bot
   let botInfo: unknown = null
   try {
     const r = await fetch(`${base}/getMe`)
@@ -47,39 +44,53 @@ export async function GET(req: Request) {
     )
   }
 
-  // 2) Validar chat
-  let chatInfo: unknown = null
-  try {
-    const r = await fetch(`${base}/getChat?chat_id=${encodeURIComponent(chatId)}`)
-    chatInfo = await r.json()
-  } catch (e) {
-    return NextResponse.json(
-      { ok: false, error: 'getChat_failed', detail: (e as Error).message, botInfo },
-      { status: 500 },
-    )
+  const text = customMsg || `🧪 Test desde ALOHA — ${new Date().toLocaleString('es-US', { timeZone: 'America/New_York' })}`
+
+  const deliveries: Array<{
+    chat_id: string
+    getChat_ok: boolean
+    send_ok: boolean
+    getChat?: unknown
+    send?: unknown
+  }> = []
+
+  for (const chatId of chatIds) {
+    let getChat_ok = false
+    let getChat: unknown = null
+    try {
+      const r = await fetch(`${base}/getChat?chat_id=${encodeURIComponent(chatId)}`)
+      getChat = await r.json()
+      getChat_ok = (getChat as { ok?: boolean }).ok === true
+    } catch {
+      getChat_ok = false
+    }
+
+    let send_ok = false
+    let send: unknown = null
+    try {
+      const r = await fetch(`${base}/sendMessage`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ chat_id: chatId, text }),
+      })
+      send = await r.json()
+      send_ok = (send as { ok?: boolean }).ok === true
+    } catch {
+      send_ok = false
+    }
+
+    deliveries.push({ chat_id: chatId, getChat_ok, send_ok, getChat, send })
   }
 
-  // 3) Mandar mensaje
-  const text = customMsg || `🧪 Test desde ALOHA — ${new Date().toLocaleString('es-US', { timeZone: 'America/New_York' })}`
-  let sendInfo: unknown = null
-  try {
-    const r = await fetch(`${base}/sendMessage`, {
-      method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify({ chat_id: chatId, text }),
-    })
-    sendInfo = await r.json()
-    return NextResponse.json({
-      ok: (sendInfo as { ok?: boolean }).ok === true,
-      botInfo,
-      chatInfo,
-      sent: sendInfo,
-      message: text,
-    })
-  } catch (e) {
-    return NextResponse.json(
-      { ok: false, error: 'send_failed', detail: (e as Error).message, botInfo, chatInfo },
-      { status: 500 },
-    )
-  }
+  const allOk = deliveries.every((d) => d.send_ok)
+  const anyOk = deliveries.some((d) => d.send_ok)
+
+  return NextResponse.json({
+    ok: allOk,
+    partial: anyOk && !allOk,
+    botInfo,
+    chat_ids: chatIds,
+    deliveries,
+    message: text,
+  })
 }

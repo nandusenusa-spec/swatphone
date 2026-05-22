@@ -1,3 +1,5 @@
+import { getTelegramChatIds } from '@/lib/notifications/telegram-chat-ids'
+
 export type LeadTemperature = 'hot' | 'lukewarm'
 export type TelegramLeadPayload = {
   temperature: LeadTemperature
@@ -61,7 +63,7 @@ async function postTelegram(body: Record<string, unknown>): Promise<{ ok: boolea
   }
 }
 
-async function sendMsg(
+async function sendMsgToChat(
   chatId: string,
   text: string,
   options?: { replyMarkup?: Record<string, unknown> },
@@ -75,9 +77,37 @@ async function sendMsg(
   if (options?.replyMarkup) plainBody.reply_markup = options.replyMarkup
   const second = await postTelegram(plainBody)
   if (second.ok) {
-    console.info('[telegram] sent_plain_fallback_after_markdown_error')
+    console.info('[telegram] sent_plain_fallback_after_markdown_error', { chat_id: chatId })
+  } else {
+    console.error('[telegram] send_to_chat_failed', {
+      chat_id: chatId,
+      status: second.status,
+      detail: second.detail.slice(0, 300),
+    })
   }
   return second.ok
+}
+
+/** Envía el mismo mensaje a todos los chat IDs configurados en Vercel. */
+async function sendMsg(
+  text: string,
+  options?: { replyMarkup?: Record<string, unknown> },
+): Promise<boolean> {
+  const chatIds = getTelegramChatIds()
+  if (chatIds.length === 0) {
+    console.warn('[telegram] TELEGRAM_CHAT_ID / TELEGRAM_EXTRA_CHAT_IDS no configurados')
+    return false
+  }
+  const results = await Promise.all(chatIds.map((id) => sendMsgToChat(id, text, options)))
+  const okCount = results.filter(Boolean).length
+  if (okCount < chatIds.length) {
+    console.warn('[telegram] partial_delivery', {
+      ok: okCount,
+      total: chatIds.length,
+      chat_ids: chatIds,
+    })
+  }
+  return okCount > 0
 }
 
 export function classifyLeadTemperature(p: {
@@ -114,8 +144,7 @@ function telegramCallerDisplayName(payload: TelegramLeadPayload): string {
 }
 
 export async function notifyLeadTelegram(payload: TelegramLeadPayload): Promise<boolean> {
-  const chatId = process.env.TELEGRAM_CHAT_ID?.trim()
-  if (!chatId) {
+  if (getTelegramChatIds().length === 0) {
     console.warn('[telegram] TELEGRAM_CHAT_ID no configurado')
     return false
   }
@@ -165,7 +194,7 @@ export async function notifyLeadTelegram(payload: TelegramLeadPayload): Promise<
     ? { inline_keyboard: [[{ text: 'Abrir panel de llamadas', url: panelUrl }]] }
     : undefined
 
-  return sendMsg(chatId, lines.join('\n'), replyMarkup ? { replyMarkup } : undefined)
+  return sendMsg(lines.join('\n'), replyMarkup ? { replyMarkup } : undefined)
 }
 
 /** Envía Telegram tras guardar lead (misma lógica que save_lead_info). */
@@ -213,8 +242,7 @@ export async function notifyJobCompleteTelegram(params: {
   jobTitle: string
   organizationName?: string
 }): Promise<boolean> {
-  const chatId = process.env.TELEGRAM_CHAT_ID?.trim()
-  if (!chatId) return false
+  if (getTelegramChatIds().length === 0) return false
   const org = esc(params.organizationName || 'SWATWORKS')
   const text = [
     '✅ *TRABAJO LISTO — ' + org + '*',
@@ -226,7 +254,7 @@ export async function notifyJobCompleteTelegram(params: {
     '_SMS enviado al cliente_',
     '⏰ _' + esc(nowStr()) + '_',
   ].join('\n')
-  return sendMsg(chatId, text)
+  return sendMsg(text)
 }
 
 export async function notifyAppointmentTelegram(params: {
@@ -238,8 +266,7 @@ export async function notifyAppointmentTelegram(params: {
   googleEventId?: string | null
   organizationName?: string | null
 }): Promise<boolean> {
-  const chatId = process.env.TELEGRAM_CHAT_ID?.trim()
-  if (!chatId) return false
+  if (getTelegramChatIds().length === 0) return false
   const org = esc(params.organizationName || 'SWATWORKS')
   const lines = [
     '*CITA CREADA - ' + org + '*',
@@ -252,5 +279,28 @@ export async function notifyAppointmentTelegram(params: {
   lines.push('*Calendar:* ' + esc(params.calendarStatus))
   if (params.googleEventId) lines.push('*Google event:* ' + esc(params.googleEventId))
   lines.push('', '_' + esc(nowStr()) + '_')
-  return sendMsg(chatId, lines.join('\n'))
+  return sendMsg(lines.join('\n'))
+}
+
+export async function notifyLowCallBalanceTelegram(params: {
+  organizationName: string
+  balanceUsd: number
+  thresholdUsd: number
+  lastChargeUsd?: number
+}): Promise<boolean> {
+  if (getTelegramChatIds().length === 0) return false
+  const org = esc(params.organizationName || 'Cliente')
+  const bal = esc(`$${params.balanceUsd.toFixed(2)}`)
+  const thr = esc(`$${params.thresholdUsd.toFixed(2)}`)
+  const lines = [
+    '⚠️ *SALDO BAJO — LLAMADAS — ' + org + '*',
+    '',
+    '💰 *Saldo restante:* ' + bal,
+    '📉 *Umbral de aviso:* ' + thr,
+  ]
+  if (typeof params.lastChargeUsd === 'number' && params.lastChargeUsd > 0) {
+    lines.push('📞 *Última llamada:* ' + esc(`$${params.lastChargeUsd.toFixed(2)}`))
+  }
+  lines.push('', 'Recargá saldo en admin para que sigan entrando llamadas.', '⏰ _' + esc(nowStr()) + '_')
+  return sendMsg(lines.join('\n'))
 }
