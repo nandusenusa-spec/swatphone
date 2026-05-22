@@ -116,7 +116,7 @@ function usableDestinations(list: TransferDestination[]): TransferDestination[] 
     .filter((d) => d.name.trim().length > 0 && isPlausibleE164(d.phoneE164))
 }
 
-function legacyPhone(runtime: RuntimeTransferSlice): string | null {
+export function legacyPhone(runtime: RuntimeTransferSlice): string | null {
   const p = runtime.transferPolicy
   const raw = p.urgentTransferNumber || p.ramonTransferNumber || p.defaultTransferNumber || null
   if (!raw?.trim()) return null
