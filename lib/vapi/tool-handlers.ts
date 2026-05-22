@@ -1,4 +1,5 @@
-import { classifyLeadTemperature, notifyLeadTelegram } from '@/lib/notifications/telegram'
+import { classifyLeadTemperature, notifyLeadTelegram, notifySavedLeadTelegram } from '@/lib/notifications/telegram'
+import { getOrganizationRuntimeConfig } from '@/lib/vapi/runtime-config'
 import {
   runCreateAppointment,
   runCreateFollowUp,
@@ -1173,16 +1174,9 @@ export async function executeToolHandler(
               vapi_call_id: context.vapiCallId || null,
             })
           } else {
-            tgOk = await notifyLeadTelegram({
-              temperature: classifyLeadTemperature({
-                customerName: displayCustomerName,
-                phone: out.customer?.phone ?? phone,
-                email: effectiveEmail ?? null,
-                company: effectiveCompany ?? null,
-                need: mergedNotes || '',
-                priceRequested: commercial.intent === 'quote_request',
-                dateNeeded: typeof args.date_needed === 'string' ? args.date_needed : null,
-              }),
+            const runtime = await getOrganizationRuntimeConfig(context.organizationId)
+            tgOk = await notifySavedLeadTelegram({
+              organizationName: runtime.organizationDisplayName,
               customerName: displayCustomerName,
               phone: out.customer?.phone ?? phone,
               email: effectiveEmail ?? null,

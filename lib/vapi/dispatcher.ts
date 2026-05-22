@@ -46,6 +46,7 @@ import { flattenVapiServerEvent } from '@/lib/vapi/vapi-event-flatten'
 import { unknownCallerPlaceholderE164 } from '@/lib/vapi/vapi-unknown-caller'
 import { resolveTrustedCallerFirstName } from '@/lib/voice-platform/caller-identity'
 import { screenInboundAssistantRequest } from '@/lib/vapi/phone-screening'
+import { notifySavedLeadTelegram } from '@/lib/notifications/telegram'
 import { textSuggestsPromisedCallback } from '@/lib/voice-platform/callback-heuristic'
 import { normalizePhone } from '@/lib/phone'
 import { logVapiToolCallReceived } from '@/lib/vapi/tool-call-logging'
@@ -568,12 +569,23 @@ async function autoSaveQuoteLeadFromTranscript(input: {
       return null
     })
   }
-  const telegramSent = false
+  let telegramSent = false
   if (out.ok) {
+    const runtime = await getOrganizationRuntimeConfig(input.organizationId)
+    telegramSent = await notifySavedLeadTelegram({
+      organizationName: runtime.organizationDisplayName,
+      customerName: out.customer?.name ?? fullName,
+      phone: out.customer?.phone ?? phone,
+      need: input.quoteContext.need_for_lead,
+      priceRequested: true,
+      category: 'catalog_quote',
+      summary: input.quoteContext.need_for_lead,
+      nextAction: `Cotización: ${input.quoteContext.service_name}`,
+    }).catch(() => false)
     await mergeCallLogStructuredByVapiCallId({
       organizationId: input.organizationId,
       vapiCallId: input.vapiCallId,
-      patch: { quote_lead_autosave_done: true },
+      patch: { quote_lead_autosave_done: true, ...(telegramSent ? { telegram_save_lead_sent: true } : {}) },
     })
   }
   console.info('[vapi/quote-lead-autosave] result', {
@@ -674,9 +686,20 @@ async function autoSaveWrapQuoteLeadFromTranscript(input: {
       return null
     })
   }
-  const telegramSent = false
+  let telegramSent = false
   let followUpCreated = false
   if (out.ok) {
+    const runtime = await getOrganizationRuntimeConfig(input.organizationId)
+    telegramSent = await notifySavedLeadTelegram({
+      organizationName: runtime.organizationDisplayName,
+      customerName: out.customer?.name ?? fullName,
+      phone: out.customer?.phone ?? phone,
+      need: wrap.need,
+      priceRequested: true,
+      category: 'wrap',
+      summary: wrap.need,
+      nextAction: 'Llamar por cotización de wrap vehicular',
+    }).catch(() => false)
     const followUp = await runCreateFollowUp({
       organizationId: input.organizationId,
       callLogId: input.callLogId || undefined,
@@ -692,7 +715,10 @@ async function autoSaveWrapQuoteLeadFromTranscript(input: {
     await mergeCallLogStructuredByVapiCallId({
       organizationId: input.organizationId,
       vapiCallId: input.vapiCallId,
-      patch: { wrap_lead_autosave_done: true },
+      patch: {
+        wrap_lead_autosave_done: true,
+        ...(telegramSent ? { telegram_save_lead_sent: true } : {}),
+      },
     })
   }
   console.info('[vapi/wrap-lead-autosave] result', {
