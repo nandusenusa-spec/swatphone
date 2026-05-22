@@ -5,6 +5,7 @@ import {
   countCallLogsTotal,
   fetchDashboardCallLogs,
 } from '@/lib/dashboard/call-logs-queries'
+import { resolveCallContactDisplay } from '@/lib/dashboard/call-contact-display'
 import { normalizePhone } from '@/lib/phone'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { CallsTable } from '@/components/dashboard/calls-table'
@@ -120,11 +121,19 @@ export default async function CallsPage() {
     const related_lead = norm ? leadByNormPhone.get(norm) ?? null : null
     const related_follow_up =
       typeof c.id === 'string' ? followByCallId.get(c.id) ?? null : null
+    const contact = resolveCallContactDisplay({
+      phone,
+      customerName,
+      structuredExtraction: se,
+      relatedLeadName: related_lead?.name ?? null,
+    })
     return {
       id: c.id,
       vapi_call_id: typeof c.vapi_call_id === 'string' ? c.vapi_call_id : null,
       phone_number: phone,
       customer_name: customerName,
+      contact_display_name: contact.primary,
+      contact_display_hint: contact.hint,
       intent,
       direction: 'inbound' as const,
       status:

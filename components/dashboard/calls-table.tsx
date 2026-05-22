@@ -41,6 +41,8 @@ interface Call {
   vapi_call_id?: string | null
   phone_number: string
   customer_name?: string | null
+  contact_display_name?: string | null
+  contact_display_hint?: string | null
   intent?: string | null
   next_action?: string | null
   direction: 'inbound' | 'outbound'
@@ -171,11 +173,19 @@ export function CallsTable({ calls }: { calls: Call[] }) {
               <TableCell>
                 <div>
                   <p className="font-medium">
-                    {call.leads?.name || call.customer_name || call.phone_number}
+                    {call.contact_display_name ||
+                      call.customer_name ||
+                      call.leads?.name ||
+                      call.phone_number}
                   </p>
                   <p className="text-xs text-muted-foreground">
                     {call.phone_number}
                   </p>
+                  {call.contact_display_hint ? (
+                    <p className="text-xs text-amber-600 dark:text-amber-500">
+                      {call.contact_display_hint}
+                    </p>
+                  ) : null}
                   {call.intent && (
                     <p className="mt-1 text-xs text-muted-foreground">
                       Tema: <span className="font-medium text-foreground">{call.intent}</span>
@@ -275,7 +285,11 @@ export function CallsTable({ calls }: { calls: Call[] }) {
           <DialogHeader>
             <DialogTitle>Reproducir Grabación</DialogTitle>
             <DialogDescription>
-              {selectedCall?.leads?.name || selectedCall?.phone_number} • {formatDuration(selectedCall?.duration_seconds || 0)}
+              {selectedCall?.contact_display_name ||
+                selectedCall?.customer_name ||
+                selectedCall?.leads?.name ||
+                selectedCall?.phone_number}{' '}
+              • {formatDuration(selectedCall?.duration_seconds || 0)}
             </DialogDescription>
           </DialogHeader>
           {selectedCall?.recording_url && (
@@ -327,8 +341,9 @@ export function CallsTable({ calls }: { calls: Call[] }) {
           <DialogHeader>
             <DialogTitle>Transcripcion de Llamada</DialogTitle>
             <DialogDescription>
-              {selectedCall?.leads?.name ||
+              {selectedCall?.contact_display_name ||
                 selectedCall?.customer_name ||
+                selectedCall?.leads?.name ||
                 selectedCall?.phone_number}{' '}
               - {selectedCall && format(new Date(selectedCall.created_at), 'dd/MM/yyyy HH:mm')}
             </DialogDescription>
@@ -418,7 +433,10 @@ export function CallsTable({ calls }: { calls: Call[] }) {
               grabación). No elimina al cliente ni el lead en «Leads».
               {deleteTarget && (
                 <span className="mt-2 block font-medium text-foreground">
-                  {deleteTarget.leads?.name || deleteTarget.customer_name || deleteTarget.phone_number}
+                  {deleteTarget.contact_display_name ||
+                    deleteTarget.customer_name ||
+                    deleteTarget.leads?.name ||
+                    deleteTarget.phone_number}
                 </span>
               )}
             </AlertDialogDescription>

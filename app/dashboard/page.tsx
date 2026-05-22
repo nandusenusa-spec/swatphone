@@ -2,6 +2,7 @@ import { requireDashboardOrganizationId } from '@/lib/auth/dashboard-session'
 import { createServiceRoleClient } from '@/lib/supabase/service-role'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Phone, Users, TrendingUp, Clock, PhoneIncoming, PhoneOutgoing } from 'lucide-react'
+import { resolveCallContactDisplay } from '@/lib/dashboard/call-contact-display'
 import { RecentCallsList } from '@/components/dashboard/recent-calls'
 import { LeadsPipeline } from '@/components/dashboard/leads-pipeline'
 
@@ -43,10 +44,23 @@ export default async function DashboardPage() {
     const intent = typeof r.intent === 'string' ? r.intent : null
     const summary = typeof r.summary === 'string' ? r.summary : null
     const nextAction = typeof r.next_action === 'string' ? r.next_action : null
+    const se =
+      r.structured_extraction &&
+      typeof r.structured_extraction === 'object' &&
+      !Array.isArray(r.structured_extraction)
+        ? (r.structured_extraction as Record<string, unknown>)
+        : {}
+    const contact = resolveCallContactDisplay({
+      phone,
+      customerName,
+      structuredExtraction: se,
+      relatedLeadName: null,
+    })
     return {
       id: r.id,
       phone_number: phone,
       customer_name: customerName,
+      contact_display_name: contact.primary,
       intent,
       summary,
       next_action: nextAction,

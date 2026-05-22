@@ -9,6 +9,7 @@ interface Call {
   id: string
   phone_number: string
   customer_name?: string | null
+  contact_display_name?: string | null
   intent?: string | null
   summary?: string | null
   next_action?: string | null
@@ -62,7 +63,10 @@ export function RecentCallsList({ calls }: { calls: Call[] }) {
             </div>
             <div>
               <p className="text-sm font-medium">
-                {call.leads?.name || call.customer_name || call.phone_number}
+                {call.contact_display_name ||
+                  call.customer_name ||
+                  call.leads?.name ||
+                  call.phone_number}
               </p>
               <p className="text-xs text-muted-foreground">
                 {call.phone_number}
