@@ -3,9 +3,9 @@ import { normalizePhone } from '@/lib/phone'
 
 const RATE_WINDOW_MS = 15 * 60 * 1000
 /** Llamadas en la ventana antes de empezar a subir score */
-const RATE_SOFT_THRESHOLD = 3
-const RATE_SCORE_PER_EXCESS = 18
-const AUTO_BLOCK_SCORE = 98
+const RATE_SOFT_THRESHOLD = 2
+const RATE_SCORE_PER_EXCESS = 28
+const AUTO_BLOCK_SCORE = 85
 
 export type PhoneScreeningRow = {
   id: string
@@ -22,12 +22,9 @@ export type PhoneScreeningRow = {
   updated_at: string
 }
 
-const REJECT_GENERIC_ES =
-  'No podemos completar su llamada en este momento. Si cree que es un error, intente más tarde o por otro canal.'
-const REJECT_BLOCKED_ES =
-  'Su número no puede ser atendido en esta línea. Si necesita ayuda, contacte por otro medio.'
-const REJECT_SPAM_ES =
-  'Detectamos actividad inusual desde este número. La llamada no puede continuar.'
+const REJECT_GENERIC_ES = 'No podemos atender esta llamada. Hasta luego.'
+const REJECT_BLOCKED_ES = 'Este número no puede usar esta línea. Hasta luego.'
+const REJECT_SPAM_ES = 'Actividad no permitida. Hasta luego.'
 
 function spokenError(kind: 'blocked' | 'spam' | 'generic'): string {
   if (kind === 'blocked') return REJECT_BLOCKED_ES

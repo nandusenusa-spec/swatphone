@@ -1,4 +1,4 @@
-const LAST_UPDATED = '26 de abril de 2026'
+const LAST_UPDATED = '19 de mayo de 2026'
 
 type SectionItem = {
   id: string
@@ -17,7 +17,8 @@ const SECTIONS: SectionItem[] = [
   { id: 'ia-automatizacion', title: 'I. IA y automatización' },
   { id: 'suspension-uso-prohibido', title: 'J. Suspensión y uso prohibido' },
   { id: 'politica-cambios', title: 'K. Política de cambios' },
-  { id: 'contacto-legal', title: 'L. Contacto legal' },
+  { id: 'google-calendar-privacidad', title: 'L. Google Calendar y datos de Google' },
+  { id: 'contacto-legal', title: 'M. Contacto legal' },
 ]
 
 export default function LegalPage() {
@@ -35,8 +36,12 @@ export default function LegalPage() {
 
       <header className="space-y-3">
         <h1 className="text-3xl font-semibold tracking-tight md:text-4xl">
-          Términos, límites del servicio y consentimiento de comunicaciones
+          Términos, privacidad y consentimiento de comunicaciones
         </h1>
+        <p className="text-muted-foreground max-w-3xl text-sm leading-relaxed">
+          SWAT Voice IA (<strong>swatvoiceia.vercel.app</strong>) — política aplicable al uso de la
+          plataforma, integraciones y datos de usuarios de Google Calendar.
+        </p>
         <p className="text-sm text-muted-foreground">Última actualización: {LAST_UPDATED}</p>
       </header>
 
@@ -241,7 +246,74 @@ export default function LegalPage() {
           </p>
         </LegalSection>
 
-        <LegalSection id="contacto-legal" title="L. Contacto legal">
+        <LegalSection id="google-calendar-privacidad" title="L. Google Calendar y datos de Google">
+          <p>
+            Esta sección describe cómo SWAT Voice IA accede, usa, almacena y comparte los datos de
+            Google cuando un negocio cliente conecta Google Calendar desde{' '}
+            <strong>Dashboard → Integrations</strong>. Cumple con los requisitos de divulgación de
+            la API de Google (Limited Use).
+          </p>
+          <h3 className="text-base font-semibold">Qué datos de Google accedemos</h3>
+          <LegalChecklist
+            items={[
+              'Lista de calendarios de la cuenta conectada (solo para elegir el calendario de destino al autorizar).',
+              'Creación y edición de eventos de calendario cuando un cliente telefónico solicita una visita o cita.',
+              'Metadatos del evento: título, descripción (motivo, teléfono), fecha/hora de inicio y fin, zona horaria.',
+            ]}
+          />
+          <h3 className="text-base font-semibold">Para qué los usamos</h3>
+          <p>
+            Exclusivamente para operar la función de <strong>agendamiento de citas</strong>: registrar
+            la solicitud en la plataforma y, si el negocio lo autorizó, crear un evento en su Google
+            Calendar. No usamos los datos de Google para publicidad, perfiles de terceros ni venta de
+            datos.
+          </p>
+          <h3 className="text-base font-semibold">Cómo los almacenamos</h3>
+          <LegalChecklist
+            items={[
+              'Tokens de acceso OAuth (refresh y access) cifrados en nuestro servidor (Supabase).',
+              'Identificador del calendario elegido, nombre y zona horaria de la conexión por organización.',
+              'Registros de citas (appointments) con fecha, cliente y estado de sincronización con Google.',
+            ]}
+          />
+          <h3 className="text-base font-semibold">Compartición con terceros</h3>
+          <p>
+            No vendemos ni alquilamos datos de Google. El acceso queda limitado al{' '}
+            <strong>tenant</strong> (organización) que conectó su cuenta. Proveedores de infraestructura
+            (hosting, base de datos) procesan datos solo para prestar el servicio, bajo contrato y
+            medidas de seguridad razonables.
+          </p>
+          <h3 className="text-base font-semibold">Retención y eliminación</h3>
+          <p>
+            La conexión permanece activa hasta que el usuario hace <strong>Disconnect</strong> en
+            Integrations o revoca el acceso en{' '}
+            <a
+              href="https://myaccount.google.com/permissions"
+              className="text-primary hover:underline"
+              target="_blank"
+              rel="noopener noreferrer"
+            >
+              la cuenta de Google
+            </a>
+            . Al desconectar, desactivamos la integración; los tokens dejan de usarse para nuevas
+            operaciones. Las citas ya registradas pueden conservarse según la configuración del
+            negocio cliente.
+          </p>
+          <h3 className="text-base font-semibold">Alcances OAuth solicitados</h3>
+          <LegalChecklist
+            items={[
+              'https://www.googleapis.com/auth/calendar.events — crear y editar eventos de cita.',
+              'https://www.googleapis.com/auth/calendar.readonly — leer lista de calendarios al conectar.',
+            ]}
+          />
+          <p className="text-sm text-muted-foreground">
+            Uso limitado: los datos de Google se usan solo para proporcionar las funciones de
+            calendario visibles para el usuario que autorizó la conexión, conforme a las políticas de
+            Google API Services User Data Policy.
+          </p>
+        </LegalSection>
+
+        <LegalSection id="contacto-legal" title="M. Contacto legal">
           <p>
             Para asuntos legales o regulatorios, contacte a:
             <br />

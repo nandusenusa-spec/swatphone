@@ -34,7 +34,7 @@ const resp = await fetch('https://api.vapi.ai/assistant/e9a5d0a4-44a5-4b7f-90df-
     },
     endCallFunctionEnabled: true,
     endCallMessage: 'Hasta luego, que tenga buen día.',
-    maxDurationSeconds: 180
+    maxDurationSeconds: 360
   })
 });
 

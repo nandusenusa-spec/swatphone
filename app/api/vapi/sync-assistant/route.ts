@@ -13,6 +13,10 @@ import {
   sanitizeFaqTextForSync,
 } from '@/lib/vapi/prompts'
 import {
+  buildVapiAssistantCallBehavior,
+  enhanceTranscriberForLowLatency,
+} from '@/lib/vapi/call-settings'
+import {
   extractVoiceFromVapiAssistantPayload,
   getTranscriberConfigForVapi,
   resolveOpenAiVoiceForSync,
@@ -1167,6 +1171,26 @@ export async function POST(request: NextRequest) {
       {
         type: 'function',
         function: {
+          name: 'mark_spam_call',
+          description:
+            'Marca la llamada como spam, robocall o bot y cierra. Usar ante mensaje grabado, menú automático, silencio sin humano tras dos intentos, o abuso evidente.',
+          parameters: {
+            type: 'object',
+            properties: {
+              phone: { type: 'string', description: 'Teléfono E.164; opcional si hay Caller ID' },
+              reason: { type: 'string', description: 'Motivo breve: robocall, silence, bot, etc.' },
+              spam_score: { type: 'number', description: 'Opcional 70-100' },
+            },
+            required: [] as string[],
+          },
+        },
+        server: {
+          url: voiceEventsToolServerUrl,
+        },
+      },
+      {
+        type: 'function',
+        function: {
           name: 'create_follow_up',
           description:
             'Crea tarea de seguimiento visible en /dashboard/follow-ups. Para wrap usá siempre title claro (ej. Llamar por cotización de wrap vehicular), category=wrap, priority=high, callback_required=true, due_at ISO mañana si no hay fecha, notes con nombre/teléfono/vehículo/resumen.',
@@ -1344,11 +1368,11 @@ export async function POST(request: NextRequest) {
       provider: voiceResolved.voiceProvider,
       voiceId: voiceResolved.voiceId,
     }
-    let transcriberPayload: Record<string, unknown> = {
+    let transcriberPayload: Record<string, unknown> = enhanceTranscriberForLowLatency({
       provider: transcribers.provider,
       model: transcribers.model,
       language: transcribers.language,
-    }
+    })
 
     const canPreserveVoice =
       !forceVoiceConfig &&
@@ -1396,6 +1420,7 @@ export async function POST(request: NextRequest) {
       transcriber: transcriberPayload,
       serverUrl: vapiEventsServerUrl,
       serverUrlSecret: process.env.VAPI_WEBHOOK_SECRET,
+      ...buildVapiAssistantCallBehavior(),
     }
 
     console.log('[vapi/sync-assistant] patch_payload_model_tool_preview', {

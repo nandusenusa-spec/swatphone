@@ -2,6 +2,10 @@ import { createServiceRoleClient } from '@/lib/supabase/service-role'
 import { getOrganizationRuntimeConfig } from '@/lib/vapi/runtime-config'
 import { executeToolHandler } from '@/lib/vapi/tool-handlers'
 import { persistCallArtifacts, persistSpamRejection } from '@/lib/vapi/persistence'
+import {
+  buildVapiAssistantCallBehavior,
+  enhanceTranscriberForLowLatency,
+} from '@/lib/vapi/call-settings'
 import { getTranscriberConfigForVapi, resolveOpenAiVoiceForOrganization } from '@/lib/vapi/voice-for-vapi'
 import {
   runCreateFollowUp,
@@ -894,11 +898,12 @@ export async function dispatchVapiEvent(input: {
         firstMessage,
         model,
         voice: { provider: voiceRes.voiceProvider, voiceId: voiceRes.voiceId },
-        transcriber: {
+        transcriber: enhanceTranscriberForLowLatency({
           provider: trCfg.provider,
           model: trCfg.model,
           language: trCfg.language,
-        },
+        }),
+        ...buildVapiAssistantCallBehavior(),
       },
     }
   }

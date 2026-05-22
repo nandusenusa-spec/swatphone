@@ -22,6 +22,10 @@ import {
   spokenJobLineFromStatusPayload,
 } from '@/lib/print-shop/service'
 import {
+  buildVapiAssistantCallBehavior,
+  enhanceTranscriberForLowLatency,
+} from '@/lib/vapi/call-settings'
+import {
   getTranscriberConfigForVapi,
   resolveOpenAiVoiceForOrganization,
   resolveOpenAiVoiceForSync,
@@ -240,10 +244,12 @@ CRÍTICO para save_lead_info:
       ],
     },
     voice: { provider: voiceRes.voiceProvider, voiceId: voiceRes.voiceId },
-    transcriber: { provider: trCfg.provider, model: trCfg.model, language: trCfg.language },
-    endCallFunctionEnabled: true,
-    endCallMessage: 'Hasta luego, que tenga buen día.',
-    maxDurationSeconds: 180,
+    transcriber: enhanceTranscriberForLowLatency({
+      provider: trCfg.provider,
+      model: trCfg.model,
+      language: trCfg.language,
+    }),
+    ...buildVapiAssistantCallBehavior(),
   }
 }
 

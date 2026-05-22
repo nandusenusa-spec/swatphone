@@ -11,6 +11,7 @@ import FinalCTA from '@/components/luma/FinalCTA';
 import { ComingSoon } from '@/components/luma/ComingSoon';
 import SoundWaveBackground from '@/components/luma/SoundWaveBackground';
 import { NoiseFilters, GuideLines } from '@/components/luma/primitives';
+import { SiteFooter } from '@/components/site-footer';
 
 export default function MarketingHomePage() {
   return (
@@ -30,6 +31,7 @@ export default function MarketingHomePage() {
       <Pricing />
       <ComingSoon />
       <FinalCTA />
+      <SiteFooter variant="dark" />
     </main>
   );
 }

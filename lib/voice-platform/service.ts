@@ -839,6 +839,9 @@ export async function runMarkSpamCall(input: {
   return {
     ok: true,
     ...out,
+    primary_message_for_caller: 'No podemos continuar esta llamada. Hasta luego.',
+    assistant_instruction:
+      'Di solo primary_message_for_caller y llamá endCall de inmediato. No hagas más preguntas.',
   }
 }
 
