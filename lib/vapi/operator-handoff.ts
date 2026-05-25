@@ -11,6 +11,7 @@ import {
   resolveTransferDialE164,
 } from '@/lib/vapi/transfer-dial'
 import { buildIntentCue, resolveTransferTarget } from '@/lib/vapi/transfer-destinations'
+import { useWarmTransferExperimental } from '@/lib/vapi/transfer-plan'
 
 export type OperatorHandoff = {
   customer_name: string | null
@@ -528,7 +529,10 @@ export async function buildDynamicWarmTransferDestination(input: {
     type: 'number',
     number: e164,
     numberE164CheckEnabled: true,
-    transferPlan: {
+  }
+
+  if (useWarmTransferExperimental()) {
+    destination.transferPlan = {
       mode: 'warm-transfer-experimental',
       transferAssistant: {
         firstMessage: handoff.first_message,
@@ -546,7 +550,9 @@ export async function buildDynamicWarmTransferDestination(input: {
           ],
         },
       },
-    },
+    }
+  } else {
+    destination.transferPlan = { mode: 'blind-transfer' }
   }
 
   const callerLanguage = (handoff.language || '').trim().toLowerCase()

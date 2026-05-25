@@ -997,14 +997,21 @@ export async function dispatchVapiEvent(input: {
       call_id: vapiCallId || null,
     })
 
-    const number =
-      runtime.transferPolicy.urgentTransferNumber ||
-      runtime.transferPolicy.ramonTransferNumber ||
-      runtime.transferPolicy.defaultTransferNumber ||
-      null
+    const { resolveTransferDialE164 } = await import('@/lib/vapi/transfer-dial')
+    const dial = await resolveTransferDialE164({
+      organizationId: input.organizationId,
+      runtime,
+      preferredE164:
+        runtime.transferPolicy.urgentTransferNumber ||
+        runtime.transferPolicy.ramonTransferNumber ||
+        runtime.transferPolicy.defaultTransferNumber ||
+        null,
+    })
+    const number = dial.e164
     console.log('[vapi/dispatcher] transfer-destination-request fallback number', {
       has_number: Boolean(number),
       final_number: number,
+      dial_source: dial.source,
       is_e164: /^\+[1-9]\d{7,14}$/.test(number || ''),
     })
     if (!number || !/^\+[1-9]\d{7,14}$/.test(number)) {
@@ -1021,14 +1028,17 @@ export async function dispatchVapiEvent(input: {
         },
       }
     }
-    return {
-      destination: {
-        type: 'number',
-        number,
-        numberE164CheckEnabled: true,
-        description: runtime.transferPolicy.callbackDefaultOwner || 'Ramon',
-      },
+    const { useWarmTransferExperimental } = await import('@/lib/vapi/transfer-plan')
+    const dest: Record<string, unknown> = {
+      type: 'number',
+      number,
+      numberE164CheckEnabled: true,
+      description: runtime.transferPolicy.callbackDefaultOwner || 'Ramon',
     }
+    if (!useWarmTransferExperimental()) {
+      dest.transferPlan = { mode: 'blind-transfer' }
+    }
+    return { destination: dest }
   }
 
   if (eventType === 'tool-calls') {

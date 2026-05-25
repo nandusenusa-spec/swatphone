@@ -1,7 +1,28 @@
 import { teamMembersToTransferDestinations } from '@/lib/dashboard/sync-team-transfer-routing'
 import { createServiceRoleClient } from '@/lib/supabase/service-role'
 import { buildSystemPrompt, sanitizeFaqTextForSync } from '@/lib/vapi/prompts'
-import { parseTransferDestinations, type TransferDestination } from '@/lib/vapi/transfer-destinations'
+import {
+  isPlausibleE164,
+  parseTransferDestinations,
+  type TransferDestination,
+} from '@/lib/vapi/transfer-destinations'
+import { normalizePhone } from '@/lib/phone'
+
+function mergeTransferDestinationLists(
+  fromRouting: TransferDestination[],
+  fromTeam: TransferDestination[],
+): TransferDestination[] {
+  const seen = new Set<string>()
+  const out: TransferDestination[] = []
+  for (const d of [...fromRouting, ...fromTeam]) {
+    const phone = normalizePhone(d.phoneE164)
+    if (!phone || !isPlausibleE164(phone)) continue
+    if (seen.has(phone)) continue
+    seen.add(phone)
+    out.push({ ...d, phoneE164: phone })
+  }
+  return out
+}
 
 /** Catálogo: 007 usa `is_active`; 008+ añade `active`. No filtrar por columna inexistente en PostgREST. */
 function organizationCatalogRowActive(r: Record<string, unknown>): boolean {
@@ -124,7 +145,7 @@ export async function getOrganizationRuntimeConfig(
     ...(r.department ? { department: r.department } : {}),
   }))
   const fromRouting = parseTransferDestinations(routingRow?.transfer_destinations)
-  const transferDestinations = fromTeam.length > 0 ? fromTeam : fromRouting
+  const transferDestinations = mergeTransferDestinationLists(fromRouting, fromTeam)
 
   const assistantCfgRow = activeAssistantCfg.data as { voice_id?: string | null; voice_provider?: string | null } | null
   console.info('[runtime-config]', {

@@ -307,6 +307,52 @@ export function resolveTransferTarget(
 
   const hadDisambiguation = Boolean(ext || nameBlob)
 
+  if (destinations.length > 1 && !hadDisambiguation) {
+    if (legacy) {
+      const owner = runtime.transferPolicy.callbackDefaultOwner || 'Operador'
+      const res = { phoneE164: legacy, label: owner, extension: null }
+      console.info('[vapi/transfer-routing]', {
+        input: null,
+        matchedName: owner,
+        matchedRole: null,
+        matchedDepartment: null,
+        transferExtension: null,
+        transferPhone: legacy,
+        found: true,
+        error: null,
+        path: 'legacy_multi_dest_default',
+      })
+      return res
+    }
+    const ownerName = (runtime.transferPolicy.callbackDefaultOwner || '').trim()
+    if (ownerName) {
+      const byOwner = matchDestinationByNameBlob(destinations, ownerName)
+      if (byOwner) {
+        const destMeta = destinations.find((d) => d.name === byOwner.label)
+        logRoute(byOwner, { path: 'default_owner_multi_dest' }, destMeta)
+        return byOwner
+      }
+    }
+    const first = destinations[0]
+    const res = {
+      phoneE164: first.phoneE164.trim(),
+      label: first.name,
+      extension: first.extension || null,
+    }
+    console.info('[vapi/transfer-routing]', {
+      input: null,
+      matchedName: first.name,
+      matchedRole: first.role ?? null,
+      matchedDepartment: first.department ?? null,
+      transferExtension: first.extension || null,
+      transferPhone: first.phoneE164,
+      found: true,
+      error: null,
+      path: 'first_destination_multi_default',
+    })
+    return res
+  }
+
   if (legacy && !hadDisambiguation) {
     const owner = runtime.transferPolicy.callbackDefaultOwner || 'Operador'
     const res = { phoneE164: legacy, label: owner, extension: null }
@@ -322,23 +368,6 @@ export function resolveTransferTarget(
       path: 'legacy_single_fallback',
     })
     return res
-  }
-
-  if (destinations.length > 1 && !legacy && !hadDisambiguation) {
-    console.warn('[vapi/transfer-destinations] resolveTransferTarget: needs_disambiguation', {
-      usable_count: destinations.length,
-    })
-    console.info('[vapi/transfer-routing]', {
-      input: null,
-      matchedName: null,
-      matchedRole: null,
-      matchedDepartment: dept || null,
-      transferExtension: null,
-      transferPhone: null,
-      found: false,
-      error: 'needs_disambiguation',
-    })
-    return null
   }
 
   console.warn('[vapi/transfer-destinations] resolveTransferTarget: unresolved', {

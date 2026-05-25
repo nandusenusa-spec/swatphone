@@ -1,4 +1,29 @@
 import type { VapiRuntimeConfig } from '@/lib/vapi/runtime-config'
+import { legacyPhone, usableDestinations } from '@/lib/vapi/transfer-destinations'
+import { useWarmTransferExperimental } from '@/lib/vapi/transfer-plan'
+
+function buildStaticTransferDestinations(runtime: VapiRuntimeConfig): Record<string, unknown>[] {
+  const list = usableDestinations(runtime.transferPolicy.transferDestinations || [])
+  const out: Record<string, unknown>[] = []
+  for (const d of list) {
+    out.push({
+      type: 'number',
+      number: d.phoneE164,
+      description: d.extension ? `${d.name} (ext ${d.extension})` : d.name,
+      transferPlan: { mode: 'blind-transfer' },
+    })
+  }
+  const legacy = legacyPhone(runtime)
+  if (legacy && !out.some((x) => (x as { number?: string }).number === legacy)) {
+    out.push({
+      type: 'number',
+      number: legacy,
+      description: runtime.transferPolicy.callbackDefaultOwner || 'Operador',
+      transferPlan: { mode: 'blind-transfer' },
+    })
+  }
+  return out
+}
 
 /**
  * Server tool: persists operator handoff context before transferCall.
@@ -61,15 +86,9 @@ export function buildWarmTransferCallTool(
 ): Record<string, unknown> | null {
   if (!runtime.transferPolicy.allowLiveTransfer) return null
 
-  const hasListedDestinations = (runtime.transferPolicy.transferDestinations?.length ?? 0) > 0
-  if (
-    !hasListedDestinations &&
-    !runtime.transferPolicy.ramonTransferNumber &&
-    !runtime.transferPolicy.defaultTransferNumber &&
-    !runtime.transferPolicy.urgentTransferNumber
-  ) {
-    return null
-  }
+  const useWarm = useWarmTransferExperimental()
+  const staticDestinations = buildStaticTransferDestinations(runtime)
+  if (staticDestinations.length === 0) return null
 
   const owner = runtime.transferPolicy.callbackDefaultOwner || 'Ramon'
   const holdUrl = options?.holdAudioUrl?.trim()
@@ -78,9 +97,11 @@ export function buildWarmTransferCallTool(
     type: 'transferCall',
     function: {
       name: 'transfer_to_ramon',
-      description: `Live transfer to ${owner}. You must call prepare_warm_transfer first with the caller context and destination. Keep the caller on the line while the warm transfer assistant speaks with ${owner}.`,
+      description: useWarm
+        ? `Live transfer to ${owner}. Call prepare_warm_transfer first with transfer_department or transfer_person, then call this tool immediately.`
+        : `Transfer the caller to ${owner} or the requested department. Call prepare_warm_transfer first with transfer_department (e.g. design, Ramon, Administration), then call this tool immediately.`,
     },
-    destinations: [],
+    destinations: useWarm ? [] : staticDestinations,
     messages: [
       {
         type: 'request-start',

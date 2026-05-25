@@ -346,6 +346,19 @@ function inferTransferDestinationFromText(text: string): {
     .trim()
   if (!normalized) return null
 
+  if (/\bramon\b|\bram[oó]n\b/.test(normalized)) {
+    return { department: 'Ramon', extension: '100', language: 'es', reason: 'ramon_keyword' }
+  }
+  if (/administraci[oó]n/.test(normalized)) {
+    return { department: 'Administración', extension: '91', language: 'es', reason: 'admin_keyword' }
+  }
+  if (/\bcnc\b/.test(normalized) || /\bleandro\b/.test(normalized)) {
+    return { department: 'CNC', extension: '107', language: 'es', reason: 'cnc_keyword' }
+  }
+  if (/\bfernando\b/.test(normalized)) {
+    return { department: 'Fernando', extension: '105', language: 'es', reason: 'fernando_keyword' }
+  }
+
   const designHit =
     /\bdiseno\b/.test(normalized) ||
     /\bdiseno grafico\b/.test(normalized) ||
@@ -355,20 +368,29 @@ function inferTransferDestinationFromText(text: string): {
     /\blogo(s)?\b/.test(normalized) ||
     /\bbranding\b/.test(normalized)
 
-  if (!designHit) return null
-
-  const language: 'en' | 'es' =
-    /\bgraphic design\b|\bdesign\b|\blogo(s)?\b|\bbranding\b/.test(normalized) &&
-    !/\bdiseno\b|\bdisenador\b/.test(normalized)
-      ? 'en'
-      : 'es'
-
-  return {
-    department: language === 'en' ? 'graphic design' : 'diseño gráfico',
-    extension: '90',
-    language,
-    reason: 'design_keyword_context',
+  if (designHit) {
+    const language: 'en' | 'es' =
+      /\bgraphic design\b|\bdesign\b|\blogo(s)?\b|\bbranding\b/.test(normalized) &&
+      !/\bdiseno\b|\bdisenador\b/.test(normalized)
+        ? 'en'
+        : 'es'
+    return {
+      department: language === 'en' ? 'graphic design' : 'diseño gráfico',
+      extension: '90',
+      language,
+      reason: 'design_keyword_context',
+    }
   }
+
+  if (
+    /\btransfer|hablar con|persona|operador|representante|humano|human|agent|operator|recepcion|reception\b/.test(
+      normalized,
+    )
+  ) {
+    return { department: 'Ramon', extension: '100', language: 'es', reason: 'generic_transfer_request' }
+  }
+
+  return null
 }
 
 function contextTextForTool(context: ToolContext, ...extra: string[]): string {
