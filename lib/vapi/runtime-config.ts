@@ -1,5 +1,6 @@
 import { teamMembersToTransferDestinations } from '@/lib/dashboard/sync-team-transfer-routing'
 import { createServiceRoleClient } from '@/lib/supabase/service-role'
+import { appendClientSpeechNotesToPrompt } from '@/lib/vapi/client-speech-prompt'
 import { buildSystemPrompt, sanitizeFaqTextForSync } from '@/lib/vapi/prompts'
 import {
   isPlausibleE164,
@@ -195,6 +196,11 @@ export async function getOrganizationRuntimeConfig(
       prompt += `- ${q}: ${a}\n`
     }
   }
+
+  prompt = appendClientSpeechNotesToPrompt(
+    prompt,
+    aiRow?.client_speech_notes as string | null | undefined,
+  )
 
   const displayName =
     (orgRow.data?.name as string | undefined)?.trim() || 'nosotros'

@@ -3,6 +3,7 @@ import { DEMO_ORGANIZATION_ID, isDemoBypassAuth } from '@/lib/auth/demo-bypass'
 import { createClient } from '@/lib/supabase/server'
 import { createServiceRoleClient } from '@/lib/supabase/service-role'
 import { getOrganizationRuntimeConfig } from '@/lib/vapi/runtime-config'
+import { appendClientSpeechNotesToPrompt } from '@/lib/vapi/client-speech-prompt'
 import {
   auditSystemPromptForSync,
   buildSystemPrompt,
@@ -930,6 +931,19 @@ export async function POST(request: NextRequest) {
       })
     }
 
+    const { data: orgAiSpeechRow } = await serviceRole
+      .from('organization_ai_config')
+      .select('welcome_message, client_speech_notes')
+      .eq('organization_id', organizationId)
+      .maybeSingle()
+
+    systemPrompt = appendClientSpeechNotesToPrompt(
+      systemPrompt,
+      typeof orgAiSpeechRow?.client_speech_notes === 'string'
+        ? orgAiSpeechRow.client_speech_notes
+        : null,
+    )
+
     logLongString('[vapi/sync-assistant] system_prompt_final_full', systemPrompt)
 
     const promptAuditPatchPayload = auditSystemPromptForSync(systemPrompt)
@@ -1316,7 +1330,7 @@ export async function POST(request: NextRequest) {
 
     const { data: orgAiVoiceRow, error: orgAiVoiceErr } = await serviceRole
       .from('organization_ai_config')
-      .select('voice_id')
+      .select('voice_id, welcome_message')
       .eq('organization_id', organizationId)
       .maybeSingle()
     if (orgAiVoiceErr && orgAiVoiceErr.code !== 'PGRST116' && orgAiVoiceErr.code !== 'PGRST205') {
@@ -1346,6 +1360,7 @@ export async function POST(request: NextRequest) {
     })
 
     const firstMessageRaw =
+      (typeof orgAiVoiceRow?.welcome_message === 'string' && orgAiVoiceRow.welcome_message.trim()) ||
       config.first_message ||
       (config as { greeting_message?: string | null }).greeting_message ||
       ''

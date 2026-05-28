@@ -15,6 +15,7 @@ import {
   CalendarClock,
   ListTodo,
   ClipboardList,
+  Mic,
 } from 'lucide-react'
 import { LogoMark } from '@/components/luma/primitives'
 import { cn } from '@/lib/utils'
@@ -29,6 +30,7 @@ export const dashboardPrimaryNav: { name: string; href: string; icon: LucideIcon
   { name: 'Productos', href: '/dashboard/products', icon: Package },
   { name: 'Equipo', href: '/dashboard/team', icon: UserCircle },
   { name: 'FAQs', href: '/dashboard/faqs', icon: HelpCircle },
+  { name: 'Voz del bot', href: '/dashboard/voz', icon: Mic },
   { name: 'Integrations', href: '/dashboard/integrations', icon: Plug },
 ]
 

@@ -883,6 +883,20 @@ export async function POST(request: NextRequest) {
           }
         }
 
+        if (typeof payload.first_message === 'string' && payload.first_message.trim()) {
+          const { error: welcomeErr } = await supabase.from('organization_ai_config').upsert(
+            {
+              organization_id: orgId,
+              welcome_message: payload.first_message.trim(),
+              updated_at: new Date().toISOString(),
+            },
+            { onConflict: 'organization_id' },
+          )
+          if (welcomeErr && welcomeErr.code !== 'PGRST205') {
+            console.warn('[update_assistant_config] welcome_message sync skipped:', welcomeErr.message)
+          }
+        }
+
         return NextResponse.json({ success: true })
       }
 
