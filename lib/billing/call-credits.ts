@@ -273,6 +273,7 @@ export async function debitCallCreditForEndedCall(input: {
     const cooldownOk = !lastAlert || Date.now() - lastAlert >= LOW_ALERT_COOLDOWN_MS
     if (cooldownOk) {
       const sent = await notifyLowCallBalanceTelegram({
+        organizationId: input.organizationId,
         organizationName: input.organizationDisplayName || 'Cliente',
         balanceUsd: balanceAfter,
         thresholdUsd: threshold,

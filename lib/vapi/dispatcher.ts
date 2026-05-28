@@ -573,6 +573,7 @@ async function autoSaveQuoteLeadFromTranscript(input: {
   if (out.ok) {
     const runtime = await getOrganizationRuntimeConfig(input.organizationId)
     telegramSent = await notifySavedLeadTelegram({
+      organizationId: input.organizationId,
       organizationName: runtime.organizationDisplayName,
       customerName: out.customer?.name ?? fullName,
       phone: out.customer?.phone ?? phone,
@@ -691,6 +692,7 @@ async function autoSaveWrapQuoteLeadFromTranscript(input: {
   if (out.ok) {
     const runtime = await getOrganizationRuntimeConfig(input.organizationId)
     telegramSent = await notifySavedLeadTelegram({
+      organizationId: input.organizationId,
       organizationName: runtime.organizationDisplayName,
       customerName: out.customer?.name ?? fullName,
       phone: out.customer?.phone ?? phone,

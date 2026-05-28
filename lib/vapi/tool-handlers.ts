@@ -167,16 +167,19 @@ async function saveAndNotifyTransferRequestLead(input: {
   }
 
   try {
-    const tgOk = await notifyLeadTelegram({
-      temperature: 'lukewarm',
-      customerName: savedCustomerName || customerName || 'Transfer request',
-      phone: savedCustomerPhone || phone,
-      need: requestSummary,
-      priceRequested: false,
-      category: 'transfer_request',
-      summary: requestSummary,
-      nextAction: `Transfer to ${requestedDepartment}`,
-    })
+    const tgOk = await notifyLeadTelegram(
+      {
+        temperature: 'lukewarm',
+        customerName: savedCustomerName || customerName || 'Transfer request',
+        phone: savedCustomerPhone || phone,
+        need: requestSummary,
+        priceRequested: false,
+        category: 'transfer_request',
+        summary: requestSummary,
+        nextAction: `Transfer to ${requestedDepartment}`,
+      },
+      input.organizationId,
+    )
     console.info('[vapi/transfer-request-lead] telegram', {
       organization_id: input.organizationId,
       call_id: input.vapiCallId || null,
@@ -1198,6 +1201,7 @@ export async function executeToolHandler(
           } else {
             const runtime = await getOrganizationRuntimeConfig(context.organizationId)
             tgOk = await notifySavedLeadTelegram({
+              organizationId: context.organizationId,
               organizationName: runtime.organizationDisplayName,
               customerName: displayCustomerName,
               phone: out.customer?.phone ?? phone,

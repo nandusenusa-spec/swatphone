@@ -274,6 +274,7 @@ export async function runCreateAppointment(input: {
 
   const runtime = await getOrganizationRuntimeConfig(input.organizationId)
   const telegramSent = await notifyAppointmentTelegram({
+    organizationId: input.organizationId,
     customerName: customer.name || input.customerName || 'Cliente',
     phone: input.phone,
     appointmentAt: input.appointmentAt,

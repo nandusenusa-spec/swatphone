@@ -116,6 +116,9 @@ export default function AdminClientDetailPage() {
   const [vapiKeyCopied, setVapiKeyCopied] = useState(false)
   const [vapiAssistantId, setVapiAssistantId] = useState('')
   const [vapiPhoneNumber, setVapiPhoneNumber] = useState('')
+  const [telegramChatIds, setTelegramChatIds] = useState('')
+  const [telegramBotToken, setTelegramBotToken] = useState('')
+  const [showTelegramBotToken, setShowTelegramBotToken] = useState(false)
   const [systemPrompt, setSystemPrompt] = useState('')
   const [firstMessage, setFirstMessage] = useState('')
   const [allowLiveTransfer, setAllowLiveTransfer] = useState(true)
@@ -221,6 +224,8 @@ export default function AdminClientDetailPage() {
         setVapiApiKey(org.vapi_api_key || '')
         setVapiAssistantId(org.vapi_assistant_id || '')
         setVapiPhoneNumber(org.vapi_phone_number || '')
+        setTelegramChatIds(org.telegram_chat_ids || '')
+        setTelegramBotToken(org.telegram_bot_token || '')
       }
 
       // Fetch products
@@ -539,6 +544,8 @@ export default function AdminClientDetailPage() {
             vapi_api_key: vapiApiKey,
             vapi_assistant_id: vapiAssistantId,
             vapi_phone_number: vapiPhoneNumber,
+            telegram_chat_ids: telegramChatIds.trim() || null,
+            telegram_bot_token: telegramBotToken.trim() || null,
           },
         }),
       })
@@ -1477,6 +1484,58 @@ export default function AdminClientDetailPage() {
                   onChange={(e) => setVapiPhoneNumber(e.target.value)}
                   placeholder="+1 813 xxx xxxx"
                 />
+              </div>
+
+              <div className="space-y-3 rounded-lg border border-border bg-muted/20 p-4">
+                <div>
+                  <Label>Telegram — chat IDs de este cliente</Label>
+                  <p className="mt-1 text-xs text-muted-foreground">
+                    Si completás esto, los leads y citas de <strong>esta</strong> empresa van solo a estos chats.
+                    No se mezclan con el Telegram global de SWATWORKS. Dejá vacío en SWATWORKS para seguir usando{' '}
+                    <code className="text-xs">TELEGRAM_CHAT_ID</code> de Vercel.
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="telegram-chat-ids">Chat ID(s)</Label>
+                  <Input
+                    id="telegram-chat-ids"
+                    value={telegramChatIds}
+                    onChange={(e) => setTelegramChatIds(e.target.value)}
+                    placeholder="7474582841 o varios separados por coma"
+                    className="font-mono text-sm"
+                  />
+                  <p className="text-xs text-muted-foreground">
+                    El dueño abre el bot en Telegram, envía /start y obtené el chat_id con{' '}
+                    <code className="text-xs">GET /api/telegram/discover</code> (admin secret).
+                  </p>
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="telegram-bot-token">Bot token (opcional)</Label>
+                  <div className="relative">
+                    <Input
+                      id="telegram-bot-token"
+                      type={showTelegramBotToken ? 'text' : 'password'}
+                      value={telegramBotToken}
+                      onChange={(e) => setTelegramBotToken(e.target.value)}
+                      placeholder="Vacío = mismo bot que TELEGRAM_BOT_TOKEN en Vercel"
+                      className="pr-10 font-mono text-sm"
+                      autoComplete="off"
+                    />
+                    <Button
+                      type="button"
+                      variant="ghost"
+                      size="sm"
+                      className="absolute right-0 top-0 h-full px-3 hover:bg-transparent"
+                      onClick={() => setShowTelegramBotToken((v) => !v)}
+                    >
+                      {showTelegramBotToken ? (
+                        <EyeOff className="h-4 w-4 text-muted-foreground" />
+                      ) : (
+                        <Eye className="h-4 w-4 text-muted-foreground" />
+                      )}
+                    </Button>
+                  </div>
+                </div>
               </div>
 
               <div className="space-y-2">

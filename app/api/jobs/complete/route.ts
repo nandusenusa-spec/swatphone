@@ -28,8 +28,11 @@ export async function POST(request: NextRequest) {
     jobTitle:wo.title||'trabajo', jobNumber:wo.job_number||null
   })
   await notifyJobCompleteTelegram({
-    customerName:customer.name||'Cliente', phone,
-    jobTitle:wo.title||'trabajo', organizationName:org?.name||'SWATWORKS'
+    organizationId: wo.organization_id,
+    customerName: customer.name || 'Cliente',
+    phone,
+    jobTitle: wo.title || 'trabajo',
+    organizationName: org?.name || 'SWATWORKS',
   })
   return NextResponse.json({ok:true, sms_sent:smsResult.ok, sms_error:smsResult.error||null})
 }

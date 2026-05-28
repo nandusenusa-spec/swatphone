@@ -1,4 +1,4 @@
-import { getTelegramChatIds } from '@/lib/notifications/telegram-chat-ids'
+import { resolveTelegramDelivery } from '@/lib/notifications/telegram-org-config'
 
 export type LeadTemperature = 'hot' | 'lukewarm'
 export type TelegramLeadPayload = {
@@ -36,10 +36,13 @@ function dashboardCallsUrl(): string | null {
   return `${base.replace(/\/$/, '')}/dashboard/calls`
 }
 
-async function postTelegram(body: Record<string, unknown>): Promise<{ ok: boolean; status: number; detail: string }> {
-  const token = process.env.TELEGRAM_BOT_TOKEN?.trim()
+async function postTelegram(
+  body: Record<string, unknown>,
+  botToken: string | null,
+): Promise<{ ok: boolean; status: number; detail: string }> {
+  const token = botToken?.trim()
   if (!token) {
-    console.warn('[telegram] TELEGRAM_BOT_TOKEN no configurado')
+    console.warn('[telegram] bot token no configurado')
     return { ok: false, status: 0, detail: 'missing_token' }
   }
   try {
@@ -66,16 +69,17 @@ async function postTelegram(body: Record<string, unknown>): Promise<{ ok: boolea
 async function sendMsgToChat(
   chatId: string,
   text: string,
+  botToken: string | null,
   options?: { replyMarkup?: Record<string, unknown> },
 ): Promise<boolean> {
   const body: Record<string, unknown> = { chat_id: chatId, text, parse_mode: 'MarkdownV2' }
   if (options?.replyMarkup) body.reply_markup = options.replyMarkup
-  const first = await postTelegram(body)
+  const first = await postTelegram(body, botToken)
   if (first.ok) return true
 
   const plainBody: Record<string, unknown> = { chat_id: chatId, text: text.replace(/\\/g, '') }
   if (options?.replyMarkup) plainBody.reply_markup = options.replyMarkup
-  const second = await postTelegram(plainBody)
+  const second = await postTelegram(plainBody, botToken)
   if (second.ok) {
     console.info('[telegram] sent_plain_fallback_after_markdown_error', { chat_id: chatId })
   } else {
@@ -88,23 +92,36 @@ async function sendMsgToChat(
   return second.ok
 }
 
-/** Envía el mismo mensaje a todos los chat IDs configurados en Vercel. */
 async function sendMsg(
   text: string,
+  organizationId?: string | null,
   options?: { replyMarkup?: Record<string, unknown> },
 ): Promise<boolean> {
-  const chatIds = getTelegramChatIds()
-  if (chatIds.length === 0) {
-    console.warn('[telegram] TELEGRAM_CHAT_ID / TELEGRAM_EXTRA_CHAT_IDS no configurados')
+  const delivery = await resolveTelegramDelivery(organizationId)
+  if (delivery.chatIds.length === 0) {
+    console.warn('[telegram] no chat ids', {
+      organization_id: organizationId || null,
+      source: delivery.source,
+    })
     return false
   }
-  const results = await Promise.all(chatIds.map((id) => sendMsgToChat(id, text, options)))
+
+  const results = await Promise.all(
+    delivery.chatIds.map((id) => sendMsgToChat(id, text, delivery.botToken, options)),
+  )
   const okCount = results.filter(Boolean).length
-  if (okCount < chatIds.length) {
+  if (okCount < delivery.chatIds.length) {
     console.warn('[telegram] partial_delivery', {
       ok: okCount,
-      total: chatIds.length,
-      chat_ids: chatIds,
+      total: delivery.chatIds.length,
+      source: delivery.source,
+      organization_id: organizationId || null,
+    })
+  } else {
+    console.info('[telegram] delivered', {
+      source: delivery.source,
+      organization_id: organizationId || null,
+      chats: delivery.chatIds.length,
     })
   }
   return okCount > 0
@@ -143,8 +160,12 @@ function telegramCallerDisplayName(payload: TelegramLeadPayload): string {
   return fullName
 }
 
-export async function notifyLeadTelegram(payload: TelegramLeadPayload): Promise<boolean> {
-  if (getTelegramChatIds().length === 0) {
+export async function notifyLeadTelegram(
+  payload: TelegramLeadPayload,
+  organizationId?: string | null,
+): Promise<boolean> {
+  const delivery = await resolveTelegramDelivery(organizationId)
+  if (delivery.chatIds.length === 0) {
     console.warn('[telegram] TELEGRAM_CHAT_ID no configurado')
     return false
   }
@@ -194,11 +215,11 @@ export async function notifyLeadTelegram(payload: TelegramLeadPayload): Promise<
     ? { inline_keyboard: [[{ text: 'Abrir panel de llamadas', url: panelUrl }]] }
     : undefined
 
-  return sendMsg(lines.join('\n'), replyMarkup ? { replyMarkup } : undefined)
+  return sendMsg(lines.join('\n'), organizationId, replyMarkup ? { replyMarkup } : undefined)
 }
 
-/** Envía Telegram tras guardar lead (misma lógica que save_lead_info). */
 export async function notifySavedLeadTelegram(input: {
+  organizationId?: string | null
   organizationName?: string | null
   customerName: string
   phone: string
@@ -220,29 +241,32 @@ export async function notifySavedLeadTelegram(input: {
     priceRequested: input.priceRequested,
     dateNeeded: input.dateNeeded,
   })
-  return notifyLeadTelegram({
-    temperature,
-    customerName: input.customerName,
-    phone: input.phone,
-    email: input.email,
-    company: input.company,
-    need: input.need,
-    priceRequested: input.priceRequested,
-    dateNeeded: input.dateNeeded,
-    category: input.category,
-    summary: input.summary,
-    nextAction: input.nextAction,
-    organizationName: input.organizationName || undefined,
-  })
+  return notifyLeadTelegram(
+    {
+      temperature,
+      customerName: input.customerName,
+      phone: input.phone,
+      email: input.email,
+      company: input.company,
+      need: input.need,
+      priceRequested: input.priceRequested,
+      dateNeeded: input.dateNeeded,
+      category: input.category,
+      summary: input.summary,
+      nextAction: input.nextAction,
+      organizationName: input.organizationName || undefined,
+    },
+    input.organizationId,
+  )
 }
 
 export async function notifyJobCompleteTelegram(params: {
+  organizationId?: string | null
   customerName: string
   phone: string
   jobTitle: string
   organizationName?: string
 }): Promise<boolean> {
-  if (getTelegramChatIds().length === 0) return false
   const org = esc(params.organizationName || 'SWATWORKS')
   const text = [
     '✅ *TRABAJO LISTO — ' + org + '*',
@@ -254,10 +278,11 @@ export async function notifyJobCompleteTelegram(params: {
     '_SMS enviado al cliente_',
     '⏰ _' + esc(nowStr()) + '_',
   ].join('\n')
-  return sendMsg(text)
+  return sendMsg(text, params.organizationId)
 }
 
 export async function notifyAppointmentTelegram(params: {
+  organizationId?: string | null
   customerName: string
   phone: string
   appointmentAt: string
@@ -266,7 +291,6 @@ export async function notifyAppointmentTelegram(params: {
   googleEventId?: string | null
   organizationName?: string | null
 }): Promise<boolean> {
-  if (getTelegramChatIds().length === 0) return false
   const org = esc(params.organizationName || 'SWATWORKS')
   const lines = [
     '*CITA CREADA - ' + org + '*',
@@ -279,16 +303,16 @@ export async function notifyAppointmentTelegram(params: {
   lines.push('*Calendar:* ' + esc(params.calendarStatus))
   if (params.googleEventId) lines.push('*Google event:* ' + esc(params.googleEventId))
   lines.push('', '_' + esc(nowStr()) + '_')
-  return sendMsg(lines.join('\n'))
+  return sendMsg(lines.join('\n'), params.organizationId)
 }
 
 export async function notifyLowCallBalanceTelegram(params: {
+  organizationId?: string | null
   organizationName: string
   balanceUsd: number
   thresholdUsd: number
   lastChargeUsd?: number
 }): Promise<boolean> {
-  if (getTelegramChatIds().length === 0) return false
   const org = esc(params.organizationName || 'Cliente')
   const bal = esc(`$${params.balanceUsd.toFixed(2)}`)
   const thr = esc(`$${params.thresholdUsd.toFixed(2)}`)
@@ -302,5 +326,5 @@ export async function notifyLowCallBalanceTelegram(params: {
     lines.push('📞 *Última llamada:* ' + esc(`$${params.lastChargeUsd.toFixed(2)}`))
   }
   lines.push('', 'Recargá saldo en admin para que sigan entrando llamadas.', '⏰ _' + esc(nowStr()) + '_')
-  return sendMsg(lines.join('\n'))
+  return sendMsg(lines.join('\n'), params.organizationId)
 }
