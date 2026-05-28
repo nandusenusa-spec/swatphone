@@ -1,3 +1,9 @@
 {
-  "installCommand": "npm install"
+  "installCommand": "npm install",
+  "crons": [
+    {
+      "path": "/api/cron/daily-summary?skip_quiet=1",
+      "schedule": "0 3 * * *"
+    }
+  ]
 }

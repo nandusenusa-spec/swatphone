@@ -306,6 +306,23 @@ export async function notifyAppointmentTelegram(params: {
   return sendMsg(lines.join('\n'), params.organizationId)
 }
 
+export async function notifyDailyCallSummaryTelegram(params: {
+  organizationId: string
+  text: string
+  dateKey: string
+}): Promise<boolean> {
+  const panelUrl =
+    process.env.NEXT_PUBLIC_APP_URL?.trim() ||
+    (process.env.VERCEL_URL ? `https://${process.env.VERCEL_URL.trim()}` : '')
+  const resumenUrl = panelUrl
+    ? `${panelUrl.replace(/\/$/, '')}/dashboard/resumen?date=${encodeURIComponent(params.dateKey)}`
+    : null
+  const replyMarkup = resumenUrl
+    ? { inline_keyboard: [[{ text: 'Abrir resumen del día', url: resumenUrl }]] }
+    : undefined
+  return sendMsg(params.text, params.organizationId, replyMarkup ? { replyMarkup } : undefined)
+}
+
 export async function notifyLowCallBalanceTelegram(params: {
   organizationId?: string | null
   organizationName: string

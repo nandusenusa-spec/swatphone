@@ -14,6 +14,7 @@ import {
   HelpCircle,
   CalendarClock,
   ListTodo,
+  ClipboardList,
 } from 'lucide-react'
 import { LogoMark } from '@/components/luma/primitives'
 import { cn } from '@/lib/utils'
@@ -21,6 +22,7 @@ import { cn } from '@/lib/utils'
 export const dashboardPrimaryNav: { name: string; href: string; icon: LucideIcon }[] = [
   { name: 'Dashboard', href: '/dashboard', icon: LayoutDashboard },
   { name: 'Llamadas', href: '/dashboard/calls', icon: Phone },
+  { name: 'Resumen del día', href: '/dashboard/resumen', icon: ClipboardList },
   { name: 'Leads', href: '/dashboard/leads', icon: Users },
   { name: 'Follow-ups', href: '/dashboard/follow-ups', icon: ListTodo },
   { name: 'Citas', href: '/dashboard/appointments', icon: CalendarClock },
