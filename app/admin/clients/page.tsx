@@ -5,6 +5,13 @@ import Link from 'next/link'
 import { Button } from '@/components/ui/button'
 import { Input } from '@/components/ui/input'
 import { Label } from '@/components/ui/label'
+import {
+  Select,
+  SelectContent,
+  SelectItem,
+  SelectTrigger,
+  SelectValue,
+} from '@/components/ui/select'
 import { Card, CardContent, CardDescription, CardHeader, CardTitle } from '@/components/ui/card'
 import { Alert, AlertDescription, AlertTitle } from '@/components/ui/alert'
 import {
@@ -50,6 +57,8 @@ export default function AdminClientsPage() {
   const [newOwnerPassword, setNewOwnerPassword] = useState('')
   const [newAssistantId, setNewAssistantId] = useState('')
   const [newTransferNumber, setNewTransferNumber] = useState('')
+  const [newIndustryKey, setNewIndustryKey] = useState('general')
+  const [crmTemplates, setCrmTemplates] = useState<{ industry_key: string; name: string }[]>([])
   const [fieldErrors, setFieldErrors] = useState<Record<string, string>>({})
   const [formError, setFormError] = useState('')
   const [formErrorCode, setFormErrorCode] = useState<string | undefined>(undefined)
@@ -97,7 +106,29 @@ export default function AdminClientsPage() {
       setLoading(false)
     }
 
+    const fetchTemplates = async () => {
+      try {
+        const res = await fetch('/api/admin/data?type=crm_templates', {
+          cache: 'no-store',
+          credentials: 'include',
+          headers: getAdminAuthHeaders(),
+        })
+        const json = await res.json()
+        if (res.ok && Array.isArray(json.data)) {
+          setCrmTemplates(
+            json.data.map((t: { industry_key: string; name: string }) => ({
+              industry_key: t.industry_key,
+              name: t.name,
+            })),
+          )
+        }
+      } catch {
+        /* optional */
+      }
+    }
+
     fetchClients()
+    void fetchTemplates()
   }, [])
 
   function clearFieldError(key: string) {
@@ -181,6 +212,7 @@ export default function AdminClientsPage() {
             owner_password: newOwnerPassword,
             vapi_assistant_id: newAssistantId.trim() || null,
             ramon_transfer_number: newTransferNumber.trim() || null,
+            industry_key: newIndustryKey,
           },
         }),
       })
@@ -264,7 +296,8 @@ export default function AdminClientsPage() {
               <div>
                 <CardTitle>Nuevo cliente</CardTitle>
                 <CardDescription>
-                  Creá la empresa, el usuario owner y (opcional) el Assistant ID y el teléfono de transferencia.
+                  Formulario único para cada cliente nuevo: empresa, rubro CRM, acceso al panel y (opcional)
+                  Vapi. Copiá las credenciales al final y listo.
                 </CardDescription>
               </div>
             </div>
@@ -375,6 +408,33 @@ export default function AdminClientsPage() {
                   El cliente debería cambiarla al entrar al CRM.
                 </p>
               )}
+            </div>
+            <div className="space-y-2">
+              <Label>Rubro / plantilla CRM</Label>
+              <Select value={newIndustryKey} onValueChange={setNewIndustryKey}>
+                <SelectTrigger id="industry-key">
+                  <SelectValue placeholder="Seleccionar rubro" />
+                </SelectTrigger>
+                <SelectContent>
+                  {crmTemplates.length > 0 ? (
+                    crmTemplates.map((t) => (
+                      <SelectItem key={t.industry_key} value={t.industry_key}>
+                        {t.name}
+                      </SelectItem>
+                    ))
+                  ) : (
+                    <>
+                      <SelectItem value="general">General</SelectItem>
+                      <SelectItem value="venue">Venue / salón de eventos</SelectItem>
+                      <SelectItem value="print_shop">Imprenta</SelectItem>
+                      <SelectItem value="restaurant">Restaurante</SelectItem>
+                    </>
+                  )}
+                </SelectContent>
+              </Select>
+              <p className="text-xs text-muted-foreground">
+                Para venues elegí &quot;Venue / salón de eventos&quot;. El cliente puede cambiarlo después en su panel.
+              </p>
             </div>
             <div className="space-y-2">
               <Label htmlFor="assistant-id">Assistant ID (opcional)</Label>

@@ -76,9 +76,12 @@ export default async function SettingsPage() {
             </CardTitle>
             <CardDescription>Plantilla, campos y contexto del asistente</CardDescription>
           </CardHeader>
-          <CardContent>
+          <CardContent className="flex flex-wrap gap-2">
             <Button asChild variant="outline">
               <Link href="/dashboard/settings/crm">Configurar industria</Link>
+            </Button>
+            <Button asChild variant="ghost">
+              <Link href="/dashboard/bienvenida">Guía de inicio</Link>
             </Button>
           </CardContent>
         </Card>

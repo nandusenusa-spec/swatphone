@@ -5,6 +5,7 @@ import {
 import { getLumaPlatformOrganizationId } from '@/lib/admin/luma-platform-org'
 import { createServiceRoleClient } from '@/lib/supabase/service-role'
 import { syncTeamMembersFromTransferDestinations } from '@/lib/dashboard/sync-team-transfer-routing'
+import { listActiveCrmTemplates, upsertBusinessProfile } from '@/lib/crm/industry-templates'
 import { NextRequest, NextResponse } from 'next/server'
 import { normalizePhone } from '@/lib/phone'
 import { isValidJobStatus } from '@/lib/print-shop/service'
@@ -377,6 +378,11 @@ export async function GET(request: NextRequest) {
         })
       }
 
+      case 'crm_templates': {
+        const templates = await listActiveCrmTemplates()
+        return NextResponse.json({ data: templates })
+      }
+
       case 'organization':
         if (!id) return NextResponse.json({ error: 'ID required' }, { status: 400 })
         
@@ -387,7 +393,9 @@ export async function GET(request: NextRequest) {
           .single()
         
         if (orgError) throw orgError
-        return NextResponse.json({ data: org })
+        const { getOrganizationCallCreditSummary } = await import('@/lib/billing/call-credits')
+        const callCredit = await getOrganizationCallCreditSummary(id)
+        return NextResponse.json({ data: org, call_credit: callCredit })
 
       case 'products':
         if (!id) return NextResponse.json({ error: 'Organization ID required' }, { status: 400 })
@@ -774,6 +782,30 @@ export async function POST(request: NextRequest) {
         if (updateOrgError) throw updateOrgError
         return NextResponse.json({ success: true })
 
+      case 'set_call_credit_balance': {
+        const orgId = id as string
+        const balanceUsd = Number((data as Record<string, unknown>)?.balance_usd)
+        const thresholdRaw = (data as Record<string, unknown>)?.low_balance_threshold_usd
+        const thresholdUsd =
+          thresholdRaw === undefined || thresholdRaw === null ? undefined : Number(thresholdRaw)
+        if (!orgId || !Number.isFinite(balanceUsd) || balanceUsd < 0) {
+          return NextResponse.json({ error: 'balance_usd required (>= 0)' }, { status: 400 })
+        }
+        const { setOrganizationCallCreditBalance } = await import('@/lib/billing/call-credits')
+        const out = await setOrganizationCallCreditBalance({
+          organizationId: orgId,
+          balanceUsd,
+          lowBalanceThresholdUsd:
+            thresholdUsd !== undefined && Number.isFinite(thresholdUsd) && thresholdUsd > 0
+              ? thresholdUsd
+              : undefined,
+        })
+        if (!out.ok) {
+          return NextResponse.json({ error: out.error || 'set_balance_failed' }, { status: 500 })
+        }
+        return NextResponse.json({ success: true })
+      }
+
       case 'update_assistant_config': {
         const orgId = id as string
         if (!orgId) {
@@ -861,6 +893,10 @@ export async function POST(request: NextRequest) {
         const timezone = typeof data?.timezone === 'string' ? data.timezone.trim() || 'America/New_York' : 'America/New_York'
         const assistantId = typeof data?.vapi_assistant_id === 'string' ? data.vapi_assistant_id.trim() || null : null
         const transferNumber = typeof data?.ramon_transfer_number === 'string' ? data.ramon_transfer_number.trim() || null : null
+        const industryKey =
+          typeof data?.industry_key === 'string' && data.industry_key.trim()
+            ? data.industry_key.trim()
+            : 'general'
         if (!companyName || !ownerEmail || ownerPassword.length < 8) {
           return NextResponse.json(
             { error: 'name, owner_email and owner_password(min 8) are required' },
@@ -928,6 +964,16 @@ export async function POST(request: NextRequest) {
           await supabase.auth.admin.deleteUser(owner.data.user.id)
           await supabase.from('organizations').delete().eq('id', createdOrg.id)
           throw profileErr
+        }
+
+        const { error: industryProfileErr } = await upsertBusinessProfile(String(createdOrg.id), {
+          industry_key: industryKey,
+          business_name: companyName,
+          timezone,
+          language: 'es',
+        })
+        if (industryProfileErr) {
+          console.warn('[create_organization_with_owner] business_profile skipped:', industryProfileErr)
         }
 
         await supabase
@@ -1003,6 +1049,7 @@ export async function POST(request: NextRequest) {
             organization_slug: slug,
             owner_email: ownerEmail,
             owner_password: ownerPassword,
+            industry_key: industryKey,
             login_url: `${process.env.NEXT_PUBLIC_APP_URL || ''}/auth/login`,
           },
         })

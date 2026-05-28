@@ -24,7 +24,7 @@ function LoginForm() {
   const searchParams = useSearchParams()
   const noOrgHint =
     searchParams.get('reason') === 'no_org'
-      ? 'Tu sesión es válida, pero tu usuario no está vinculado a una organización en la base de datos. Pide a un admin que te dé acceso (fila en profiles con organization_id) o revisa el seed / SQL de tu entorno.'
+      ? 'Tu sesión es válida, pero no tenés empresa vinculada. Registrá una en «Registrar empresa y rubro» o pedí acceso a un administrador.'
       : null
 
   const handleLogin = async (e: React.FormEvent) => {
@@ -126,7 +126,13 @@ function LoginForm() {
                     </Link>
                   </p>
                   <p>
-                    Don&apos;t have an account?{' '}
+                    ¿Empresa nueva?{' '}
+                    <Link href="/auth/registrar" className="text-white underline underline-offset-4">
+                      Registrar empresa y rubro
+                    </Link>
+                  </p>
+                  <p>
+                    Cuenta personal sin empresa:{' '}
                     <Link href="/auth/sign-up" className="text-white underline underline-offset-4">
                       Sign up
                     </Link>
