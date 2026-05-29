@@ -1,5 +1,6 @@
 import { createServiceRoleClient } from '@/lib/supabase/service-role'
 import { getOrganizationRuntimeConfig } from '@/lib/vapi/runtime-config'
+import { defaultWelcomeForOrganization, resolveWelcomeMessageForCall } from '@/lib/vapi/welcome-message'
 import { executeToolHandler } from '@/lib/vapi/tool-handlers'
 import { persistCallArtifacts, persistSpamRejection } from '@/lib/vapi/persistence'
 import {
@@ -743,11 +744,6 @@ async function autoSaveWrapQuoteLeadFromTranscript(input: {
 }
 
 
-function conciseDynamicGreeting(raw: string): string {
-  const t = (raw || '').trim()
-  if (t && t.length <= 90) return t
-  return 'Hello, this is SWATWORKS. How can I help?'
-}
 
 export async function dispatchVapiEvent(input: {
   body: JsonRecord
@@ -888,18 +884,25 @@ export async function dispatchVapiEvent(input: {
     if (warmTool) tools.push(warmTool)
     if (tools.length) model.tools = tools
 
-    let firstMessage = conciseDynamicGreeting(runtime.welcomeMessage)
-    let greetingSource: 'customer' | 'call_log' | 'none' = 'none'
-    let greetingName: string | null = null
-    if (resolvedPhone) {
+    const orgFallback = defaultWelcomeForOrganization(runtime.organizationDisplayName)
+    const clientWelcome = (runtime.welcomeMessage || '').trim()
+    let firstMessage = resolveWelcomeMessageForCall(clientWelcome || null, orgFallback)
+    let greetingSource: 'client' | 'customer' | 'call_log' | 'default' = clientWelcome
+      ? 'client'
+      : 'default'
+
+    // Personalización por nombre solo si el cliente no definió saludo propio en el panel
+    if (!clientWelcome && resolvedPhone) {
       const identity = await resolveTrustedCallerFirstName({
         organizationId: input.organizationId,
         phone: resolvedPhone,
       })
       greetingSource = identity.source
-      greetingName = identity.firstName
       if (identity.firstName) {
-        firstMessage = `Buen día ${identity.firstName}, gracias por comunicarte con ${runtime.organizationDisplayName}. ¿En qué podemos ayudarte hoy?`
+        firstMessage = resolveWelcomeMessageForCall(
+          null,
+          `Buen día ${identity.firstName}, gracias por comunicarte con ${runtime.organizationDisplayName}. ¿En qué podemos ayudarte hoy?`,
+        )
       }
     }
     console.log('[vapi/dispatcher] assistant-request greeting', {
@@ -907,9 +910,9 @@ export async function dispatchVapiEvent(input: {
       call_id: vapiCallId || null,
       has_resolved_phone: Boolean(resolvedPhone),
       resolved_phone_suffix: resolvedPhone.length >= 4 ? resolvedPhone.slice(-4) : null,
-      personalized: Boolean(greetingName),
       greeting_source: greetingSource,
-      greeting_name: greetingName,
+      welcome_preview: firstMessage.slice(0, 80),
+      client_welcome_set: Boolean(clientWelcome),
     })
 
     const voiceRes = await resolveOpenAiVoiceForOrganization(input.organizationId)

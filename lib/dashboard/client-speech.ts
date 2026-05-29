@@ -76,6 +76,12 @@ export async function saveClientSpeechSettings(
   }
   if (aiErr) throw aiErr
 
+  console.info('[client-speech/saved]', {
+    organization_id: organizationId,
+    welcome_preview: welcomeMessage.slice(0, 80),
+    has_speech_notes: Boolean(clientSpeechNotes),
+  })
+
   const cfgPatch = {
     first_message: welcomeMessage,
     greeting_message: welcomeMessage,

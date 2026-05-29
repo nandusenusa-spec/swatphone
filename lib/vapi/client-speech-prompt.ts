@@ -1,3 +1,5 @@
+import { WELCOME_MESSAGE_MAX, resolveWelcomeMessageForCall } from '@/lib/vapi/welcome-message'
+
 const MAX_CLIENT_SPEECH_NOTES = 1200
 
 /** Anexa preferencias del dueño al prompt; no sustituye reglas operativas de Admin. */
@@ -11,8 +13,8 @@ export function appendClientSpeechNotesToPrompt(
   return `${prompt}\n\nPreferencias del negocio (dueño del local; tono y estilo, sin contradecir reglas operativas):\n${safe}`
 }
 
-export const CLIENT_WELCOME_MESSAGE_MAX = 90
+export const CLIENT_WELCOME_MESSAGE_MAX = WELCOME_MESSAGE_MAX
 
 export function normalizeClientWelcomeMessage(raw: string): string {
-  return raw.trim().slice(0, CLIENT_WELCOME_MESSAGE_MAX)
+  return resolveWelcomeMessageForCall(raw, '').slice(0, WELCOME_MESSAGE_MAX)
 }

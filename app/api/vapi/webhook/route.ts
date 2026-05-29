@@ -32,6 +32,7 @@ import {
 } from '@/lib/vapi/voice-for-vapi'
 import { resolveTrustedCallerFirstName } from '@/lib/voice-platform/caller-identity'
 import { getOrganizationRuntimeConfig } from '@/lib/vapi/runtime-config'
+import { defaultWelcomeForOrganization, resolveWelcomeMessageForCall } from '@/lib/vapi/welcome-message'
 import { screenInboundAssistantRequest } from '@/lib/vapi/phone-screening'
 import {
   runCreateAppointment,
@@ -288,6 +289,22 @@ async function handleAssistantRequest(request: NextRequest, flat: JsonRecord, ra
     }
   }
 
+  let runtimeWelcome: string | null = null
+  if (orgId) {
+    try {
+      const runtime = await getOrganizationRuntimeConfig(orgId)
+      const w = (runtime.welcomeMessage || '').trim()
+      if (w) {
+        runtimeWelcome = resolveWelcomeMessageForCall(
+          w,
+          defaultWelcomeForOrganization(runtime.organizationDisplayName),
+        )
+      }
+    } catch (e) {
+      console.warn('[vapi:webhook] runtime welcome read skipped', e)
+    }
+  }
+
   if (!phoneRaw?.trim()) {
     console.warn('[vapi:webhook] assistant-request: missing caller phone')
     const trCfg = getTranscriberConfigForVapi()
@@ -301,7 +318,8 @@ async function handleAssistantRequest(request: NextRequest, flat: JsonRecord, ra
           })
     return NextResponse.json({
       assistant: defaultTransientAssistant(
-        `Buen día, ${orgName}, ¿en qué le puedo ayudar?`,
+        runtimeWelcome ||
+          resolveWelcomeMessageForCall(null, `Buen día, ${orgName}, ¿en qué le puedo ayudar?`),
         voiceRes,
         trCfg,
         orgName,
@@ -338,7 +356,9 @@ async function handleAssistantRequest(request: NextRequest, flat: JsonRecord, ra
       : { firstName: null, source: 'none' as const }
 
   let firstMessage: string
-  if (identity.firstName) {
+  if (runtimeWelcome) {
+    firstMessage = runtimeWelcome
+  } else if (identity.firstName) {
     const personalized = `Buen día ${identity.firstName}, gracias por comunicarte con ${orgName}.`
     if (!payload.found) {
       firstMessage = `${personalized} ¿En qué podemos ayudarte hoy?`
@@ -361,7 +381,9 @@ async function handleAssistantRequest(request: NextRequest, flat: JsonRecord, ra
   console.log('[vapi:webhook] assistant-request', {
     organizationId: orgId,
     orgName,
-    personalized: Boolean(identity.firstName),
+    client_welcome_set: Boolean(runtimeWelcome),
+    welcome_preview: firstMessage.slice(0, 80),
+    personalized: Boolean(identity.firstName) && !runtimeWelcome,
     personalized_source: identity.source,
     personalized_name: identity.firstName,
     normalized_phone_suffix: normalizedPhone.length >= 4 ? normalizedPhone.slice(-4) : null,

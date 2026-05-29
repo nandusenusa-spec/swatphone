@@ -174,9 +174,7 @@ async function verifyAdminToken(request: NextRequest): Promise<boolean> {
   return !!data && data.length > 0
 }
 
-function conciseFirstMessage(raw: unknown): string {
-  return 'Hello, this is SWATWORKS. How can I help?'
-}
+import { resolveWelcomeMessageForCall } from '@/lib/vapi/welcome-message'
 
 function clipText(text: string, max: number): string {
   if (text.length <= max) return text
@@ -1364,7 +1362,10 @@ export async function POST(request: NextRequest) {
       config.first_message ||
       (config as { greeting_message?: string | null }).greeting_message ||
       ''
-    const firstMessage = conciseFirstMessage(firstMessageRaw)
+    const firstMessage = resolveWelcomeMessageForCall(
+      firstMessageRaw,
+      `Hello, thanks for calling. How can I help?`,
+    )
     const maxTokensNum = Number(config.max_tokens || 110)
     const maxTokens = Number.isFinite(maxTokensNum) ? Math.min(Math.max(maxTokensNum, 80), 140) : 110
 
